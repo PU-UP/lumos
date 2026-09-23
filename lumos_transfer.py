@@ -172,6 +172,7 @@ def restore(snapshot, target, source=None, sandbox=False):
             require(restored.seq(db) == manifest["seq"], "Restore database revision mismatch")
         control["mode"] = "trial" if old else ("sandbox" if sandbox else "readonly")
         restored.set_control(control)
+        (target / "incoming").mkdir(exist_ok=True)
         return {"root": str(target), "mode": control["mode"], "seq": manifest["seq"],
                 "engine": str(snapshot / "engine"), "note": "Sandbox is isolated, never a second formal location"}
 
@@ -223,9 +224,14 @@ def migration_cancel(old, quiet=False, hook=None):
         require(control == initial, "Migration changed; retry")
         archive = None
         if target.exists():
-            target_ctl = read_json(target / "control.json")
-            require(target_ctl.get("migration", {}).get("id") == control["migration"]["id"] and
-                    target_ctl["mode"] in {"trial", "restoring", "cancelled"}, "Target not cancellable")
+            if (target / "control.json").exists():
+                target_ctl = read_json(target / "control.json")
+                require(target_ctl.get("migration", {}).get("id") == control["migration"]["id"] and
+                        target_ctl["mode"] in {"trial", "restoring", "cancelled"}, "Target not cancellable")
+            else:
+                # Restore may have died just after mkdir. Without control it cannot write via Store.
+                target_ctl = {"id": control["id"], "bound_root": str(target),
+                              "migration": control["migration"]}
             target_ctl.update(mode="cancelled", cancelled_at=now())
             write_json(target / "control.json", target_ctl)
             # Keep ALL trial files/batches in place; an immutable non-authoritative archive, no deletion.

@@ -16,6 +16,7 @@ import uuid
 
 if __name__ == "__main__":
     sys.modules["lumos"] = sys.modules[__name__]
+    sys.dont_write_bytecode = True  # Running a bundled engine must not mutate the backup.
 
 ENGINE = Path(__file__).resolve().parent
 SCHEMA = 1
@@ -125,6 +126,7 @@ def initialize(root):
     root = guard_data_path(root)
     require(not root.exists() or not any(root.iterdir()), "Initialize only an empty directory")
     root.mkdir(parents=True, exist_ok=True)
+    (root / "incoming").mkdir()
     with closing(sqlite3.connect(root / "lumos.sqlite3")) as db:
         db.executescript("""
             PRAGMA user_version=1;
@@ -194,7 +196,7 @@ class Store:
     def begin(self, request, quiet=False):
         require(quiet, "Pause manual editing/autosave first; pass --quiet-files")
         require(isinstance(request, dict) and request.get("reason"), "Batch needs a reason")
-        require(set(request) <= {"reason", "updates", "documents", "links", "reviews"},
+        require(set(request) <= {"reason", "updates", "documents", "links", "unlink", "reviews"},
                 "Unknown batch fields")
         with process_lock(self.root):
             self.writable()
@@ -252,7 +254,7 @@ class Store:
             self.conflict(folder, spec, current)
             raise Error(f"File changed since read; preserve/merge baseline + candidate + current: {spec['path']}")
 
-    def validate(self, old, nodes, request, links):
+    def validate(self, old, nodes, request, links, prior_links=()):
         for ident, node in nodes.items():
             require(re.fullmatch(r"[A-Za-z0-9_-]+", ident), "Invalid node ID")
             kind, data = node["kind"], node["data"]
@@ -301,7 +303,7 @@ class Store:
                 require(replaced in old and replaced != ident and data.get("reason"), "Invalid correction")
                 require(old[replaced]["kind"] == nodes[ident]["kind"], "Correction changes record kind")
                 require(nodes[replaced]["data"].get("status") == "superseded", "Retire replaced record explicitly")
-                affected = {src for src, dst, _ in links if dst == replaced}
+                affected = {src for src, dst, _ in set(links) | set(prior_links) if dst == replaced}
                 ctx = old[replaced]["data"].get("context")
                 if ctx:
                     affected.add(nodes[ctx]["data"]["entry"])
@@ -328,6 +330,7 @@ class Store:
                 require(self.seq(db) == manifest["base_seq"], "Stale database baseline")
                 old = self.nodes(db)
                 links = set(db.execute("SELECT src,dst,relation FROM links"))
+            prior_links = links.copy()
             nodes = json.loads(json.dumps(old))
             seen = set()
             for update in request.get("updates", []):
@@ -344,10 +347,15 @@ class Store:
                 data = {k: v for k, v in spec.items() if k not in {"id", "baseline"}}
                 nodes[spec["id"]] = {"id": spec["id"], "kind": "document", "data": data}
             links.update(tuple(link) for link in request.get("links", []))
+            removed = {tuple(link) for link in request.get("unlink", [])}
+            require(removed <= prior_links, "Can only unlink existing relationships")
+            require(not removed.intersection(tuple(link) for link in request.get("links", [])),
+                    "Cannot add and remove the same relationship")
+            links.difference_update(removed)
             for node in nodes.values():
                 if node["data"].get("supersedes"):
                     links.add((node["id"], node["data"]["supersedes"], "supersedes"))
-            self.validate(old, nodes, request, links)
+            self.validate(old, nodes, request, links, prior_links)
             for spec in manifest["documents"]:
                 path = safe_path(self.root, spec["version"])
                 content = (folder / (spec["id"] + ".candidate")).read_bytes()
@@ -375,6 +383,7 @@ class Store:
                                    (key, node["kind"], json.dumps(node["data"], ensure_ascii=False)))
                         db.execute("INSERT INTO history VALUES(?,?,?,?)", (ident, key,
                                    json.dumps(old.get(key), ensure_ascii=False), json.dumps(node, ensure_ascii=False)))
+                db.executemany("DELETE FROM links WHERE src=? AND dst=? AND relation=?", sorted(removed))
                 db.executemany("INSERT OR IGNORE INTO links VALUES(?,?,?)", sorted(links))
             if hook:
                 hook("transaction")
@@ -480,9 +489,17 @@ class Store:
                            "SELECT h.batch,h.node,h.before,h.after,b.at,b.reason FROM history h "
                            "JOIN batches b ON b.id=h.batch ORDER BY h.rowid")
                        if i in selected]
+            link_changes = []
+            for batch_id, at, reason, raw in db.execute("SELECT id,at,reason,manifest FROM batches ORDER BY seq"):
+                request = json.loads(raw)["request"]
+                added = [r for r in request.get("links", []) if r[0] in selected or r[1] in selected]
+                removed = [r for r in request.get("unlink", []) if r[0] in selected or r[1] in selected]
+                if added or removed:
+                    link_changes.append({"batch": batch_id, "at": at, "reason": reason,
+                                         "added": added, "removed": removed})
         return {"status": self.status(), "integrity": integrity, "matches": [n["id"] for n in matched],
                 "index": contexts, "nodes": list(selected.values()), "documents": documents,
-                "links": [r for r in links if r[0] in selected], "history": history,
+                "links": [r for r in links if r[0] in selected], "history": history, "link_changes": link_changes,
                 "notice": "No match is not memory. Dates are recorded evidence dates, not a freshness guarantee."}
 
 

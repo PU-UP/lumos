@@ -26,6 +26,10 @@ class TransferTest(BaseStoreCase):
         result = subprocess.run([sys.executable, str(snapshot / "engine/lumos.py"), "--data", str(target), "context", "mapping"], capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8"))
         self.assertIn("after", result.stdout.decode("utf-8"))
+        result = subprocess.run([sys.executable, str(snapshot / "engine/lumos.py"), "--data", str(target),
+                                 "backup", str(self.area / "from-bundled-engine"), "--quiet-files"], capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8"))
+        transfer.verify_snapshot(snapshot)  # Executing packaged tools must not invalidate the source bundle.
 
     def test_whole_inventory_detects_modify_add_delete(self):
         self.seed()
@@ -150,3 +154,12 @@ class TransferTest(BaseStoreCase):
         transfer.migration_cancel(lumos.Store(self.root), True)
         self.assertEqual(self.store.control()["mode"], "active")
         self.assertEqual(new.control()["mode"], "cancelled")
+
+    def test_cancel_when_restore_died_before_control_file(self):
+        self.seed()
+        target = self.area / "target"
+        transfer.migration_start(self.store, self.area / "snapshot", target, True)
+        target.mkdir()  # earliest possible restore interruption
+        transfer.migration_cancel(self.store, True)
+        self.assertEqual(self.store.control()["mode"], "active")
+        self.assertEqual(lumos.read_json(target / "control.json")["mode"], "cancelled")

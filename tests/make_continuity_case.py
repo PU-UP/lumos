@@ -37,7 +37,9 @@ def create(root):
         "reason": "模拟用户澄清：此前只讨论准备期验证，不是无视觉生产选型", "scope": "模拟准备期",
         "supersedes": "D1", "source": {"type": "user", "ref": "ISOLATED-FIXTURE:用户更正"}}}
     batch = store.begin({"reason": "ISOLATED-FIXTURE:纠正误解并维护影响", "updates": [decision, correction, action, talk],
-        "documents": [request["documents"][1]], "reviews": [
+        "documents": [request["documents"][1]],
+        "unlink": [["baseline", "D1", "depends_on"], ["plan", "D1", "derived_from"]],
+        "links": [["baseline", "D2", "depends_on"], ["plan", "D2", "derived_from"]], "reviews": [
             {"id": i, "disposition": "updated", "reason": "纠正影响当前方案及下一步"} for i in ["plan", "baseline"]]}, True)
     Path(batch["candidates"]["plan"]).write_text(
         "# 隔离模拟：建图定位当前理解\n\n当前按 D2 先核查时间同步与标定资料。D1 将准备期基线误解为生产路线，已被取代。\n"

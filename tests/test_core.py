@@ -126,6 +126,25 @@ class LocalTest(BaseStoreCase):
         invalid = self.store.begin({"reason": "invalid completion", "updates": [action]}, True)
         with self.assertRaises(lumos.Error):
             self.store.commit(invalid["batch"], True)
+        with self.assertRaisesRegex(lumos.Error, "Different edit session"):
+            self.store.commit(batch["batch"], True)
+
+    def test_agent_decision_and_unsupported_technical_pass_rejected(self):
+        self.seed()
+        decision = {"id": "not-a-decision", "kind": "decision", "data": {
+            "context": "mapping", "text": "Agent proposal", "scope": "test", "reason": "test",
+            "source": {"type": "agent", "ref": "fixture:proposal"}}}
+        batch = self.store.begin({"reason": "invalid decision", "updates": [decision]}, True)
+        with self.assertRaisesRegex(lumos.Error, "user provenance"):
+            self.store.commit(batch["batch"], True)
+        self.store.abandon(batch["batch"])
+        action = next(n for n in self.store.context()["nodes"] if n["id"] == "talk")
+        action["data"].update(status="done", completion={"basis": "user_report", "ref": "fixture:done"},
+                              technical_result="passed")
+        batch = self.store.begin({"reason": "unsubstantiated technical pass", "updates": [action]}, True)
+        with self.assertRaisesRegex(lumos.Error, "Technical pass requires"):
+            self.store.commit(batch["batch"], True)
+        self.assertEqual(self.store.status()["seq"], 1)
 
     def test_correction_requires_impact_coverage_and_keeps_history(self):
         self.seed()
@@ -135,7 +154,9 @@ class LocalTest(BaseStoreCase):
             "context": "mapping", "text": "模拟：只有软件时间戳，硬件同步未知", "reason": "模拟补充澄清",
             "supersedes": "assumption", "source": {"type": "user_report", "ref": "fixture:S2"}}}
         req = {"reason": "synthetic correction", "updates": [before, after],
-               "documents": [fixture()["documents"][1]]}
+               "documents": [fixture()["documents"][1]],
+               "unlink": [["talk", "assumption", "depends_on"], ["plan", "assumption", "derived_from"]],
+               "links": [["talk", "correction", "depends_on"], ["plan", "correction", "derived_from"]]}
         batch = self.store.begin(req, True)
         with self.assertRaisesRegex(lumos.Error, "impact review"):
             self.store.commit(batch["batch"], True)
@@ -150,6 +171,9 @@ class LocalTest(BaseStoreCase):
         result = self.store.context("mapping")
         self.assertGreater(len(result["history"]), 4)
         self.assertIn("硬件同步仍未知", result["documents"]["plan"])
+        self.assertIn(("talk", "correction", "depends_on"), result["links"])
+        self.assertNotIn(("talk", "assumption", "depends_on"), result["links"])
+        self.assertIn(["talk", "assumption", "depends_on"], result["link_changes"][-1]["removed"])
 
     def test_missing_immutable_and_unknown_schema_refused(self):
         self.seed()
