@@ -196,6 +196,34 @@ class LocalTest(BaseStoreCase):
         with self.assertRaises(lumos.Error):
             lumos.safe_path(self.root, "../outside")
 
+    def test_document_path_alias_cannot_claim_an_existing_file(self):
+        self.seed()
+        spec = {**fixture()["documents"][1], "id": "alias", "path": "work/./mapping.md"}
+        batch = self.store.begin({"reason": "synthetic alias", "documents": [spec]}, True)
+        Path(batch["candidates"]["alias"]).write_text("different document", encoding="utf-8")
+        with self.assertRaisesRegex(lumos.Error, "same path"):
+            self.store.commit(batch["batch"], True)
+        self.assertEqual(self.store.status()["seq"], 1)
+        self.assertIn("尚待核实", (self.root / "work/mapping.md").read_text(encoding="utf-8"))
+
+    def test_case_colliding_candidate_ids_are_rejected_before_overwrite(self):
+        self.seed()
+        specs = [fixture()["documents"][0],
+                 {**fixture()["documents"][1], "id": "MAP"}]
+        with self.assertRaisesRegex(lumos.Error, "Duplicate document ID"):
+            self.store.begin({"reason": "synthetic case collision", "documents": specs}, True)
+        self.assertIsNone(self.store.status()["session"])
+        self.assertEqual(self.store.status()["seq"], 1)
+
+    def test_case_colliding_document_ids_across_batches_are_rejected(self):
+        self.seed()
+        spec = {**fixture()["documents"][1], "id": "MAP", "path": "work/other.md"}
+        batch = self.store.begin({"reason": "synthetic cross-batch collision", "documents": [spec]}, True)
+        with self.assertRaisesRegex(lumos.Error, "Duplicate document ID"):
+            self.store.commit(batch["batch"], True)
+        self.assertEqual(self.store.status()["seq"], 1)
+        self.assertFalse((self.root / "work/other.md").exists())
+
     def test_actual_process_exit_and_recovery(self):
         self.seed()
         for point in ["versions", "transaction", "refresh:0"]:

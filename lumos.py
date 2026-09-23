@@ -212,8 +212,8 @@ class Store:
                 spec = dict(spec)
                 ident = spec["id"]
                 require(re.fullmatch(r"[A-Za-z0-9_-]+", ident), "Invalid document ID")
-                require(ident not in seen, "Duplicate document ID")
-                seen.add(ident)
+                require(ident.casefold() not in seen, "Duplicate document ID (case-insensitive)")
+                seen.add(ident.casefold())
                 path = spec["path"]
                 require(PurePosixPath(path).parts[0] in {"work", "raw", "output"},
                         "Work files belong in work/, raw/ or output/")
@@ -289,7 +289,10 @@ class Store:
                             "Technical pass requires acceptance conditions and evidence")
             if kind == "document":
                 require(data.get("version") and data.get("sha256"), "Document must go through candidate save")
-        paths = [n["data"]["path"].casefold() for n in nodes.values() if n["kind"] == "document"]
+        documents = [n for n in nodes.values() if n["kind"] == "document"]
+        document_ids = [n["id"].casefold() for n in documents]
+        require(len(document_ids) == len(set(document_ids)), "Duplicate document ID (case-insensitive)")
+        paths = [str(safe_path(self.root, n["data"]["path"]).resolve()).casefold() for n in documents]
         require(len(paths) == len(set(paths)), "Two document IDs cannot own the same path")
         for src, dst, relation in links:
             require(src in nodes and dst in nodes and relation in RELATIONS, "Invalid link")

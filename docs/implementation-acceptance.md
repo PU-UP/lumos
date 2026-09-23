@@ -2,7 +2,7 @@
 
 日期：2026-09-23。设计依据：`docs/review-acceptance.md`。分支 `codex/local-core`，起点 `f33f6cc`。
 
-状态：本地实现及下述运行验收完成，交回 reviewer 做实现验收；不把测试通过解释为已证明长期真实工作效果。后置的 Notion、HTML、UI、后台服务、云共享和高级检索均未实现。
+状态：以下保留第一轮实现验收记录；2026-09-23 已完成最终复核与必要修复，结论见 [最终验收与使用交接](final-acceptance.md)。不把测试通过解释为已证明长期真实工作效果。后置的 Notion、HTML、UI、后台服务、云共享和高级检索均未实现。
 
 ## 实际入口与实现
 
@@ -88,4 +88,4 @@ py -3 tests/make_continuity_case.py .local/acceptance/cold-replay-01
 - JSON 更新是完整记录替换，语义合并仍由 Agent 执行。重点检查 validate 的影响覆盖、unlink 保留历史，以及来源声明不能代替真实核查的边界。
 - 批次和版本无自动清理，文本搜索与历史读取针对少量脉络，不扩张为通用平台。只提供新文件稳定 ID／路径，不提供通用文件重命名、分支或节点删除。
 
-下一步是 reviewer 的实现验收，不自动启动展示增量。
+该轮 reviewer 复核已完成；后续按 final-acceptance.md 在 Lumos 内真实使用和维护，不自动启动展示增量。
