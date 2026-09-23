@@ -174,6 +174,10 @@ class LocalTest(BaseStoreCase):
         self.assertIn(("talk", "correction", "depends_on"), result["links"])
         self.assertNotIn(("talk", "assumption", "depends_on"), result["links"])
         self.assertIn(["talk", "assumption", "depends_on"], result["link_changes"][-1]["removed"])
+        batch = self.store.begin({"reason": "must preserve replacement history",
+                                  "unlink": [["correction", "assumption", "supersedes"]]}, True)
+        with self.assertRaisesRegex(lumos.Error, "history cannot be unlinked"):
+            self.store.commit(batch["batch"], True)
 
     def test_missing_immutable_and_unknown_schema_refused(self):
         self.seed()

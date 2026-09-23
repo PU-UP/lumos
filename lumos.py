@@ -349,6 +349,7 @@ class Store:
             links.update(tuple(link) for link in request.get("links", []))
             removed = {tuple(link) for link in request.get("unlink", [])}
             require(removed <= prior_links, "Can only unlink existing relationships")
+            require(all(link[2] != "supersedes" for link in removed), "Replacement history cannot be unlinked")
             require(not removed.intersection(tuple(link) for link in request.get("links", [])),
                     "Cannot add and remove the same relationship")
             links.difference_update(removed)
