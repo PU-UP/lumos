@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 import shutil
 import uuid
+import subprocess
+import sys
 import unittest
 
 import lumos
@@ -24,7 +26,7 @@ def fixture():
     }
 
 
-class LocalTest(unittest.TestCase):
+class BaseStoreCase(unittest.TestCase):
     def setUp(self):
         base = lumos.ENGINE / ".local" / "test-runs"
         base.mkdir(parents=True, exist_ok=True)
@@ -50,6 +52,8 @@ class LocalTest(unittest.TestCase):
     def edit(self):
         return self.store.begin({"reason": "synthetic edit", "documents": fixture()["documents"]}, True)
 
+
+class LocalTest(BaseStoreCase):
     def test_context_and_reported_action_completion(self):
         self.seed()
         action = next(n for n in self.store.context("建图定位")["nodes"] if n["id"] == "talk")
@@ -163,6 +167,21 @@ class LocalTest(unittest.TestCase):
             lumos.guard_data_path(lumos.ENGINE / "not-ignored-runtime")
         with self.assertRaises(lumos.Error):
             lumos.safe_path(self.root, "../outside")
+
+    def test_actual_process_exit_and_recovery(self):
+        self.seed()
+        for point in ["versions", "transaction", "refresh:0"]:
+            with self.subTest(point=point):
+                batch = self.edit()
+                for path in batch["candidates"].values():
+                    Path(path).write_text("process-exit " + point, encoding="utf-8")
+                code = "import os,sys,lumos; s=lumos.Store(sys.argv[1]); s.commit(sys.argv[2],True,lambda p: os._exit(73) if p==sys.argv[3] else None)"
+                crash = subprocess.run([sys.executable, "-c", code, str(self.root), batch["batch"], point], capture_output=True)
+                self.assertEqual(crash.returncode, 73, crash.stderr)
+                recovered = subprocess.run([sys.executable, str(lumos.ENGINE / "lumos.py"), "--data", str(self.root),
+                                            "recover", batch["batch"], "--quiet-files"], capture_output=True)
+                self.assertEqual(recovered.returncode, 0, recovered.stderr.decode("utf-8"))
+                self.assertEqual((self.root / "work/mapping.md").read_text(), "process-exit " + point)
 
 
 if __name__ == "__main__":

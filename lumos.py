@@ -9,11 +9,13 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import shutil
 import sqlite3
 import subprocess
 import sys
 import uuid
+
+if __name__ == "__main__":
+    sys.modules["lumos"] = sys.modules[__name__]
 
 ENGINE = Path(__file__).resolve().parent
 SCHEMA = 1
@@ -166,6 +168,7 @@ class Store:
         write_json(self.root / "control.json", value)
 
     def writable(self):
+        guard_data_path(self.root)
         ctl = self.control()
         require(ctl["bound_root"] == str(self.root), "Copied/moved live store: restore explicitly")
         require(ctl["mode"] in {"active", "trial", "sandbox"},
@@ -417,6 +420,8 @@ class Store:
             require(not db.execute("PRAGMA foreign_key_check").fetchall(), "Broken database references")
             nodes = self.nodes(db)
             manifests = [json.loads(row[0]) for row in db.execute("SELECT manifest FROM batches")]
+            links = set(db.execute("SELECT src,dst,relation FROM links"))
+        self.validate(nodes, nodes, {}, links)
         for manifest in manifests:
             for spec in manifest["documents"]:
                 path = safe_path(self.root, spec["version"])
@@ -426,6 +431,9 @@ class Store:
         for node in nodes.values():
             if node["kind"] == "document":
                 data = node["data"]
+                version = safe_path(self.root, data["version"])
+                require(version.is_file() and digest(version.read_bytes()) == data["sha256"],
+                        f"Missing/damaged current version: {node['id']}")
                 path = safe_path(self.root, data["path"])
                 registered.add(data["path"])
                 if not path.is_file() or digest(path.read_bytes()) != data["sha256"]:
@@ -439,6 +447,10 @@ class Store:
                 "unregistered_files": unregistered, "nodes": len(nodes)}
 
     def context(self, question=""):
+        with process_lock(self.root):
+            return self._context(question)
+
+    def _context(self, question=""):
         integrity = self.verify()
         with self.db() as db:
             nodes = self.nodes(db)
@@ -462,10 +474,88 @@ class Store:
                     data = node["data"]
                     if data["path"].endswith(".md"):
                         documents[i] = safe_path(self.root, data["version"]).read_text(encoding="utf-8")
-            history = [{"batch": b, "node": i, "before": json.loads(before), "after": json.loads(after)}
-                       for b, i, before, after in db.execute("SELECT batch,node,before,after FROM history ORDER BY rowid")
+            history = [{"batch": b, "node": i, "at": at, "reason": reason,
+                        "before": json.loads(before), "after": json.loads(after)}
+                       for b, i, before, after, at, reason in db.execute(
+                           "SELECT h.batch,h.node,h.before,h.after,b.at,b.reason FROM history h "
+                           "JOIN batches b ON b.id=h.batch ORDER BY h.rowid")
                        if i in selected]
         return {"status": self.status(), "integrity": integrity, "matches": [n["id"] for n in matched],
                 "index": contexts, "nodes": list(selected.values()), "documents": documents,
                 "links": [r for r in links if r[0] in selected], "history": history,
                 "notice": "No match is not memory. Dates are recorded evidence dates, not a freshness guarantee."}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data", type=Path, default=Path(os.environ.get("LUMOS_DATA", ENGINE / "lumos-data")))
+    subs = parser.add_subparsers(dest="command", required=True)
+    for name in ["init", "status", "verify"]:
+        subs.add_parser(name)
+    command = subs.add_parser("context")
+    command.add_argument("question", nargs="?", default="")
+    command = subs.add_parser("begin")
+    command.add_argument("request", type=Path)
+    command.add_argument("--quiet-files", action="store_true")
+    for name in ["commit", "recover", "abandon"]:
+        command = subs.add_parser(name)
+        command.add_argument("batch")
+        if name != "abandon":
+            command.add_argument("--quiet-files", action="store_true")
+    command = subs.add_parser("backup")
+    command.add_argument("destination", type=Path)
+    command.add_argument("--quiet-files", action="store_true")
+    command = subs.add_parser("restore")
+    command.add_argument("snapshot", type=Path)
+    command.add_argument("--source", type=Path)
+    command.add_argument("--sandbox", action="store_true")
+    command = subs.add_parser("migrate-start")
+    command.add_argument("snapshot", type=Path)
+    command.add_argument("target", type=Path)
+    command.add_argument("--quiet-files", action="store_true")
+    command = subs.add_parser("migrate-finish")
+    command.add_argument("target", type=Path)
+    command.add_argument("--quiet-files", action="store_true")
+    command = subs.add_parser("migrate-cancel")
+    command.add_argument("--quiet-files", action="store_true")
+    args = parser.parse_args()
+    try:
+        if args.command == "init":
+            result = initialize(args.data)
+        elif args.command == "restore":
+            from lumos_transfer import restore
+            result = restore(args.snapshot, args.data, args.source, args.sandbox)
+        else:
+            store = Store(args.data)
+            if args.command in {"status", "verify"}:
+                result = getattr(store, args.command)()
+            elif args.command == "context":
+                result = store.context(args.question)
+            elif args.command == "begin":
+                result = store.begin(read_json(args.request), args.quiet_files)
+            elif args.command in {"commit", "recover"}:
+                result = store.commit(args.batch, args.quiet_files)
+            elif args.command == "abandon":
+                result = store.abandon(args.batch)
+            else:
+                import lumos_transfer as transfer
+                if args.command == "backup":
+                    result = transfer.backup(store, args.destination, args.quiet_files)
+                elif args.command == "migrate-start":
+                    result = transfer.migration_start(store, args.snapshot, args.target, args.quiet_files)
+                elif args.command == "migrate-finish":
+                    result = transfer.migration_finish(store, args.target, args.quiet_files)
+                else:
+                    result = transfer.migration_cancel(store, args.quiet_files)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    except (Error, OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
+        print(json.dumps({"error": str(exc), "type": type(exc).__name__}, ensure_ascii=False), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    raise SystemExit(main())
