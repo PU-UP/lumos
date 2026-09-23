@@ -1,0 +1,19 @@
+# Local work data and backups; independent from source control.
+/lumos-data/
+/.local/
+/backups/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Machine credentials and environment.
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
