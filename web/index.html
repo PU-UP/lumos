@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lumos · 当前工作</title><link rel="stylesheet" href="/board.css"><script src="/board.js" defer></script></head>
+<body>
+<header><div class="brand"><span class="mark">L</span><strong>Lumos</strong><span class="divider">/</span><span>工作分身</span></div><div class="tools"><span id="date"></span><button id="refresh">刷新</button><button id="new" class="primary" disabled>＋ 新增任务</button></div></header>
+<main>
+<div class="intro"><div><p class="eyebrow">当前工作</p><h1>把注意力留给要紧的事。</h1><p class="muted">记录下一步，跟进变化。也可以直接在对话中告诉我。</p></div><div class="filter"><label for="context">工作脉络</label><select id="context"><option value="">全部当前工作</option></select></div></div>
+<p id="message" role="status" aria-live="polite"></p>
+<section class="focus"><div class="section-heading"><h2>近期关注 <span id="focus-count" class="count">0</span></h2><span>未来七天 · 到期跟进 · 阻塞 · 重要事项</span></div><div id="focus-list"></div></section>
+<section aria-label="任务看板"><div class="section-heading board-heading"><h2>任务看板</h2><label class="search"><span>查找任务</span><input id="search" type="search" placeholder="标题、背景或下一步"></label></div><div id="board" class="board"></div></section>
+<footer>只展示当前工作脉络。归档材料保留在历史中。<span id="sync"></span></footer>
+</main>
+<dialog id="editor" aria-labelledby="editor-title">
+<form id="form"><div class="dialog-heading"><div><p class="eyebrow">任务详情</p><h2 id="editor-title">新增任务</h2></div><button type="button" id="close" aria-label="关闭任务详情">关闭</button></div>
+<p id="form-message" role="status" aria-live="polite"></p>
+<label>任务标题<input name="text" required maxlength="300" placeholder="这件事要做什么？"></label>
+<div class="form-grid"><label>工作脉络<select name="context" required></select></label><label>当前状态<select name="status"><option value="todo">待处理</option><option value="doing">进行中</option><option value="blocked">受阻</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></label></div>
+<label>下一步<input name="next_step" placeholder="下一次可以直接开始的动作"></label>
+<div class="form-grid three"><label>截止日期<input name="due" type="date"></label><label>下次跟进<input name="follow_up" type="date"></label><label>重要程度<select name="priority"><option value="normal">普通</option><option value="high">重要</option></select></label></div>
+<label>背景与详细内容<textarea name="details" rows="4" placeholder="背景、约束、需要判断的问题"></textarea></label>
+<label>进展记录<textarea name="progress" rows="3" placeholder="最近发生了什么，遇到什么阻塞"></textarea></label>
+<label>怎样算完成<input name="condition" placeholder="留空时，以你确认完成为准"></label>
+<details id="evidence"><summary>来源、相关背景与修改历史</summary><div id="history"></div></details>
+<div class="form-actions"><span>日期可留空；标记完成按你的报告记录。</span><button type="submit" class="primary" id="save">保存任务</button></div>
+</form></dialog>
+</body></html>

@@ -199,42 +199,45 @@ class Store:
         require(set(request) <= {"reason", "updates", "documents", "links", "unlink", "reviews"},
                 "Unknown batch fields")
         with process_lock(self.root):
-            self.writable()
-            self.idle()
-            with self.db() as db:
-                seq, nodes = self.seq(db), self.nodes(db)
-            batch = uuid.uuid4().hex
-            folder = self.root / "candidates" / batch
-            folder.mkdir(parents=True)
-            docs = []
-            seen = set()
-            for spec in request.get("documents", []):
-                spec = dict(spec)
-                ident = spec["id"]
-                require(re.fullmatch(r"[A-Za-z0-9_-]+", ident), "Invalid document ID")
-                require(ident.casefold() not in seen, "Duplicate document ID (case-insensitive)")
-                seen.add(ident.casefold())
-                path = spec["path"]
-                require(PurePosixPath(path).parts[0] in {"work", "raw", "output"},
-                        "Work files belong in work/, raw/ or output/")
-                target = safe_path(self.root, path)
-                old = nodes.get(ident)
-                if old:
-                    require(old["kind"] == "document" and old["data"]["path"] == path,
-                            "Document IDs and paths stay stable; use a new ID for a new file")
-                require(not target.exists() or target.is_file(), "Document target is not a file")
-                content = target.read_bytes() if target.exists() else None
-                if content is not None:
-                    atomic(folder / (ident + ".base"), content)
-                atomic(folder / (ident + ".candidate"), content or b"")
-                spec["baseline"] = digest(content) if content is not None else None
-                docs.append(spec)
-            manifest = {"id": batch, "base_seq": seq, "at": now(), "request": request,
-                        "documents": docs}
-            write_json(folder / "batch.json", manifest)
-            write_json(self.root / "session.json", {"batch": batch})
-            return {"batch": batch, "candidates": {d["id"]: str(folder / (d["id"] + ".candidate"))
-                                                     for d in docs}}
+            return self._begin(request)
+
+    def _begin(self, request):
+        self.writable()
+        self.idle()
+        with self.db() as db:
+            seq, nodes = self.seq(db), self.nodes(db)
+        batch = uuid.uuid4().hex
+        folder = self.root / "candidates" / batch
+        folder.mkdir(parents=True)
+        docs = []
+        seen = set()
+        for spec in request.get("documents", []):
+            spec = dict(spec)
+            ident = spec["id"]
+            require(re.fullmatch(r"[A-Za-z0-9_-]+", ident), "Invalid document ID")
+            require(ident.casefold() not in seen, "Duplicate document ID (case-insensitive)")
+            seen.add(ident.casefold())
+            path = spec["path"]
+            require(PurePosixPath(path).parts[0] in {"work", "raw", "output"},
+                    "Work files belong in work/, raw/ or output/")
+            target = safe_path(self.root, path)
+            old = nodes.get(ident)
+            if old:
+                require(old["kind"] == "document" and old["data"]["path"] == path,
+                        "Document IDs and paths stay stable; use a new ID for a new file")
+            require(not target.exists() or target.is_file(), "Document target is not a file")
+            content = target.read_bytes() if target.exists() else None
+            if content is not None:
+                atomic(folder / (ident + ".base"), content)
+            atomic(folder / (ident + ".candidate"), content or b"")
+            spec["baseline"] = digest(content) if content is not None else None
+            docs.append(spec)
+        manifest = {"id": batch, "base_seq": seq, "at": now(), "request": request,
+                    "documents": docs}
+        write_json(folder / "batch.json", manifest)
+        write_json(self.root / "session.json", {"batch": batch})
+        return {"batch": batch, "candidates": {d["id"]: str(folder / (d["id"] + ".candidate"))
+                                                 for d in docs}}
 
     def batch(self, ident):
         require(re.fullmatch(r"[a-f0-9]{32}", ident), "Invalid batch ID")
@@ -277,6 +280,8 @@ class Store:
                         "A decision requires user provenance, reason and scope")
                 require(data.get("status", "current") in {"current", "superseded"}, "Invalid decision status")
             if kind == "action":
+                from lumos_tasks import validate_fields
+                validate_fields(data)
                 require(data["source"]["type"] != "agent", "Suggestions are not committed actions")
                 require(data.get("condition"), "Agent must infer a minimal action completion condition")
                 require(data.get("status") in {"todo", "doing", "blocked", "done", "cancelled"}, "Invalid action status")
@@ -320,78 +325,81 @@ class Store:
     def commit(self, ident, quiet=False, hook=None):
         require(quiet, "Pause manual editing/autosave; pass --quiet-files")
         with process_lock(self.root):
-            self.writable()
-            folder = self.batch(ident)
-            require(read_json(self.root / "session.json")["batch"] == ident, "Different edit session")
-            with self.db() as db:
-                committed = db.execute("SELECT manifest FROM batches WHERE id=?", (ident,)).fetchone()
-            if committed:
-                return self._refresh(json.loads(committed[0]), hook)
-            manifest = read_json(folder / "batch.json")
-            request = manifest["request"]
-            with self.db() as db:
-                require(self.seq(db) == manifest["base_seq"], "Stale database baseline")
-                old = self.nodes(db)
-                links = set(db.execute("SELECT src,dst,relation FROM links"))
-            prior_links = links.copy()
-            nodes = json.loads(json.dumps(old))
-            seen = set()
-            for update in request.get("updates", []):
-                ident_node = update["id"]
-                require(ident_node not in seen and update["kind"] != "document", "Duplicate/invalid update")
-                require(ident_node not in old or old[ident_node]["kind"] == update["kind"], "Cannot change node kind")
-                seen.add(ident_node)
-                nodes[ident_node] = update
-            for spec in manifest["documents"]:
-                self.compare(folder, spec)
-                content = (folder / (spec["id"] + ".candidate")).read_bytes()
-                version = f"versions/{ident}/{spec['id']}.blob"
-                spec.update(version=version, sha256=digest(content))
-                data = {k: v for k, v in spec.items() if k not in {"id", "baseline"}}
-                nodes[spec["id"]] = {"id": spec["id"], "kind": "document", "data": data}
-            links.update(tuple(link) for link in request.get("links", []))
-            removed = {tuple(link) for link in request.get("unlink", [])}
-            require(removed <= prior_links, "Can only unlink existing relationships")
-            require(all(link[2] != "supersedes" for link in removed), "Replacement history cannot be unlinked")
-            require(not removed.intersection(tuple(link) for link in request.get("links", [])),
-                    "Cannot add and remove the same relationship")
-            links.difference_update(removed)
-            for node in nodes.values():
-                if node["data"].get("supersedes"):
-                    links.add((node["id"], node["data"]["supersedes"], "supersedes"))
-            self.validate(old, nodes, request, links, prior_links)
-            for spec in manifest["documents"]:
-                path = safe_path(self.root, spec["version"])
-                content = (folder / (spec["id"] + ".candidate")).read_bytes()
-                require(digest(content) == spec["sha256"], "Candidate changed during save")
-                path.parent.mkdir(parents=True, exist_ok=True)
-                if path.exists():
-                    require(digest(path.read_bytes()) == spec["sha256"], "Staged version differs; abandon and start again")
-                else:
-                    with path.open("xb") as stream:
-                        stream.write(content)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-            if hook:
-                hook("versions")
-            for spec in manifest["documents"]:
-                self.compare(folder, spec)
-            with self.db(True) as db:
-                db.execute("BEGIN IMMEDIATE")
-                require(self.seq(db) == manifest["base_seq"], "Stale database baseline")
-                db.execute("INSERT INTO batches(id,at,reason,manifest) VALUES(?,?,?,?)",
-                           (ident, now(), request["reason"], json.dumps(manifest, ensure_ascii=False)))
-                for key, node in nodes.items():
-                    if old.get(key) != node:
-                        db.execute("INSERT INTO nodes VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
-                                   (key, node["kind"], json.dumps(node["data"], ensure_ascii=False)))
-                        db.execute("INSERT INTO history VALUES(?,?,?,?)", (ident, key,
-                                   json.dumps(old.get(key), ensure_ascii=False), json.dumps(node, ensure_ascii=False)))
-                db.executemany("DELETE FROM links WHERE src=? AND dst=? AND relation=?", sorted(removed))
-                db.executemany("INSERT OR IGNORE INTO links VALUES(?,?,?)", sorted(links))
-            if hook:
-                hook("transaction")
-            return self._refresh(manifest, hook)
+            return self._commit(ident, hook)
+
+    def _commit(self, ident, hook=None):
+        self.writable()
+        folder = self.batch(ident)
+        require(read_json(self.root / "session.json")["batch"] == ident, "Different edit session")
+        with self.db() as db:
+            committed = db.execute("SELECT manifest FROM batches WHERE id=?", (ident,)).fetchone()
+        if committed:
+            return self._refresh(json.loads(committed[0]), hook)
+        manifest = read_json(folder / "batch.json")
+        request = manifest["request"]
+        with self.db() as db:
+            require(self.seq(db) == manifest["base_seq"], "Stale database baseline")
+            old = self.nodes(db)
+            links = set(db.execute("SELECT src,dst,relation FROM links"))
+        prior_links = links.copy()
+        nodes = json.loads(json.dumps(old))
+        seen = set()
+        for update in request.get("updates", []):
+            ident_node = update["id"]
+            require(ident_node not in seen and update["kind"] != "document", "Duplicate/invalid update")
+            require(ident_node not in old or old[ident_node]["kind"] == update["kind"], "Cannot change node kind")
+            seen.add(ident_node)
+            nodes[ident_node] = update
+        for spec in manifest["documents"]:
+            self.compare(folder, spec)
+            content = (folder / (spec["id"] + ".candidate")).read_bytes()
+            version = f"versions/{ident}/{spec['id']}.blob"
+            spec.update(version=version, sha256=digest(content))
+            data = {k: v for k, v in spec.items() if k not in {"id", "baseline"}}
+            nodes[spec["id"]] = {"id": spec["id"], "kind": "document", "data": data}
+        links.update(tuple(link) for link in request.get("links", []))
+        removed = {tuple(link) for link in request.get("unlink", [])}
+        require(removed <= prior_links, "Can only unlink existing relationships")
+        require(all(link[2] != "supersedes" for link in removed), "Replacement history cannot be unlinked")
+        require(not removed.intersection(tuple(link) for link in request.get("links", [])),
+                "Cannot add and remove the same relationship")
+        links.difference_update(removed)
+        for node in nodes.values():
+            if node["data"].get("supersedes"):
+                links.add((node["id"], node["data"]["supersedes"], "supersedes"))
+        self.validate(old, nodes, request, links, prior_links)
+        for spec in manifest["documents"]:
+            path = safe_path(self.root, spec["version"])
+            content = (folder / (spec["id"] + ".candidate")).read_bytes()
+            require(digest(content) == spec["sha256"], "Candidate changed during save")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                require(digest(path.read_bytes()) == spec["sha256"], "Staged version differs; abandon and start again")
+            else:
+                with path.open("xb") as stream:
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+        if hook:
+            hook("versions")
+        for spec in manifest["documents"]:
+            self.compare(folder, spec)
+        with self.db(True) as db:
+            db.execute("BEGIN IMMEDIATE")
+            require(self.seq(db) == manifest["base_seq"], "Stale database baseline")
+            db.execute("INSERT INTO batches(id,at,reason,manifest) VALUES(?,?,?,?)",
+                       (ident, now(), request["reason"], json.dumps(manifest, ensure_ascii=False)))
+            for key, node in nodes.items():
+                if old.get(key) != node:
+                    db.execute("INSERT INTO nodes VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+                               (key, node["kind"], json.dumps(node["data"], ensure_ascii=False)))
+                    db.execute("INSERT INTO history VALUES(?,?,?,?)", (ident, key,
+                               json.dumps(old.get(key), ensure_ascii=False), json.dumps(node, ensure_ascii=False)))
+            db.executemany("DELETE FROM links WHERE src=? AND dst=? AND relation=?", sorted(removed))
+            db.executemany("INSERT OR IGNORE INTO links VALUES(?,?,?)", sorted(links))
+        if hook:
+            hook("transaction")
+        return self._refresh(manifest, hook)
 
     def _refresh(self, manifest, hook=None):
         folder = self.batch(manifest["id"])
@@ -515,6 +523,14 @@ def main():
         subs.add_parser(name)
     command = subs.add_parser("context")
     command.add_argument("question", nargs="?", default="")
+    command = subs.add_parser("tasks")
+    command.add_argument("--today", help="YYYY-MM-DD, defaults to Asia/Shanghai")
+    command = subs.add_parser("task")
+    command.add_argument("id")
+    command = subs.add_parser("task-save")
+    command.add_argument("request", type=Path)
+    command = subs.add_parser("serve")
+    command.add_argument("--port", type=int, default=8765)
     command = subs.add_parser("begin")
     command.add_argument("request", type=Path)
     command.add_argument("--quiet-files", action="store_true")
@@ -552,6 +568,18 @@ def main():
                 result = getattr(store, args.command)()
             elif args.command == "context":
                 result = store.context(args.question)
+            elif args.command in {"tasks", "task", "task-save"}:
+                from lumos_tasks import list_tasks, task_detail, save_task
+                if args.command == "tasks":
+                    result = list_tasks(store, args.today)
+                elif args.command == "task":
+                    result = task_detail(store, args.id)
+                else:
+                    result = save_task(store, read_json(args.request))
+            elif args.command == "serve":
+                from lumos_web import serve
+                serve(store, args.port)
+                return 0
             elif args.command == "begin":
                 result = store.begin(read_json(args.request), args.quiet_files)
             elif args.command in {"commit", "recover"}:
