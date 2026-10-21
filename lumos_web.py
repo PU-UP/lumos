@@ -49,6 +49,8 @@ def make_server(store, port=8765):
                     require(isinstance(request, dict), "Expected request object")
                     request["source"] = {"type": "user", "ref": "本地看板用户保存，request=" + str(request.get("request_id", ""))}
                     self.reply(200, save_task(store, request))
+                elif path.path == "/api/health":
+                    self.reply(200, {"app": "lumos", "root": str(store.root)})
                 elif path.path == "/api/tasks":
                     self.reply(200, {**list_tasks(store), "token": token})
                 elif path.path == "/api/task":

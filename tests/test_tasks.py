@@ -167,6 +167,9 @@ class TaskTest(BaseStoreCase):
         status, raw = call("GET", "/api/tasks")
         self.assertEqual(status, 200)
         board = json.loads(raw)
+        status, raw = call("GET", "/api/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw), {"app": "lumos", "root": str(self.root)})
         headers = {"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{port}", "X-Lumos-Token": board["token"]}
         request = self.request(text="模拟 <script>alert(1)</script>")
         status, raw = call("POST", "/api/tasks", request, headers)
