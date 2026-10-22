@@ -11,16 +11,19 @@
 <footer>只展示当前工作脉络。归档材料保留在历史中。<span id="sync"></span></footer>
 </main>
 <dialog id="editor" aria-labelledby="editor-title">
-<form id="form"><div class="dialog-heading"><div><p class="eyebrow">任务详情</p><h2 id="editor-title">新增任务</h2></div><button type="button" id="close" aria-label="关闭任务详情">关闭</button></div>
+<form id="form"><div class="dialog-heading"><div><p class="eyebrow">任务详情</p><h2 id="editor-title">新增任务</h2></div><div class="dialog-tools"><button type="button" id="edit">编辑</button><button type="button" id="close" aria-label="关闭任务详情">关闭</button></div></div>
 <p id="form-message" role="status" aria-live="polite"></p>
+<div id="task-view"></div>
+<fieldset id="task-fields" hidden disabled aria-label="编辑任务">
 <label>任务标题<input name="text" required maxlength="300" placeholder="这件事要做什么？"></label>
 <div class="form-grid"><label>工作脉络<select name="context" required></select></label><label>当前状态<select name="status"><option value="todo">待处理</option><option value="doing">进行中</option><option value="blocked">受阻</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></label></div>
-<label>下一步<input name="next_step" placeholder="下一次可以直接开始的动作"></label>
+<label>下一步<textarea name="next_step" rows="2" placeholder="下一次可以直接开始的动作"></textarea></label>
 <div class="form-grid three"><label>截止日期<input name="due" type="date"></label><label>下次跟进<input name="follow_up" type="date"></label><label>重要程度<select name="priority"><option value="normal">普通</option><option value="high">重要</option></select></label></div>
 <label>背景与详细内容<textarea name="details" rows="4" placeholder="背景、约束、需要判断的问题"></textarea></label>
 <label>进展记录<textarea name="progress" rows="3" placeholder="最近发生了什么，遇到什么阻塞"></textarea></label>
-<label>怎样算完成<input name="condition" placeholder="留空时，以你确认完成为准"></label>
+<label>怎样算完成<textarea name="condition" rows="2" placeholder="留空时，以你确认完成为准"></textarea></label>
+</fieldset>
 <details id="evidence"><summary>来源、相关背景与修改历史</summary><div id="history"></div></details>
-<div class="form-actions"><span>日期可留空；标记完成按你的报告记录。</span><button type="submit" class="primary" id="save">保存任务</button></div>
+<div class="form-actions" id="edit-actions" hidden><span>日期可留空；标记完成按你的报告记录。</span><div class="dialog-tools"><button type="button" id="cancel-edit">取消编辑</button><button type="submit" class="primary" id="save">保存任务</button></div></div>
 </form></dialog>
 </body></html>

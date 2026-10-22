@@ -12,6 +12,7 @@ class Element {
   addEventListener(name, fn) { this.events[name] = fn; }
   showModal() { this.open = true; }
   close() { this.open = false; }
+  focus() { this.focused = true; }
   reset() { for (const control of this.elements) control.value = ''; }
 }
 const response = data => ({ok: true, json: async () => data});
@@ -124,4 +125,49 @@ test('old tasks default to normal priority and detail requests cannot overlap', 
   await loading;
   assert.equal(p.controls.priority.value, 'normal');
   assert.equal(p.controls.text.value, '旧任务');
+});
+
+async function existingTask(p) {
+  p.world.fetch = async () => response({seq: 3, task: {data: {text: '已记录的任务', context: 'work-current',
+    status: 'doing', next_step: '第一行\n第二行', details: '<script>不执行</script>', source: {ref: 'fixture'}}},
+    related: [], documents: {}, history: []});
+  await p.world.openTask('existing');
+}
+
+test('recorded tasks open read-only, edit is explicit, cancel restores saved content', async () => {
+  const p = await page();
+  await existingTask(p);
+  assert.equal(p.get('task-view').hidden, false);
+  assert.equal(p.get('task-fields').hidden, true);
+  assert.ok(Object.values(p.controls).every(c => c.disabled));
+  assert.equal(p.get('edit-actions').hidden, true);
+  assert.equal(p.get('editor-title').textContent, '已记录的任务');
+  assert.equal(p.get('task-view').children[2].children[1].textContent, '第一行\n第二行');
+  let writes = 0;
+  p.world.fetch = async () => { writes++; return response({}); };
+  await p.form.onsubmit({preventDefault() {}});
+  assert.equal(writes, 0);
+  p.get('edit').onclick();
+  assert.equal(p.get('task-fields').hidden, false);
+  assert.ok(Object.values(p.controls).every(c => !c.disabled));
+  p.controls.text.value = '未保存修改';
+  p.form.events.input();
+  p.get('cancel-edit').onclick();
+  assert.equal(p.controls.text.value, '已记录的任务');
+  assert.equal(p.get('task-fields').hidden, true);
+  p.world.closeEditor();
+  assert.equal(p.get('editor').open, false);
+  assert.equal(writes, 0);
+});
+
+test('read-only storage cannot enter editing or submit', async () => {
+  const p = await page();
+  p.board.writable = false;
+  await existingTask(p);
+  assert.equal(p.get('edit').disabled, true);
+  p.get('edit').onclick();
+  assert.equal(p.get('task-fields').disabled, true);
+  p.world.fetch = async () => { throw new Error('must not write'); };
+  await p.form.onsubmit({preventDefault() {}});
+  assert.equal(p.get('form-message').textContent, '');
 });

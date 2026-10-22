@@ -3,6 +3,7 @@ const fields = ['text', 'context', 'status', 'condition', 'details', 'next_step'
 const labels = {todo: '待处理', doing: '进行中', blocked: '受阻', done: '已完成', cancelled: '已取消'};
 let state, editing = null, baseline, pending = null;
 let dirty = false, discardArmed = false, saving = false, opening = false;
+let editMode = false, savedValues;
 const form = $('form');
 
 function element(tag, text, cls) {
@@ -123,6 +124,36 @@ function renderHistory(detail) {
   }
 }
 
+function setEditMode(enabled) {
+  editMode = enabled;
+  $('task-view').hidden = enabled;
+  $('task-fields').hidden = !enabled;
+  $('task-fields').disabled = !enabled;
+  for (const k of fields) form.elements.namedItem(k).disabled = !enabled;
+  $('edit-actions').hidden = !enabled;
+  $('edit').hidden = enabled;
+  $('edit').disabled = !state.writable;
+  $('save').disabled = !enabled || !state.writable;
+  $('cancel-edit').hidden = !editing;
+  $('editor-title').textContent = enabled ? (editing ? '编辑任务' : '新增任务') : savedValues.text;
+}
+
+function renderTask(data) {
+  const view = $('task-view');
+  view.replaceChildren();
+  view.append(element('p', contextName(data.context), 'muted'));
+  const meta = [labels[data.status], data.priority === 'high' ? '重要' : '',
+    data.due ? '截止 ' + data.due : '', data.follow_up ? '跟进 ' + data.follow_up : ''].filter(Boolean);
+  view.append(tags(meta));
+  for (const [key, title] of [['next_step', '下一步'], ['progress', '最新进展'], ['details', '背景与详细内容'], ['condition', '怎样算完成']]) {
+    if (!data[key]) continue;
+    const folded = key === 'details' || key === 'condition';
+    const section = element(folded ? 'details' : 'section', undefined, 'task-section');
+    section.append(element(folded ? 'summary' : 'h3', title), element('p', data[key]));
+    view.append(section);
+  }
+}
+
 async function openTask(id = null) {
   if (opening || saving || $('editor').open) return;
   opening = true;
@@ -140,10 +171,12 @@ async function openTask(id = null) {
       || (state.contexts.some(c => c.id === 'work-current') ? 'work-current' : state.contexts[0]?.id),
       status: 'todo', priority: 'normal'};
     for (const k of fields) form.elements.namedItem(k).value = data[k] || (k === 'priority' ? 'normal' : '');
-    $('editor-title').textContent = id ? '任务详情' : '新增任务';
+    savedValues = values();
+    renderTask(savedValues);
+    setEditMode(!id && state.writable);
     $('form-message').textContent = '';
-    $('save').disabled = !state.writable;
     $('evidence').hidden = !id;
+    $('evidence').open = false;
     renderHistory(detail);
     $('editor').showModal();
   } catch (e) {
@@ -167,6 +200,7 @@ function closeEditor() {
 }
 
 function markDirty() {
+  if (!editMode) return;
   dirty = true;
   pending = null;
   discardArmed = false;
@@ -176,7 +210,7 @@ form.addEventListener('input', markDirty);
 form.addEventListener('change', markDirty);
 form.onsubmit = async event => {
   event.preventDefault();
-  if (saving) return;
+  if (saving || !editMode || !state.writable) return;
   saving = true;
   for (const control of form.elements) control.disabled = true;
   $('form-message').textContent = '正在保存…';
@@ -196,11 +230,27 @@ form.onsubmit = async event => {
   } finally {
     saving = false;
     for (const control of form.elements) control.disabled = false;
-    $('save').disabled = !state?.writable;
+    setEditMode(editMode);
   }
 };
 $('editor').addEventListener('cancel', event => {event.preventDefault(); closeEditor();});
 $('close').onclick = closeEditor;
+$('edit').onclick = () => {
+  if (!state.writable || saving) return;
+  setEditMode(true);
+  form.elements.namedItem('text').focus();
+};
+$('cancel-edit').onclick = () => {
+  if (saving) return;
+  for (const k of fields) form.elements.namedItem(k).value = savedValues[k];
+  dirty = false;
+  discardArmed = false;
+  pending = null;
+  $('form-message').textContent = '';
+  $('close').textContent = '关闭';
+  setEditMode(false);
+  $('edit').focus();
+};
 $('new').onclick = () => openTask();
 $('refresh').onclick = refresh;
 $('context').onchange = render;
