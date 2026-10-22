@@ -92,7 +92,8 @@ class TaskTest(BaseStoreCase):
 
     def test_bad_input_does_not_leave_session(self):
         for changes in ({"due": "2026-02-30"}, {"follow_up": "tomorrow"}, {"text": "  "},
-                        {"priority": "urgent"}, {"status": "unknown"}, {"details": []}):
+                        {"priority": "urgent"}, {"status": "unknown"}, {"details": []},
+                        {"owner": []}, {"owner": "x" * 301}):
             with self.subTest(changes=changes), self.assertRaises(lumos.Error):
                 save_task(self.store, self.request(**changes))
             self.assertIsNone(self.store.status()["session"])
@@ -100,6 +101,31 @@ class TaskTest(BaseStoreCase):
         bad["source"]["type"] = "agent"
         with self.assertRaises(lumos.Error):
             save_task(self.store, bad)
+
+    def test_owner_defaults_updates_and_three_priorities(self):
+        legacy = task_detail(self.store, "talk")
+        self.assertEqual(legacy["task"]["data"]["owner"], "Mango")
+        self.assertEqual(legacy["task"]["data"]["priority"], "normal")
+        ident = save_task(self.store, self.request())["id"]
+        task = task_detail(self.store, ident)
+        self.assertEqual(task["task"]["data"]["owner"], "Mango")
+        self.assertEqual(task["history"][0]["after"]["data"]["owner"], "Mango")
+        for priority in ("low", "normal", "high"):
+            request = self.request(owner="  同事  ", priority=priority)
+            request["id"] = ident
+            save_task(self.store, request)
+            row = next(t for t in list_tasks(self.store)["tasks"] if t["id"] == ident)
+            self.assertEqual(row["data"]["owner"], "同事")
+            self.assertEqual(row["data"]["priority"], priority)
+            self.assertEqual("重要事项" in row["attention"], priority == "high")
+        request = self.request(progress="仅更新进展")
+        request["id"] = ident
+        save_task(self.store, request)
+        self.assertEqual(task_detail(self.store, ident)["task"]["data"]["owner"], "同事")
+        request = self.request(owner="  ")
+        request["id"] = ident
+        save_task(self.store, request)
+        self.assertEqual(task_detail(self.store, ident)["task"]["data"]["owner"], "Mango")
 
     def test_generic_batches_share_date_validation(self):
         node = next(n for n in self.store.context("mapping")["nodes"] if n["id"] == "talk")

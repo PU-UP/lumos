@@ -6,14 +6,14 @@ from datetime import date, datetime, timedelta, timezone
 from lumos import Error, digest, now, process_lock, require, safe_path
 
 FIELDS = {"text", "context", "status", "condition", "details", "next_step", "progress",
-          "due", "follow_up", "priority"}
+          "due", "follow_up", "priority", "owner"}
 STATES = {"todo", "doing", "blocked", "done", "cancelled"}
 
 
 def validate_fields(data):
     for field in FIELDS & data.keys():
         require(isinstance(data[field], str), f"{field} must be text")
-        require(len(data[field]) <= (300 if field == "text" else 20000), f"{field} too long")
+        require(len(data[field]) <= (300 if field in {"text", "owner"} else 20000), f"{field} too long")
     for field in ("due", "follow_up"):
         value = data.get(field, "")
         if value:
@@ -22,7 +22,12 @@ def validate_fields(data):
                 date.fromisoformat(value)
             except ValueError as exc:
                 raise Error(f"{field}: invalid date") from exc
-    require(data.get("priority", "normal") in {"normal", "high"}, "Invalid priority")
+    require(data.get("priority", "normal") in {"low", "normal", "high"}, "Invalid priority")
+
+
+def task_defaults(data):
+    return {**data, "owner": data.get("owner", "").strip() or "Mango",
+            "priority": data.get("priority", "normal")}
 
 
 def attention(data, today):
@@ -55,7 +60,8 @@ def list_tasks(store, today=None):
         tasks = []
         for node in nodes.values():
             if node["kind"] == "action" and node["data"]["context"] in ids:
-                tasks.append({**node, "attention": attention(node["data"], today)})
+                tasks.append({**node, "data": task_defaults(node["data"]),
+                              "attention": attention(node["data"], today)})
         tasks.sort(key=lambda n: (not bool(n["attention"]),
                                  "已逾期" not in n["attention"],
                                  n["data"].get("due") or "9999", n["id"]))
@@ -87,7 +93,7 @@ def task_detail(store, ident):
             if (node["kind"] == "document" and data["path"].endswith(".md")
                     and (data["context"] == task["data"]["context"] or node["id"] in related_ids)):
                 documents[node["id"]] = safe_path(store.root, data["version"]).read_text(encoding="utf-8")
-        return {"seq": seq, "task": task, "history": history, "links": links,
+        return {"seq": seq, "task": {**task, "data": task_defaults(task["data"])}, "history": history, "links": links,
                 "related": [nodes[i] for i in sorted(related_ids)],
                 "documents": documents}
 
@@ -126,6 +132,7 @@ def save_task(store, request):
             require(old is None, "Task ID already exists")
         data = dict(old["data"]) if old else {"status": "todo", "priority": "normal", "source": source}
         data.update(changes)
+        data = task_defaults(data)
         require(data.get("text", "").strip(), "任务标题不能为空")
         require(data.get("status") in STATES, "Invalid task status")
         ctx = nodes.get(data.get("context"))

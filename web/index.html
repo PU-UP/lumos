@@ -7,18 +7,20 @@
 <div class="intro"><div><p class="eyebrow">当前工作</p><h1>把注意力留给要紧的事。</h1><p class="muted">记录下一步，跟进变化。也可以直接在对话中告诉我。</p></div><div class="filter"><label for="context">工作脉络</label><select id="context"><option value="">全部当前工作</option></select></div></div>
 <p id="message" role="status" aria-live="polite"></p>
 <section class="focus"><div class="section-heading"><h2>近期关注 <span id="focus-count" class="count">0</span></h2><span>未来七天 · 到期跟进 · 阻塞 · 重要事项</span></div><div id="focus-list"></div></section>
-<section aria-label="任务看板"><div class="section-heading board-heading"><h2>任务看板</h2><label class="search"><span>查找任务</span><input id="search" type="search" placeholder="标题、背景或下一步"></label></div><div id="board" class="board"></div></section>
+<section aria-label="任务看板"><div class="section-heading board-heading"><h2>任务看板</h2><div class="board-filters"><label class="search"><span>负责人</span><select id="owner-filter"><option value="">全部负责人</option></select></label><label class="search"><span>查找任务</span><input id="search" type="search" placeholder="标题、背景或下一步"></label></div></div><div id="board" class="board"></div></section>
 <footer>只展示当前工作脉络。归档材料保留在历史中。<span id="sync"></span></footer>
 </main>
 <dialog id="editor" aria-labelledby="editor-title">
 <form id="form"><div class="dialog-heading"><div><p class="eyebrow">任务详情</p><h2 id="editor-title">新增任务</h2></div><div class="dialog-tools"><button type="button" id="edit">编辑</button><button type="button" id="close" aria-label="关闭任务详情">关闭</button></div></div>
 <p id="form-message" role="status" aria-live="polite"></p>
+<div id="quick-status" hidden><p class="muted">切换状态 · 点击即保存</p><div id="status-buttons" role="group" aria-label="切换任务状态"></div></div>
 <div id="task-view"></div>
 <fieldset id="task-fields" hidden disabled aria-label="编辑任务">
 <label>任务标题<input name="text" required maxlength="300" placeholder="这件事要做什么？"></label>
+<label>负责人<input name="owner" maxlength="300" placeholder="未指定时为 Mango"></label>
 <div class="form-grid"><label>工作脉络<select name="context" required></select></label><label>当前状态<select name="status"><option value="todo">待处理</option><option value="doing">进行中</option><option value="blocked">受阻</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></label></div>
 <label>下一步<textarea name="next_step" rows="2" placeholder="下一次可以直接开始的动作"></textarea></label>
-<div class="form-grid three"><label>截止日期<input name="due" type="date"></label><label>下次跟进<input name="follow_up" type="date"></label><label>重要程度<select name="priority"><option value="normal">普通</option><option value="high">重要</option></select></label></div>
+<div class="form-grid three"><label>截止日期<input name="due" type="date"></label><label>下次跟进<input name="follow_up" type="date"></label><label>优先级<select name="priority"><option value="low">低</option><option value="normal" selected>中</option><option value="high">高</option></select></label></div>
 <label>背景与详细内容<textarea name="details" rows="4" placeholder="背景、约束、需要判断的问题"></textarea></label>
 <label>进展记录<textarea name="progress" rows="3" placeholder="最近发生了什么，遇到什么阻塞"></textarea></label>
 <label>怎样算完成<textarea name="condition" rows="2" placeholder="留空时，以你确认完成为准"></textarea></label>

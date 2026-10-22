@@ -1,6 +1,8 @@
 const $ = id => document.getElementById(id);
-const fields = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'follow_up', 'priority'];
+const fields = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'follow_up', 'priority', 'owner'];
 const labels = {todo: '待处理', doing: '进行中', blocked: '受阻', done: '已完成', cancelled: '已取消'};
+const priorities = {low: '低', normal: '中', high: '高'};
+const ownerName = data => data.owner?.trim() || 'Mango';
 let state, editing = null, baseline, pending = null;
 let dirty = false, discardArmed = false, saving = false, opening = false;
 let editMode = false, savedValues;
@@ -30,9 +32,15 @@ function tags(reasons) {
   return node;
 }
 
+function priorityTag(data) {
+  const priority = data.priority || 'normal';
+  return element('span', priorities[priority] + '优先级', 'tag priority-' + priority);
+}
+
 function filtered() {
   const query = $('search').value.toLowerCase();
   return state.tasks.filter(t => (!$('context').value || t.data.context === $('context').value)
+    && (!$('owner-filter').value || ownerName(t.data) === $('owner-filter').value)
     && [t.data.text, t.data.details, t.data.next_step].join(' ').toLowerCase().includes(query));
 }
 
@@ -51,7 +59,9 @@ function render() {
     button.type = 'button';
     const text = element('span');
     text.append(element('span', t.data.text, 'title'), element('small', t.data.next_step || '下一步尚未补充'));
-    button.append(text, tags(t.attention));
+    const badges = tags(t.attention);
+    badges.append(element('span', ownerName(t.data), 'tag'), priorityTag(t.data));
+    button.append(text, badges);
     button.onclick = () => openTask(t.id);
     $('focus-list').append(button);
   }
@@ -71,7 +81,9 @@ function render() {
       const dates = [t.data.due ? '截止 ' + t.data.due : '', t.data.follow_up ? '跟进 ' + t.data.follow_up : ''].filter(Boolean);
       button.append(element('p', dates.join(' · ') || '日期未定'));
       if (t.data.status === 'cancelled') button.append(element('span', '已取消', 'tag'));
-      button.append(tags(t.attention));
+      const badges = tags(t.attention);
+      badges.append(element('span', ownerName(t.data), 'tag'), priorityTag(t.data));
+      button.append(badges);
       button.onclick = () => openTask(t.id);
       col.append(button);
     }
@@ -87,6 +99,10 @@ async function refresh() {
     $('context').replaceChildren(new Option('全部当前工作', ''));
     for (const c of state.contexts) $('context').append(new Option(c.data.title, c.id));
     if (state.contexts.some(c => c.id === selected)) $('context').value = selected;
+    const selectedOwner = $('owner-filter').value;
+    const owners = [...new Set(state.tasks.map(t => ownerName(t.data)))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    $('owner-filter').replaceChildren(new Option('全部负责人', ''), ...owners.map(name => new Option(name, name)));
+    $('owner-filter').value = owners.includes(selectedOwner) ? selectedOwner : '';
     $('date').textContent = state.today;
     $('sync').textContent = '已读取最新记录';
     $('new').disabled = !state.writable || !state.contexts.length;
@@ -117,7 +133,7 @@ function renderHistory(detail) {
   for (const h of detail.history) {
     const d = h.after?.data;
     const content = [['任务', d?.text], ['下一步', d?.next_step], ['进展', d?.progress], ['背景', d?.details],
-      ['截止', d?.due], ['跟进', d?.follow_up], ['完成条件', d?.condition]]
+      ['截止', d?.due], ['跟进', d?.follow_up], ['负责人', d?.owner], ['优先级', priorities[d?.priority]], ['完成条件', d?.condition]]
       .filter(([, v]) => v).map(([k, v]) => k + '：' + v).join('\n');
     $('history').append(element('pre', new Date(h.at).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'})
       + ' · ' + (labels[d?.status] || '') + '\n' + content));
@@ -135,16 +151,30 @@ function setEditMode(enabled) {
   $('edit').disabled = !state.writable;
   $('save').disabled = !enabled || !state.writable;
   $('cancel-edit').hidden = !editing;
+  $('quick-status').hidden = enabled || !editing;
+  for (const button of $('status-buttons').children) {
+    button.disabled = !state.writable || button.value === savedValues.status;
+  }
   $('editor-title').textContent = enabled ? (editing ? '编辑任务' : '新增任务') : savedValues.text;
 }
 
 function renderTask(data) {
+  $('status-buttons').replaceChildren();
+  for (const [status, label] of Object.entries(labels)) {
+    const button = element('button', label, status === data.status ? 'primary' : '');
+    button.type = 'button';
+    button.value = status;
+    button.onclick = () => saveChanges({status}, true);
+    $('status-buttons').append(button);
+  }
   const view = $('task-view');
   view.replaceChildren();
   view.append(element('p', contextName(data.context), 'muted'));
-  const meta = [labels[data.status], data.priority === 'high' ? '重要' : '',
+  const meta = [labels[data.status], '负责人：' + ownerName(data),
     data.due ? '截止 ' + data.due : '', data.follow_up ? '跟进 ' + data.follow_up : ''].filter(Boolean);
-  view.append(tags(meta));
+  const badges = tags(meta);
+  badges.append(priorityTag(data));
+  view.append(badges);
   for (const [key, title] of [['next_step', '下一步'], ['progress', '最新进展'], ['details', '背景与详细内容'], ['condition', '怎样算完成']]) {
     if (!data[key]) continue;
     const folded = key === 'details' || key === 'condition';
@@ -171,6 +201,7 @@ async function openTask(id = null) {
       || (state.contexts.some(c => c.id === 'work-current') ? 'work-current' : state.contexts[0]?.id),
       status: 'todo', priority: 'normal'};
     for (const k of fields) form.elements.namedItem(k).value = data[k] || (k === 'priority' ? 'normal' : '');
+    form.elements.namedItem('owner').value = ownerName(data);
     savedValues = values();
     renderTask(savedValues);
     setEditMode(!id && state.writable);
@@ -210,33 +241,42 @@ form.addEventListener('input', markDirty);
 form.addEventListener('change', markDirty);
 form.onsubmit = async event => {
   event.preventDefault();
-  if (saving || !editMode || !state.writable) return;
+  await saveChanges(values());
+};
+
+async function saveChanges(changes, quick = false) {
+  if (saving || !state.writable || (quick ? !editing || editMode : !editMode)) return;
+  if (quick && changes.status === savedValues.status) return;
+  if (quick && pending?.changes.status !== changes.status) pending = null;
   saving = true;
   for (const control of form.elements) control.disabled = true;
   $('form-message').textContent = '正在保存…';
   try {
     pending ||= {request_id: crypto.randomUUID().replaceAll('-', ''), expected_seq: baseline,
-      changes: values(), ...(editing ? {id: editing} : {})};
+      changes, ...(editing ? {id: editing} : {})};
     const result = await api('/api/tasks', {method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-Lumos-Token': state.token}, body: JSON.stringify(pending)});
     dirty = false;
     $('editor').close();
     const loaded = await refresh();
-    if (loaded) $('message').textContent = result.replayed ? '已确认上次保存成功。' : '任务已保存。';
+    if (loaded) $('message').textContent = result.replayed ? '已确认上次保存成功。'
+      : quick ? '状态已更新为“' + labels[changes.status] + '”。' : '任务已保存。';
     else $('message').textContent = '任务已保存，但看板刷新失败。请点击刷新读取最新记录。';
   } catch (e) {
-    $('form-message').textContent = e.message
-      + '\n输入已保留。若记录发生变化，请先复制你的修改，关闭详情并刷新后核对；网络失败可直接重试。';
+    $('form-message').textContent = e.message + (quick
+      ? '\n尚未确认状态保存成功。网络失败可再次点击同一状态重试；若记录发生变化，请关闭详情并刷新后核对。'
+      : '\n输入已保留。若记录发生变化，请先复制你的修改，关闭详情并刷新后核对；网络失败可直接重试。');
   } finally {
     saving = false;
     for (const control of form.elements) control.disabled = false;
     setEditMode(editMode);
   }
-};
+}
 $('editor').addEventListener('cancel', event => {event.preventDefault(); closeEditor();});
 $('close').onclick = closeEditor;
 $('edit').onclick = () => {
   if (!state.writable || saving) return;
+  pending = null;
   setEditMode(true);
   form.elements.namedItem('text').focus();
 };
@@ -254,6 +294,7 @@ $('cancel-edit').onclick = () => {
 $('new').onclick = () => openTask();
 $('refresh').onclick = refresh;
 $('context').onchange = render;
+$('owner-filter').onchange = render;
 $('search').oninput = () => {if (state) render();};
 window.addEventListener('beforeunload', event => {if (dirty || saving) {event.preventDefault(); event.returnValue = '';}});
 refresh();

@@ -26,7 +26,7 @@ function deferred() {
 async function page() {
   const nodes = new Map();
   const get = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
-  const names = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'follow_up', 'priority'];
+  const names = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'follow_up', 'priority', 'owner'];
   const controls = Object.fromEntries(names.map(n => [n, new Element()]));
   const form = get('form');
   form.elements = [...Object.values(controls), get('save'), get('close')];
@@ -170,4 +170,93 @@ test('read-only storage cannot enter editing or submit', async () => {
   p.world.fetch = async () => { throw new Error('must not write'); };
   await p.form.onsubmit({preventDefault() {}});
   assert.equal(p.get('form-message').textContent, '');
+});
+
+test('owner filtering composes with context and search, and survives refresh', async () => {
+  const p = await page();
+  p.board.tasks = [
+    {id: 'mine', data: {text: '模拟地图', context: 'work-current', status: 'todo'}, attention: []},
+    {id: 'other', data: {text: '模拟地图', context: 'work-current', owner: '同事', status: 'doing'}, attention: []},
+    {id: 'elsewhere', data: {text: '模拟地图', context: 'other-context', owner: '同事', status: 'todo'}, attention: []}
+  ];
+  await p.world.refresh();
+  p.get('owner-filter').value = 'Mango';
+  assert.deepEqual(Array.from(p.world.filtered(), t => t.id), ['mine']);
+  p.get('owner-filter').value = '同事';
+  p.get('context').value = 'work-current';
+  p.get('search').value = '地图';
+  assert.deepEqual(Array.from(p.world.filtered(), t => t.id), ['other']);
+  await p.world.refresh();
+  assert.equal(p.get('owner-filter').value, '同事');
+  p.get('search').value = '不存在';
+  assert.equal(p.world.filtered().length, 0);
+});
+
+test('new tasks default to Mango and medium, and priorities have distinct text and color classes', async () => {
+  const p = await page();
+  await p.world.openTask();
+  assert.equal(p.controls.owner.value, 'Mango');
+  assert.equal(p.controls.priority.value, 'normal');
+  const badges = ['low', 'normal', 'high'].map(priority => p.world.priorityTag({priority}));
+  assert.deepEqual(badges.map(b => b.textContent), ['低优先级', '中优先级', '高优先级']);
+  assert.equal(new Set(badges.map(b => b.className)).size, 3);
+});
+
+test('quick status saves only status, prevents duplicate writes and refreshes the board', async () => {
+  const p = await page();
+  await existingTask(p);
+  assert.equal(p.get('quick-status').hidden, false);
+  const buttons = p.get('status-buttons').children;
+  assert.equal(buttons.find(b => b.value === 'doing').disabled, true);
+  const delayed = deferred();
+  const requests = [];
+  p.world.fetch = (url, options) => {
+    if (!options) return Promise.resolve(response(p.board));
+    requests.push(JSON.parse(options.body));
+    return delayed.promise;
+  };
+  const done = buttons.find(b => b.value === 'done');
+  const saving = done.onclick();
+  p.get('edit').onclick();
+  p.world.closeEditor();
+  await done.onclick();
+  assert.equal(p.get('editor').open, true);
+  assert.equal(p.get('task-fields').hidden, true);
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0].changes, {status: 'done'});
+  assert.equal(requests[0].id, 'existing');
+  assert.equal(requests[0].expected_seq, 3);
+  delayed.resolve(response({seq: 4}));
+  await saving;
+  assert.equal(p.get('editor').open, false);
+  assert.equal(p.get('message').textContent, '状态已更新为“已完成”。');
+});
+
+test('quick status failure preserves original status and retries the identical request', async () => {
+  const p = await page();
+  await existingTask(p);
+  const bodies = [];
+  p.world.fetch = async (url, options) => {
+    if (!options) return response(p.board);
+    bodies.push(options.body);
+    if (bodies.length === 1) throw new Error('offline');
+    return response({replayed: true});
+  };
+  await p.world.saveChanges({status: 'blocked'}, true);
+  assert.equal(p.get('editor').open, true);
+  assert.equal(p.controls.status.value, 'doing');
+  assert.match(p.get('form-message').textContent, /尚未确认状态保存成功/);
+  await p.world.saveChanges({status: 'blocked'}, true);
+  assert.equal(bodies[0], bodies[1]);
+});
+
+test('quick status respects read-only mode and does not submit an unchanged status', async () => {
+  const p = await page();
+  await existingTask(p);
+  p.world.fetch = async () => { assert.fail('must not write'); };
+  await p.world.saveChanges({status: 'doing'}, true);
+  p.board.writable = false;
+  p.world.setEditMode(false);
+  assert.ok(p.get('status-buttons').children.every(b => b.disabled));
+  await p.world.saveChanges({status: 'done'}, true);
 });
