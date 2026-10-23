@@ -264,6 +264,8 @@ class Store:
             require(kind in KINDS and isinstance(data, dict), "Invalid node kind/data")
             require(data.get("title") or data.get("text"), f"Missing title/text: {ident}")
             if kind == "context":
+                from lumos_tasks import WORKSPACES
+                require(data.get("workspace", "lingguang") in WORKSPACES, "Invalid workspace")
                 require(data.get("status", "active") in {"active", "waiting", "retained", "archived"},
                         "Invalid context status")
                 require(data.get("entry") in nodes and nodes[data["entry"]]["kind"] == "document",

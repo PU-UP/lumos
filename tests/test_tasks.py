@@ -86,6 +86,37 @@ class TaskTest(BaseStoreCase):
         self.assertEqual(task_detail(self.store, result["id"])["task"]["data"]["text"], "newer update")
         self.assertIsNone(self.store.status()["session"])
 
+    def test_workspace_groups_preserve_background_and_isolate_moves(self):
+        self.assertTrue(all(c["data"]["workspace"] == "lingguang" for c in list_tasks(self.store)["contexts"]))
+        ctx = next(n for n in self.store.context("prep")["nodes"] if n["id"] == "prep")
+        ctx["data"]["workspace"] = "lumos"
+        batch = self.store.begin({"reason": "synthetic workspace", "updates": [ctx]}, True)
+        self.store.commit(batch["batch"], True)
+        other = save_task(self.store, self.request(context="prep", group="维护"))["id"]
+        ident = save_task(self.store, self.request(group="  感知与地图  "))["id"]
+        detail = task_detail(self.store, ident)
+        self.assertEqual(detail["task"]["data"]["group"], "感知与地图")
+        self.assertEqual(detail["task"]["data"]["context"], "mapping")
+        self.assertIn("plan", detail["documents"])
+        request = {**self.request(), "id": ident, "changes": {"status": "todo"}, "before_id": other}
+        with self.assertRaisesRegex(lumos.Error, "Move target"):
+            save_task(self.store, request)
+        original = task_detail(self.store, other)
+        request["before_id"] = None
+        save_task(self.store, request)
+        self.assertEqual(task_detail(self.store, other)["history"], original["history"])
+        self.assertEqual(task_detail(self.store, ident)["task"]["data"]["group"], "感知与地图")
+        request = {**self.request(), "id": ident, "changes": {"group": ""}}
+        save_task(self.store, request)
+        detail = task_detail(self.store, ident)
+        self.assertEqual(detail["task"]["data"]["group"], "")
+        self.assertEqual(detail["history"][-1]["after"]["data"]["group"], "感知与地图")
+        ctx["data"]["workspace"] = "invalid"
+        batch = self.store.begin({"reason": "synthetic invalid workspace", "updates": [ctx]}, True)
+        with self.assertRaisesRegex(lumos.Error, "Invalid workspace"):
+            self.store.commit(batch["batch"], True)
+        self.store.abandon(batch["batch"])
+
     def test_detail_uses_exact_context_and_explicit_document_links(self):
         request = {"reason": "synthetic similar context", "updates": [
             {"id": "mapping-old", "kind": "context", "data": {
@@ -122,7 +153,8 @@ class TaskTest(BaseStoreCase):
     def test_bad_input_does_not_leave_session(self):
         for changes in ({"due": "2026-02-30"}, {"follow_up": "tomorrow"}, {"text": "  "},
                         {"priority": "urgent"}, {"status": "unknown"}, {"details": []},
-                        {"owner": []}, {"owner": "x" * 301}):
+                        {"owner": []}, {"owner": "x" * 301}, {"group": []},
+                        {"group": "x" * 81}, {"group": "A\nB"}):
             with self.subTest(changes=changes), self.assertRaises(lumos.Error):
                 save_task(self.store, self.request(**changes))
             self.assertIsNone(self.store.status()["session"])
@@ -192,7 +224,7 @@ class TaskTest(BaseStoreCase):
             save_task(self.store, self.request())
 
     def test_backup_restore_retains_tasks_details_and_history(self):
-        ident = save_task(self.store, self.request(details="模拟完整内容", follow_up="2026-10-21"))["id"]
+        ident = save_task(self.store, self.request(details="模拟完整内容", follow_up="2026-10-21", group="模拟分组"))["id"]
         snapshot = self.area / "snapshot"
         backup(self.store, snapshot, True)
         target = self.area / "restored"
@@ -226,10 +258,11 @@ class TaskTest(BaseStoreCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(raw), {"app": "lumos", "root": str(self.root)})
         headers = {"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{port}", "X-Lumos-Token": board["token"]}
-        request = self.request(text="模拟 <script>alert(1)</script>")
+        request = self.request(text="模拟 <script>alert(1)</script>", group="HTTP 分组")
         status, raw = call("POST", "/api/tasks", request, headers)
         self.assertEqual(status, 200, raw)
         ident = json.loads(raw)["id"]
+        self.assertEqual(task_detail(self.store, ident)["task"]["data"]["group"], "HTTP 分组")
         self.assertEqual(task_detail(self.store, ident)["task"]["data"]["source"]["type"], "user")
         self.assertTrue(json.loads(call("POST", "/api/tasks", request, headers)[1])["replayed"])
         for bad in ({**headers, "Origin": "https://untrusted.example"},

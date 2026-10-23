@@ -1,5 +1,6 @@
 const $ = id => document.getElementById(id);
-const fields = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'follow_up', 'priority', 'owner'];
+const fields = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'follow_up', 'priority', 'owner', 'group'];
+const workspaces = {lingguang: '灵光', lumos: 'Lumos 仓库维护'};
 const labels = {todo: '待处理', doing: '进行中', blocked: '受阻', done: '已完成', cancelled: '已取消'};
 const priorities = {low: '低', normal: '中', high: '高'};
 const ownerName = data => data.owner?.trim() || 'Mango';
@@ -24,8 +25,42 @@ async function api(path, options) {
   return data;
 }
 
-function contextName(id) {
-  return state.contexts.find(c => c.id === id)?.data.title || id;
+function workspaceOf(context) {
+  return state.contexts.find(c => c.id === context)?.data.workspace || (context === 'lumos-maintenance' ? 'lumos' : 'lingguang');
+}
+
+function workspaceContexts(workspace) {
+  return state.contexts.filter(c => workspaceOf(c.id) === workspace);
+}
+
+function groupNames(workspace) {
+  return [...new Set(state.tasks.filter(t => workspaceOf(t.data.context) === workspace)
+    .map(t => t.data.group || '').filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+}
+
+function updateFilters() {
+  const workspace = $('workspace').value, selectedGroup = $('group-filter').value;
+  const groups = groupNames(workspace);
+  $('group-filter').replaceChildren(new Option('全部分组', ''), new Option('未分组', '-'),
+    ...groups.map(name => new Option(name, ':' + name)));
+  $('group-filter').value = selectedGroup === '-' || groups.includes(selectedGroup.slice(1)) ? selectedGroup : '';
+  const selectedOwner = $('owner-filter').value;
+  const owners = [...new Set(state.tasks.filter(t => workspaceOf(t.data.context) === workspace)
+    .map(t => ownerName(t.data)))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  $('owner-filter').replaceChildren(new Option('全部负责人', ''), ...owners.map(name => new Option(name, name)));
+  $('owner-filter').value = owners.includes(selectedOwner) ? selectedOwner : '';
+  $('new').disabled = !state.writable || !workspaceContexts(workspace).length;
+}
+
+function setTaskWorkspace(workspace, context = null) {
+  const contexts = workspaceContexts(workspace);
+  form.elements.namedItem('workspace').value = workspace;
+  const control = form.elements.namedItem('context');
+  control.replaceChildren(...contexts.map(c => new Option(c.data.title, c.id)));
+  const preferred = workspace === 'lingguang' ? 'work-current' : 'lumos-maintenance';
+  control.value = contexts.some(c => c.id === context) ? context
+    : contexts.find(c => c.id === preferred)?.id || contexts[0]?.id || '';
+  $('group-options').replaceChildren(...groupNames(workspace).map(name => new Option(name, name)));
 }
 
 function tags(reasons) {
@@ -41,7 +76,9 @@ function priorityTag(data) {
 
 function filtered() {
   const query = $('search').value.toLowerCase();
-  return state.tasks.filter(t => (!$('context').value || t.data.context === $('context').value)
+  const group = $('group-filter').value;
+  return state.tasks.filter(t => workspaceOf(t.data.context) === $('workspace').value
+    && (!group || (group === '-' ? !t.data.group : t.data.group === group.slice(1)))
     && (!$('owner-filter').value || ownerName(t.data) === $('owner-filter').value)
     && [t.data.text, t.data.details, t.data.next_step].join(' ').toLowerCase().includes(query));
 }
@@ -155,7 +192,7 @@ function render() {
         if (['ArrowLeft', 'ArrowRight'].includes(event.key) && target) await moveTask(t.id, target);
         [...$('board').querySelectorAll('.card')].find(card => card.dataset.id === t.id)?.focus();
       };
-      button.append(element('span', contextName(t.data.context), 'context-label'), element('h4', t.data.text));
+      button.append(element('span', t.data.group || '未分组', 'context-label'), element('h4', t.data.text));
       if (t.data.next_step) button.append(element('p', t.data.next_step));
       const dates = [t.data.due ? '截止 ' + t.data.due : '', t.data.follow_up ? '跟进 ' + t.data.follow_up : ''].filter(Boolean);
       button.append(element('p', dates.join(' · ') || '日期未定'));
@@ -174,17 +211,9 @@ async function refresh() {
   $('refresh').disabled = true;
   try {
     state = await api('/api/tasks');
-    const selected = $('context').value;
-    $('context').replaceChildren(new Option('全部当前工作', ''));
-    for (const c of state.contexts) $('context').append(new Option(c.data.title, c.id));
-    if (state.contexts.some(c => c.id === selected)) $('context').value = selected;
-    const selectedOwner = $('owner-filter').value;
-    const owners = [...new Set(state.tasks.map(t => ownerName(t.data)))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
-    $('owner-filter').replaceChildren(new Option('全部负责人', ''), ...owners.map(name => new Option(name, name)));
-    $('owner-filter').value = owners.includes(selectedOwner) ? selectedOwner : '';
+    updateFilters();
     $('date').textContent = state.today;
     $('sync').textContent = '已读取最新记录';
-    $('new').disabled = !state.writable || !state.contexts.length;
     const drafts = state.integrity.drafts_or_missing_working_copies.length;
     $('message').textContent = !state.writable ? '当前只能查看：可能有未结束的保存会话，或数据处于只读状态。'
       : drafts ? '有尚未吸收的文档变化，请在对话中核对。' : '';
@@ -212,7 +241,7 @@ function renderHistory(detail) {
   for (const h of detail.history) {
     const d = h.after?.data;
     const content = [['任务', d?.text], ['下一步', d?.next_step], ['进展', d?.progress], ['背景', d?.details],
-      ['截止', d?.due], ['跟进', d?.follow_up], ['负责人', d?.owner], ['优先级', priorities[d?.priority]], ['完成条件', d?.condition]]
+      ['截止', d?.due], ['跟进', d?.follow_up], ['负责人', d?.owner], ['分组', d?.group], ['优先级', priorities[d?.priority]], ['完成条件', d?.condition]]
       .filter(([, v]) => v).map(([k, v]) => k + '：' + v).join('\n');
     $('history').append(element('pre', new Date(h.at).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'})
       + ' · ' + (labels[d?.status] || '') + '\n' + content));
@@ -225,6 +254,7 @@ function setEditMode(enabled) {
   $('task-fields').hidden = !enabled;
   $('task-fields').disabled = !enabled;
   for (const k of fields) form.elements.namedItem(k).disabled = !enabled;
+  form.elements.namedItem('workspace').disabled = !enabled;
   $('edit-actions').hidden = !enabled;
   $('edit').hidden = enabled;
   $('edit').disabled = !state.writable;
@@ -248,7 +278,7 @@ function renderTask(data) {
   }
   const view = $('task-view');
   view.replaceChildren();
-  view.append(element('p', contextName(data.context), 'muted'));
+  view.append(element('p', workspaces[workspaceOf(data.context)] + ' / ' + (data.group || '未分组'), 'muted'));
   const meta = [labels[data.status], '负责人：' + ownerName(data),
     data.due ? '截止 ' + data.due : '', data.follow_up ? '跟进 ' + data.follow_up : ''].filter(Boolean);
   const badges = tags(meta);
@@ -275,9 +305,10 @@ async function openTask(id = null) {
     discardArmed = false;
     $('close').textContent = '关闭';
     form.reset();
-    form.elements.namedItem('context').replaceChildren(...state.contexts.map(c => new Option(c.data.title, c.id)));
-    const data = detail?.task.data || {context: $('context').value
-      || (state.contexts.some(c => c.id === 'work-current') ? 'work-current' : state.contexts[0]?.id),
+    const workspace = detail ? workspaceOf(detail.task.data.context) : $('workspace').value;
+    setTaskWorkspace(workspace, detail?.task.data.context);
+    const data = detail?.task.data || {context: form.elements.namedItem('context').value,
+      group: $('group-filter').value.startsWith(':') ? $('group-filter').value.slice(1) : '',
       status: 'todo', priority: 'normal'};
     for (const k of fields) form.elements.namedItem(k).value = data[k] || (k === 'priority' ? 'normal' : '');
     form.elements.namedItem('owner').value = ownerName(data);
@@ -287,6 +318,7 @@ async function openTask(id = null) {
     $('form-message').textContent = '';
     $('evidence').hidden = !id;
     $('evidence').open = false;
+    $('context-details').open = false;
     renderHistory(detail);
     $('editor').showModal();
   } catch (e) {
@@ -361,6 +393,7 @@ $('edit').onclick = () => {
 };
 $('cancel-edit').onclick = () => {
   if (saving) return;
+  setTaskWorkspace(workspaceOf(savedValues.context), savedValues.context);
   for (const k of fields) form.elements.namedItem(k).value = savedValues[k];
   dirty = false;
   discardArmed = false;
@@ -372,7 +405,20 @@ $('cancel-edit').onclick = () => {
 };
 $('new').onclick = () => openTask();
 $('refresh').onclick = refresh;
-$('context').onchange = render;
+$('workspace').onchange = () => {
+  $('group-filter').value = '';
+  $('owner-filter').value = '';
+  $('search').value = '';
+  updateFilters();
+  render();
+};
+$('group-filter').onchange = render;
+form.elements.namedItem('workspace').onchange = () => {
+  if (!editMode || saving) return;
+  setTaskWorkspace(form.elements.namedItem('workspace').value);
+  form.elements.namedItem('group').value = '';
+  markDirty();
+};
 $('owner-filter').onchange = render;
 $('search').oninput = () => {if (state) render();};
 window.addEventListener('beforeunload', event => {if (dirty || saving) {event.preventDefault(); event.returnValue = '';}});

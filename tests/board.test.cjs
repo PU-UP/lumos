@@ -26,11 +26,12 @@ function deferred() {
 async function page() {
   const nodes = new Map();
   const get = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
-  const names = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'follow_up', 'priority', 'owner'];
+  const names = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'follow_up', 'priority', 'owner', 'group', 'workspace'];
   const controls = Object.fromEntries(names.map(n => [n, new Element()]));
   const form = get('form');
   form.elements = [...Object.values(controls), get('save'), get('close')];
   form.elements.namedItem = name => controls[name];
+  get('workspace').value = 'lingguang';
   const board = {seq: 3, today: '2026-10-21', writable: true, tasks: [], token: 'test-token',
     contexts: [{id: 'work-current', data: {title: '模拟工作'}}], integrity: {drafts_or_missing_working_copies: []}};
   const world = {document: {getElementById: get, createElement: () => new Element()},
@@ -172,18 +173,18 @@ test('read-only storage cannot enter editing or submit', async () => {
   assert.equal(p.get('form-message').textContent, '');
 });
 
-test('owner filtering composes with context and search, and survives refresh', async () => {
+test('owner filtering composes with group and search, and survives refresh', async () => {
   const p = await page();
   p.board.tasks = [
-    {id: 'mine', data: {text: '模拟地图', context: 'work-current', status: 'todo'}, attention: []},
-    {id: 'other', data: {text: '模拟地图', context: 'work-current', owner: '同事', status: 'doing'}, attention: []},
+    {id: 'mine', data: {text: '模拟地图', context: 'work-current', group: '地图', status: 'todo'}, attention: []},
+    {id: 'other', data: {text: '模拟地图', context: 'work-current', group: '地图', owner: '同事', status: 'doing'}, attention: []},
     {id: 'elsewhere', data: {text: '模拟地图', context: 'other-context', owner: '同事', status: 'todo'}, attention: []}
   ];
   await p.world.refresh();
   p.get('owner-filter').value = 'Mango';
   assert.deepEqual(Array.from(p.world.filtered(), t => t.id), ['mine']);
   p.get('owner-filter').value = '同事';
-  p.get('context').value = 'work-current';
+  p.get('group-filter').value = ':地图';
   p.get('search').value = '地图';
   assert.deepEqual(Array.from(p.world.filtered(), t => t.id), ['other']);
   await p.world.refresh();
@@ -299,4 +300,64 @@ test('board moves persist status and position, retry identically and block concu
   p.board.writable = false;
   await p.world.moveTask('a', 'done');
   assert.equal(bodies.length, 4);
+});
+
+test('workspaces default to Lingguang, groups span contexts and switching clears filters', async () => {
+  const p = await page();
+  p.board.contexts.push({id:'lidar', data:{title:'雷达背景', workspace:'lingguang'}},
+    {id:'lumos-maintenance', data:{title:'维护', workspace:'lumos'}});
+  p.board.tasks = [
+    {id:'a',data:{text:'A',context:'work-current',group:'感知',status:'todo'},attention:[]},
+    {id:'b',data:{text:'B',context:'lidar',group:'感知',status:'doing'},attention:[]},
+    {id:'c',data:{text:'C',context:'work-current',status:'todo'},attention:[]},
+    {id:'d',data:{text:'D',context:'lumos-maintenance',group:'感知',status:'todo'},attention:[]}
+  ];
+  await p.world.refresh();
+  assert.equal(p.get('workspace').value,'lingguang');
+  assert.equal(p.get('group-filter').value,'');
+  assert.deepEqual(Array.from(p.world.filtered(),t=>t.id),['a','b','c']);
+  p.get('group-filter').value=':感知';
+  assert.deepEqual(Array.from(p.world.filtered(),t=>t.id),['a','b']);
+  await p.world.openTask();
+  assert.equal(p.controls.context.value,'work-current');
+  assert.equal(p.controls.group.value,'感知');
+  p.world.closeEditor();
+  p.get('group-filter').value='-';
+  assert.deepEqual(Array.from(p.world.filtered(),t=>t.id),['c']);
+  p.get('workspace').value='lumos';
+  p.get('workspace').onchange();
+  assert.equal(p.get('group-filter').value,'');
+  assert.deepEqual(Array.from(p.world.filtered(),t=>t.id),['d']);
+  await p.world.openTask();
+  assert.equal(p.controls.context.value,'lumos-maintenance');
+  assert.equal(p.controls.workspace.value,'lumos');
+  p.world.closeEditor();
+  await p.world.refresh();
+  assert.equal(p.get('workspace').value,'lumos');
+});
+
+test('custom group save retains context and cancel restores workspace and group', async () => {
+  const p = await page();
+  p.board.contexts.push({id:'lumos-maintenance',data:{title:'维护',workspace:'lumos'}});
+  await existingTask(p);
+  p.get('edit').onclick();
+  p.controls.group.value='新分组';
+  p.controls.workspace.value='lumos';
+  p.controls.workspace.onchange();
+  assert.equal(p.controls.context.value,'lumos-maintenance');
+  assert.equal(p.controls.group.value,'');
+  p.get('cancel-edit').onclick();
+  assert.equal(p.controls.context.value,'work-current');
+  assert.equal(p.controls.workspace.value,'lingguang');
+  p.get('edit').onclick();
+  p.controls.group.value='新分组';
+  let saved;
+  p.world.fetch=async (url,options)=>{
+    if(!options) return response(p.board);
+    saved=JSON.parse(options.body); return response({});
+  };
+  await p.form.onsubmit({preventDefault(){}});
+  assert.equal(saved.changes.group,'新分组');
+  assert.equal(saved.changes.context,'work-current');
+  assert.equal('workspace' in saved.changes,false);
 });

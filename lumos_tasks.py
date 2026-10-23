@@ -6,8 +6,13 @@ from datetime import date, datetime, timedelta, timezone
 from lumos import Error, digest, now, process_lock, require, safe_path
 
 FIELDS = {"text", "context", "status", "condition", "details", "next_step", "progress",
-          "due", "follow_up", "priority", "owner"}
+          "due", "follow_up", "priority", "owner", "group"}
 STATES = {"todo", "doing", "blocked", "done", "cancelled"}
+WORKSPACES = {"lingguang", "lumos"}
+
+
+def context_workspace(node):
+    return node["data"].get("workspace", "lumos" if node["id"] == "lumos-maintenance" else "lingguang")
 
 
 def validate_fields(data):
@@ -25,11 +30,13 @@ def validate_fields(data):
             except ValueError as exc:
                 raise Error(f"{field}: invalid date") from exc
     require(data.get("priority", "normal") in {"low", "normal", "high"}, "Invalid priority")
+    require(len(data.get("group", "")) <= 80 and not any(c in data.get("group", "") for c in "\r\n\t"),
+            "Group must be one line, at most 80 characters")
 
 
 def task_defaults(data):
     return {**data, "owner": data.get("owner", "").strip() or "Mango",
-            "priority": data.get("priority", "normal")}
+            "priority": data.get("priority", "normal"), "group": data.get("group", "").strip()}
 
 
 def attention(data, today):
@@ -64,7 +71,8 @@ def list_tasks(store, today=None):
         integrity = store.verify()
         with store.db() as db:
             nodes, seq = store.nodes(db), store.seq(db)
-        contexts = [n for n in nodes.values() if n["kind"] == "context"
+        contexts = [{**n, "data": {**n["data"], "workspace": context_workspace(n)}}
+                    for n in nodes.values() if n["kind"] == "context"
                     and n["data"].get("status", "active") in {"active", "waiting"}]
         ids = {n["id"] for n in contexts}
         tasks = []
@@ -166,6 +174,7 @@ def save_task(store, request):
             require(before is None or isinstance(before, str), "Invalid move target")
             peers = sorted((n for n in nodes.values() if n["kind"] == "action" and n["id"] != ident
                             and board_column(n["data"]) == board_column(data)
+                            and context_workspace(nodes[n["data"]["context"]]) == context_workspace(ctx)
                             and nodes[n["data"]["context"]]["data"].get("status", "active") in {"active", "waiting"}),
                            key=board_key)
             ids = [n["id"] for n in peers]
