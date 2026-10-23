@@ -6,7 +6,7 @@ const path = require('node:path');
 
 // Minimal DOM for the editor lifecycle; actual layout is checked in the browser.
 class Element {
-  constructor() { this.value = ''; this.disabled = false; this.open = false; this.children = []; this.events = {}; }
+  constructor() { this.value = ''; this.disabled = false; this.open = false; this.children = []; this.events = {}; this.dataset = {}; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
   addEventListener(name, fn) { this.events[name] = fn; }
@@ -259,4 +259,44 @@ test('quick status respects read-only mode and does not submit an unchanged stat
   p.world.setEditMode(false);
   assert.ok(p.get('status-buttons').children.every(b => b.disabled));
   await p.world.saveChanges({status: 'done'}, true);
+});
+
+test('board moves persist status and position, retry identically and block concurrent writes', async () => {
+  const p = await page();
+  p.board.tasks = [
+    {id: 'a', data: {text: 'A', status: 'todo'}, attention: []},
+    {id: 'b', data: {text: 'B', status: 'todo'}, attention: []},
+    {id: 'c', data: {text: 'C', status: 'cancelled'}, attention: []}
+  ];
+  p.board.board_order = ['b', 'a', 'c'];
+  assert.deepEqual(Array.from(p.world.columnTasks(p.board.tasks, 'todo'), t => t.id), ['b', 'a']);
+  const bodies = [];
+  p.world.fetch = async (url, options) => {
+    if (!options) return response(p.board);
+    bodies.push(options.body);
+    if (bodies.length === 1) throw new Error('offline');
+    return response({});
+  };
+  await p.world.moveTask('a', 'todo', 'b');
+  assert.match(p.get('message').textContent, /尚未确认保存成功/);
+  await p.world.moveTask('a', 'todo', 'b');
+  assert.equal(bodies[0], bodies[1]);
+  assert.deepEqual(JSON.parse(bodies[0]).changes, {status: 'todo'});
+  assert.equal(JSON.parse(bodies[0]).before_id, 'b');
+  await p.world.moveTask('c', 'done');
+  assert.deepEqual(JSON.parse(bodies[2]).changes, {status: 'cancelled'});
+  const delayed = deferred();
+  p.world.fetch = (url, options) => {
+    if (!options) return Promise.resolve(response(p.board));
+    bodies.push(options.body);
+    return delayed.promise;
+  };
+  const moving = p.world.moveTask('a', 'doing');
+  await p.world.moveTask('b', 'doing');
+  assert.equal(bodies.length, 4);
+  delayed.resolve(response({}));
+  await moving;
+  p.board.writable = false;
+  await p.world.moveTask('a', 'done');
+  assert.equal(bodies.length, 4);
 });

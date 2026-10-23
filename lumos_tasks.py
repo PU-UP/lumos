@@ -11,6 +11,8 @@ STATES = {"todo", "doing", "blocked", "done", "cancelled"}
 
 
 def validate_fields(data):
+    if "board_order" in data:
+        require(type(data["board_order"]) is int and data["board_order"] >= 0, "Invalid board order")
     for field in FIELDS & data.keys():
         require(isinstance(data[field], str), f"{field} must be text")
         require(len(data[field]) <= (300 if field in {"text", "owner"} else 20000), f"{field} too long")
@@ -48,6 +50,14 @@ def attention(data, today):
     return reasons
 
 
+def board_column(data):
+    return "done" if data["status"] == "cancelled" else data["status"]
+
+
+def board_key(node):
+    return (node["data"].get("board_order", float("inf")), node["id"])
+
+
 def list_tasks(store, today=None):
     today = date.fromisoformat(today) if today else datetime.now(timezone(timedelta(hours=8))).date()
     with process_lock(store.root):
@@ -65,8 +75,9 @@ def list_tasks(store, today=None):
         tasks.sort(key=lambda n: (not bool(n["attention"]),
                                  "已逾期" not in n["attention"],
                                  n["data"].get("due") or "9999", n["id"]))
+        board_order = [n["id"] for n in sorted(tasks, key=board_key)]
         ctl = store.control()
-        return {"seq": seq, "today": today.isoformat(), "contexts": contexts, "tasks": tasks,
+        return {"seq": seq, "today": today.isoformat(), "contexts": contexts, "tasks": tasks, "board_order": board_order,
                 "attention": [n["id"] for n in tasks if n["attention"]],
                 "writable": ctl["mode"] in {"active", "trial", "sandbox"}
                 and ctl["bound_root"] == str(store.root) and not store.status()["session"],
@@ -100,7 +111,7 @@ def task_detail(store, ident):
 
 def save_task(store, request):
     require(isinstance(request, dict), "Expected task request object")
-    require(set(request) <= {"request_id", "expected_seq", "id", "changes", "source"}, "Unknown request field")
+    require(set(request) <= {"request_id", "expected_seq", "id", "changes", "source", "before_id"}, "Unknown request field")
     key = request.get("request_id", "")
     require(isinstance(key, str) and bool(re.fullmatch(r"[a-f0-9]{32}", key)), "request_id must be UUID hex")
     changes = request.get("changes")
@@ -149,10 +160,26 @@ def save_task(store, request):
                 data.pop(field, None)
         update = {"id": ident, "kind": "action", "data": data}
         batch_request = {"reason": reason, "updates": [update]}
+        if "before_id" in request:
+            require(old is not None and set(changes) <= {"status"}, "Move requires an existing task and only status")
+            before = request["before_id"]
+            require(before is None or isinstance(before, str), "Invalid move target")
+            peers = sorted((n for n in nodes.values() if n["kind"] == "action" and n["id"] != ident
+                            and board_column(n["data"]) == board_column(data)
+                            and nodes[n["data"]["context"]]["data"].get("status", "active") in {"active", "waiting"}),
+                           key=board_key)
+            ids = [n["id"] for n in peers]
+            require(before is None or before in ids, "Move target changed; refresh the board")
+            peers.insert(ids.index(before) if before else len(peers), update)
+            for position, node in enumerate(peers):
+                if node["id"] == ident:
+                    data["board_order"] = position
+                elif node["data"].get("board_order") != position:
+                    batch_request["updates"].append({**node, "data": {**node["data"], "board_order": position}})
         # Validate before creating a persistent session; invalid UI input must not leave it occupied.
         with store.db() as db:
             links = set(db.execute("SELECT src,dst,relation FROM links"))
-        store.validate(nodes, {**nodes, ident: update}, batch_request, links, links)
+        store.validate(nodes, {**nodes, **{n["id"]: n for n in batch_request["updates"]}}, batch_request, links, links)
         batch = store._begin(batch_request)
         store._commit(batch["batch"])
         with store.db() as db:

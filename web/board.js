@@ -6,6 +6,8 @@ const ownerName = data => data.owner?.trim() || 'Mango';
 let state, editing = null, baseline, pending = null;
 let dirty = false, discardArmed = false, saving = false, opening = false;
 let editMode = false, savedValues;
+let dragging = null, movePending = null;
+const columnOf = task => task.data.status === 'cancelled' ? 'done' : task.data.status;
 const form = $('form');
 
 function element(tag, text, cls) {
@@ -44,6 +46,46 @@ function filtered() {
     && [t.data.text, t.data.details, t.data.next_step].join(' ').toLowerCase().includes(query));
 }
 
+function columnTasks(tasks, status) {
+  const order = state.board_order || state.tasks.map(t => t.id);
+  return tasks.filter(t => columnOf(t) === status).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+}
+
+async function moveTask(id, status, beforeId = null) {
+  if (saving || opening || !state.writable || $('editor').open) return;
+  const task = state.tasks.find(t => t.id === id);
+  if (!task || beforeId === id) return;
+  // Reordering the combined closed column must preserve cancellation.
+  const targetStatus = columnOf(task) === status ? task.data.status : status;
+  const signature = JSON.stringify([id, targetStatus, beforeId, state.seq]);
+  if (movePending?.signature !== signature) {
+    movePending = {signature, request: {request_id: crypto.randomUUID().replaceAll('-', ''),
+      expected_seq: state.seq, id, changes: {status: targetStatus}, before_id: beforeId}};
+  }
+  saving = true;
+  $('message').textContent = '正在保存位置…';
+  try {
+    await api('/api/tasks', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Lumos-Token': state.token},
+      body: JSON.stringify(movePending.request)});
+    movePending = null;
+    const loaded = await refresh();
+    $('message').textContent = loaded ? '卡片位置和状态已保存。' : '已保存，但看板刷新失败。请点击刷新。';
+  } catch (e) {
+    $('message').textContent = e.message + '\n尚未确认保存成功。网络失败可重复同一拖动重试；记录发生变化时请刷新后核对。';
+  } finally {
+    saving = false;
+  }
+}
+
+function dropTarget(col, y) {
+  return [...col.querySelectorAll('.card')].find(card => card.dataset.id !== dragging
+    && y < card.getBoundingClientRect().top + card.getBoundingClientRect().height / 2) || null;
+}
+
+function clearDropMarks() {
+  document.querySelectorAll('.drop-before, .drop-column').forEach(node => node.classList.remove('drop-before', 'drop-column'));
+}
+
 function render() {
   const tasks = filtered(), focus = tasks.filter(t => t.attention.length);
   $('focus-count').textContent = focus.length;
@@ -67,8 +109,24 @@ function render() {
   }
   $('board').replaceChildren();
   for (const status of ['todo', 'doing', 'blocked', 'done']) {
-    const items = tasks.filter(t => status === 'done' ? ['done', 'cancelled'].includes(t.data.status) : t.data.status === status);
+    const items = columnTasks(tasks, status);
     const col = element('section', undefined, 'column' + (status === 'done' ? ' closed' : ''));
+    col.ondragover = event => {
+      if (!dragging || saving || !state.writable) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      clearDropMarks();
+      col.classList.add('drop-column');
+      dropTarget(col, event.clientY)?.classList.add('drop-before');
+    };
+    col.ondrop = event => {
+      if (!dragging) return;
+      event.preventDefault();
+      const id = dragging, before = dropTarget(col, event.clientY)?.dataset.id || null;
+      dragging = null;
+      clearDropMarks();
+      return moveTask(id, status, before);
+    };
     const heading = element('h3', labels[status]);
     heading.append(element('span', items.length));
     col.append(heading);
@@ -76,6 +134,27 @@ function render() {
     for (const t of items) {
       const button = element('button', undefined, 'card');
       button.type = 'button';
+      button.dataset.id = t.id;
+      button.draggable = state.writable;
+      button.title = '拖动调整位置或切换状态；Alt + 方向键也可移动';
+      button.ondragstart = event => {
+        if (saving || opening || !state.writable || $('editor').open) {event.preventDefault(); return;}
+        dragging = t.id;
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', t.id);
+        button.classList.add('dragging');
+      };
+      button.ondragend = () => {dragging = null; button.classList.remove('dragging'); clearDropMarks();};
+      button.onkeydown = async event => {
+        if (!event.altKey || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+        event.preventDefault();
+        const index = items.indexOf(t), columns = ['todo', 'doing', 'blocked', 'done'];
+        if (event.key === 'ArrowUp' && index > 0) await moveTask(t.id, status, items[index - 1].id);
+        if (event.key === 'ArrowDown' && index < items.length - 1) await moveTask(t.id, status, items[index + 2]?.id || null);
+        const target = columns[columns.indexOf(status) + (event.key === 'ArrowLeft' ? -1 : 1)];
+        if (['ArrowLeft', 'ArrowRight'].includes(event.key) && target) await moveTask(t.id, target);
+        [...$('board').querySelectorAll('.card')].find(card => card.dataset.id === t.id)?.focus();
+      };
       button.append(element('span', contextName(t.data.context), 'context-label'), element('h4', t.data.text));
       if (t.data.next_step) button.append(element('p', t.data.next_step));
       const dates = [t.data.due ? '截止 ' + t.data.due : '', t.data.follow_up ? '跟进 ' + t.data.follow_up : ''].filter(Boolean);

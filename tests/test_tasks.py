@@ -38,6 +38,35 @@ class TaskTest(BaseStoreCase):
         self.assertTrue(any(n["id"] == ident for n in list_tasks(self.store)["tasks"]))
         self.assertIn("plan", task["documents"])
 
+    def test_board_moves_are_atomic_persistent_and_replayable(self):
+        a = save_task(self.store, self.request(text="A"))["id"]
+        b = save_task(self.store, self.request(text="B"))["id"]
+        def move(ident, status, before=None):
+            return {**self.request(), "id": ident, "changes": {"status": status}, "before_id": before}
+        save_task(self.store, move(a, "todo", b))
+        order = list_tasks(self.store)["board_order"]
+        self.assertEqual(order.index(a) + 1, order.index(b))
+        request = move(b, "todo", a)
+        save_task(self.store, request)
+        self.assertTrue(save_task(self.store, request)["replayed"])
+        order = list_tasks(self.store)["board_order"]
+        self.assertLess(order.index(b), order.index(a))
+        stale = move(a, "blocked")
+        save_task(self.store, move(b, "done"))
+        with self.assertRaisesRegex(lumos.Error, "记录已变化"):
+            save_task(self.store, stale)
+        save_task(self.store, move(a, "done", b))
+        detail = task_detail(self.store, a)
+        self.assertEqual(detail["task"]["data"]["completion"]["basis"], "user_report")
+        save_task(self.store, move(a, "doing"))
+        self.assertNotIn("completion", task_detail(self.store, a)["task"]["data"])
+        seq = self.store.status()["seq"]
+        for target in ("missing", a, b, [], 3):
+            with self.subTest(target=target), self.assertRaises(lumos.Error):
+                save_task(self.store, move(a, "doing", target))
+            self.assertEqual(self.store.status()["seq"], seq)
+            self.assertIsNone(self.store.status()["session"])
+
     def test_duplicate_and_stale_update_preserve_newer_task(self):
         request = self.request()
         result = save_task(self.store, request)
