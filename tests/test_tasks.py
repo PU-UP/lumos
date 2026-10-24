@@ -131,6 +131,31 @@ class TaskTest(BaseStoreCase):
                                  "links": [["talk", "old-plan", "derived_from"]]}, True)
         self.store.commit(batch["batch"], True)
         self.assertEqual(set(task_detail(self.store, "talk")["documents"]), {"plan", "old-plan"})
+        detail = task_detail(self.store, "talk")
+        self.assertEqual(detail["document_info"]["plan"]["relation"], "context")
+        self.assertEqual(detail["document_info"]["old-plan"]["relation"], "direct")
+        self.assertEqual(detail["document_info"]["old-plan"]["context_status"], "archived")
+
+    def test_discussion_relinked_task_reads_current_document_and_preserves_history(self):
+        batch = self.store.begin({"reason": "synthetic discussion", "updates": [
+            {"id": "discussion", "kind": "context", "data": {
+                "title": "专项讨论", "entry": "discussion-note", "status": "active"}}],
+            "documents": [{"id": "discussion-note", "path": "work/discussion.md",
+                           "title": "讨论结论", "context": "discussion", "role": "understanding"}],
+            "links": [["discussion", "mapping", "related"]]}, True)
+        Path(batch["candidates"]["discussion-note"]).write_text("已明确：模拟结论；待定：模拟边界", encoding="utf-8")
+        self.store.commit(batch["batch"], True)
+        # A broad context relation must not pull every sibling discussion into a task.
+        self.assertNotIn("discussion-note", task_detail(self.store, "talk")["documents"])
+        original = task_detail(self.store, "talk")["task"]["data"]
+        save_task(self.store, {**self.request(), "id": "talk", "changes": {
+            "context": "discussion", "progress": "已明确：模拟结论；待定：模拟边界", "next_step": "继续澄清边界"}})
+        detail = task_detail(self.store, "talk")
+        self.assertEqual(set(detail["documents"]), {"discussion-note"})
+        self.assertEqual(detail["task"]["data"]["progress"], "已明确：模拟结论；待定：模拟边界")
+        self.assertEqual(detail["task"]["data"]["source"], original["source"])
+        self.assertEqual(detail["task"]["data"]["status"], original["status"])
+        self.assertEqual(detail["history"][0]["before"]["data"]["context"], "mapping")
 
     def test_attention_dates_undated_closed_and_archived(self):
         overdue = save_task(self.store, self.request(due="2026-10-20", follow_up="2026-10-21", priority="high", status="blocked"))["id"]

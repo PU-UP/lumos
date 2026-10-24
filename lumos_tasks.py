@@ -107,14 +107,20 @@ def task_detail(store, ident):
                 "SELECT src,dst,relation FROM links WHERE src=? OR dst=?", (ident, ident))]
         related_ids = {i for a, b, _ in links for i in (a, b)} - {ident}
         documents = {}
+        document_info = {}
         for node in nodes.values():
             data = node["data"]
             if (node["kind"] == "document" and data["path"].endswith(".md")
                     and (data["context"] == task["data"]["context"] or node["id"] in related_ids)):
                 documents[node["id"]] = safe_path(store.root, data["version"]).read_text(encoding="utf-8")
+                document_info[node["id"]] = {
+                    "title": data["title"], "context": data["context"],
+                    "relation": "direct" if node["id"] in related_ids else "context",
+                    "context_title": nodes[data["context"]]["data"]["title"],
+                    "context_status": nodes[data["context"]]["data"].get("status", "active")}
         return {"seq": seq, "task": {**task, "data": task_defaults(task["data"])}, "history": history, "links": links,
                 "related": [nodes[i] for i in sorted(related_ids)],
-                "documents": documents}
+                "documents": documents, "document_info": document_info}
 
 
 def save_task(store, request):

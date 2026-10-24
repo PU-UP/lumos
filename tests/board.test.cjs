@@ -15,6 +15,7 @@ class Element {
   focus() { this.focused = true; }
   reset() { for (const control of this.elements) control.value = ''; }
 }
+const textOf = node => [node.textContent || '', ...node.children.map(textOf)].join('\n');
 const response = data => ({ok: true, json: async () => data});
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function deferred() {
@@ -360,4 +361,42 @@ test('custom group save retains context and cancel restores workspace and group'
   assert.equal(saved.changes.group,'新分组');
   assert.equal(saved.changes.context,'work-current');
   assert.equal('workspace' in saved.changes,false);
+});
+
+test('detail separates folded background and sources, formats documents safely and labels superseded advice', async () => {
+  const p = await page();
+  const payload = '<img src=x onerror=alert(1)>';
+  p.world.renderHistory({task: {data: {source: {type:'user',ref:'创建依据',quote:'原话'}}},
+    documents: {note:'# 专项结论\n\n## 已明确\n- ' + payload},
+    document_info: {note:{title:'专项结论',relation:'direct',context_title:'专项讨论',context_status:'active'}},
+    related:[{id:'old',kind:'evidence',data:{text:'旧方案',status:'superseded',source:{type:'agent',ref:'旧建议'}}}], history:[]});
+  const groups = p.get('history').children;
+  assert.equal(groups.length, 3);
+  assert.ok(groups.every(g => !g.open));
+  assert.match(textOf(groups[0]), /直接关联 · 专项结论/);
+  assert.match(textOf(groups[0]), /已被替代，仅供追溯/);
+  assert.match(textOf(groups[1]), /用户陈述：创建依据\n原话：原话/);
+  const walk = node => [node, ...node.children.flatMap(walk)];
+  assert.ok(walk(groups[0]).some(n => n.textContent === payload));
+  assert.ok(walk(groups[0]).every(n => n.innerHTML === undefined));
+  assert.ok(groups[0].children.filter(n => n.children.length).every(n => !n.open));
+});
+
+test('history shows only changed fields, including cleared dates, state and completion, and can reopen cleanly', async () => {
+  const p = await page();
+  const before = {text:'不应重复的标题',details:'不应重复的正文',status:'doing',follow_up:'2026-10-24',source:{ref:'原始'}};
+  const after = {...before,status:'done',follow_up:'',completion:{basis:'user_report',ref:'用户说完成'},last_source:{type:'user',ref:'本次修改'}};
+  const detail = {task:{data:after},documents:{},related:[],history:[{at:'2026-10-24T00:00:00Z',reason:'核对修改',before:{data:before},after:{data:after}}]};
+  p.world.renderHistory(detail);
+  const history = p.get('history').children[2];
+  assert.doesNotMatch(textOf(history), /不应重复/);
+  assert.match(textOf(history), /原：进行中/);
+  assert.match(textOf(history), /现：已完成/);
+  assert.match(textOf(history), /原：2026-10-24/);
+  assert.match(textOf(history), /现：未设置/);
+  assert.match(textOf(history), /用户报告完成/);
+  assert.match(textOf(history), /修改原因：核对修改/);
+  history.open = true;
+  p.world.renderHistory(detail);
+  assert.equal(p.get('history').children[2].open, false);
 });

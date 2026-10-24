@@ -232,19 +232,89 @@ function values() {
   return Object.fromEntries(fields.map(k => [k, form.elements.namedItem(k).value]));
 }
 
+function disclosure(title, parent) {
+  const node = element('details', undefined, 'detail-fold');
+  node.append(element('summary', title));
+  parent.append(node);
+  return node;
+}
+
+function sourceText(source) {
+  if (!source) return '来源未记录';
+  const types = {user: '用户陈述', user_report: '用户转述／报告', source: '来源材料', agent: 'Agent 分析／建议'};
+  const ref = source.ref.replace(/，request=[a-f0-9]{32}$/, '');
+  return (types[source.type] || '来源') + '：' + ref + (source.quote ? '\n原话：' + source.quote : '');
+}
+
+function renderDocument(content, parent) {
+  // Only headings and lists are formatted; source text never becomes executable HTML.
+  let paragraph = [], list = null;
+  const flush = () => {
+    if (paragraph.length) parent.append(element('p', paragraph.join('\n')));
+    paragraph = [];
+  };
+  for (const line of content.split(/\r?\n/)) {
+    const heading = line.match(/^#{1,6}\s+(.+)$/), item = line.match(/^(?:[-*]|\d+\.)\s+(.+)$/);
+    if (heading || item || !line.trim()) flush();
+    if (!item) list = null;
+    if (heading) parent.append(element('h4', heading[1]));
+    else if (item) {
+      if (!list) {list = element('ul'); parent.append(list);}
+      list.append(element('li', item[1]));
+    } else if (line.trim()) paragraph.push(line);
+  }
+  flush();
+}
+
 function renderHistory(detail) {
   $('history').replaceChildren();
   if (!detail) return;
-  $('history').append(element('pre', '最初来源：' + detail.task.data.source.ref));
-  for (const r of detail.related) $('history').append(element('pre', '关联记录：' + (r.data.text || r.data.title)));
-  for (const content of Object.values(detail.documents)) $('history').append(element('pre', content));
+  const background = disclosure('相关资料与脉络背景', $('history'));
+  background.append(element('p', '直接关联资料与所属脉络背景分别标注；脉络背景不代表本任务的最新进展。', 'muted'));
+  for (const [id, content] of Object.entries(detail.documents)) {
+    const info = detail.document_info?.[id];
+    const title = info?.title || content.match(/^#\s+(.+)/)?.[1] || id;
+    const prefix = info?.relation === 'direct' ? '直接关联' : '脉络背景';
+    const archived = ['archived', 'retained'].includes(info?.context_status) ? ' · 历史脉络' : '';
+    const doc = disclosure(prefix + ' · ' + title + archived, background);
+    if (info) doc.append(element('p', '所属脉络：' + info.context_title, 'muted'));
+    renderDocument(content, doc);
+  }
+  for (const r of detail.related.filter(r => r.kind !== 'document')) {
+    const stateLabel = r.data.status === 'superseded' ? '已被替代，仅供追溯' : r.kind === 'decision' ? '用户决定' : '关联记录';
+    const title = r.data.title || r.data.text || r.id;
+    const record = disclosure(stateLabel + ' · ' + (title.length > 48 ? title.slice(0, 48) + '…' : title), background);
+    record.append(element('p', r.data.text || r.data.title), element('p', sourceText(r.data.source), 'muted'));
+  }
+  if (!Object.keys(detail.documents).length && !detail.related.length) background.append(element('p', '尚无关联资料。'));
+  const sources = disclosure('来源与依据', $('history'));
+  sources.append(element('h4', '最初来源'), element('p', sourceText(detail.task.data.source)));
+  if (detail.task.data.last_source) sources.append(element('h4', '最近修改来源'), element('p', sourceText(detail.task.data.last_source)));
+  const history = disclosure('修改历史 · ' + detail.history.length + ' 次', $('history'));
+  const names = {text: '任务', context: '背景脉络', status: '状态', next_step: '下一步', progress: '进展',
+    details: '背景', due: '截止日期', follow_up: '跟进日期', owner: '负责人', group: '分组',
+    priority: '优先级', condition: '完成条件', completion: '完成依据', board_order: '看板顺序'};
+  const value = (key, v) => {
+    if (v === undefined || v === null || v === '') return '未设置';
+    if (key === 'status') return labels[v] || v;
+    if (key === 'priority') return priorities[v] || v;
+    if (key === 'context') return state.contexts.find(c => c.id === v)?.data.title || v;
+    if (key === 'board_order') return '第 ' + (v + 1) + ' 位';
+    if (key === 'completion') return (v.basis === 'user_report' ? '用户报告完成' : v.basis) + '：' + (v.ref || '');
+    return String(v);
+  };
   for (const h of detail.history) {
-    const d = h.after?.data;
-    const content = [['任务', d?.text], ['下一步', d?.next_step], ['进展', d?.progress], ['背景', d?.details],
-      ['截止', d?.due], ['跟进', d?.follow_up], ['负责人', d?.owner], ['分组', d?.group], ['优先级', priorities[d?.priority]], ['完成条件', d?.condition]]
-      .filter(([, v]) => v).map(([k, v]) => k + '：' + v).join('\n');
-    $('history').append(element('pre', new Date(h.at).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'})
-      + ' · ' + (labels[d?.status] || '') + '\n' + content));
+    const before = h.before?.data || {}, after = h.after?.data || {};
+    const changed = Object.keys(names).filter(k => JSON.stringify(before[k] ?? '') !== JSON.stringify(after[k] ?? ''));
+    const title = !h.before ? '创建任务' : changed.map(k => names[k]).join('、') || '来源或记录信息';
+    const entry = disclosure(new Date(h.at).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) + ' · ' + title, history);
+    for (const key of changed) {
+      entry.append(element('h4', names[key]));
+      if (h.before) entry.append(element('p', '原：' + value(key, before[key]), 'muted'));
+      entry.append(element('p', '现：' + value(key, after[key])));
+    }
+    if (h.reason) entry.append(element('p', '修改原因：' + (h.reason.startsWith('task:') ? '任务更新' : h.reason), 'muted'));
+    entry.append(element('p', sourceText(after.last_source || after.source), 'muted'));
   }
 }
 
@@ -284,7 +354,7 @@ function renderTask(data) {
   const badges = tags(meta);
   badges.append(priorityTag(data));
   view.append(badges);
-  for (const [key, title] of [['next_step', '下一步'], ['progress', '最新进展'], ['details', '背景与详细内容'], ['condition', '怎样算完成']]) {
+  for (const [key, title] of [['progress', '当前结论与进展'], ['next_step', '下一步'], ['details', '背景与详细内容'], ['condition', '怎样算完成']]) {
     if (!data[key]) continue;
     const folded = key === 'details' || key === 'condition';
     const section = element(folded ? 'details' : 'section', undefined, 'task-section');
@@ -317,7 +387,6 @@ async function openTask(id = null) {
     setEditMode(!id && state.writable);
     $('form-message').textContent = '';
     $('evidence').hidden = !id;
-    $('evidence').open = false;
     $('context-details').open = false;
     renderHistory(detail);
     $('editor').showModal();
