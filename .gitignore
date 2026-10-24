@@ -2,6 +2,7 @@
 /lumos-data/
 /.local/
 /backups/
+/project-materials/
 /Lumos.exe
 *.db
 *.db-*
