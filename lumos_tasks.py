@@ -105,6 +105,10 @@ def task_detail(store, ident):
                             "ON b.id=h.batch WHERE h.node=? ORDER BY b.seq DESC", (ident,))]
             links = [list(row) for row in db.execute(
                 "SELECT src,dst,relation FROM links WHERE src=? OR dst=?", (ident, ident))]
+            from lumos_notes import note_version
+            note_sources = [{**ref, "note": note_version(db, ref["id"], ref["revision"]),
+                             "current_status": nodes[ref["id"]]["data"]["status"]}
+                            for ref in task["data"].get("note_refs", [])]
         related_ids = {i for a, b, _ in links for i in (a, b)} - {ident}
         documents = {}
         document_info = {}
@@ -119,17 +123,18 @@ def task_detail(store, ident):
                     "context_title": nodes[data["context"]]["data"]["title"],
                     "context_status": nodes[data["context"]]["data"].get("status", "active")}
         return {"seq": seq, "task": {**task, "data": task_defaults(task["data"])}, "history": history, "links": links,
-                "related": [nodes[i] for i in sorted(related_ids)],
+                "related": [nodes[i] for i in sorted(related_ids) if nodes[i]["kind"] != "note"],
+                "note_sources": note_sources,
                 "documents": documents, "document_info": document_info}
 
 
 def save_task(store, request):
     require(isinstance(request, dict), "Expected task request object")
-    require(set(request) <= {"request_id", "expected_seq", "id", "changes", "source", "before_id"}, "Unknown request field")
+    require(set(request) <= {"request_id", "expected_seq", "id", "changes", "source", "before_id", "note_refs"}, "Unknown request field")
     key = request.get("request_id", "")
     require(isinstance(key, str) and bool(re.fullmatch(r"[a-f0-9]{32}", key)), "request_id must be UUID hex")
     changes = request.get("changes")
-    require(isinstance(changes, dict) and changes and set(changes) <= FIELDS, "Invalid task fields")
+    require(isinstance(changes, dict) and (changes or "note_refs" in request) and set(changes) <= FIELDS, "Invalid task fields")
     validate_fields(changes)
     source = request.get("source", {})
     require(isinstance(source, dict) and source.get("type") in {"user", "user_report"}
@@ -157,6 +162,14 @@ def save_task(store, request):
             require(old is None, "Task ID already exists")
         data = dict(old["data"]) if old else {"status": "todo", "priority": "normal", "source": source}
         data.update(changes)
+        if "note_refs" in request:
+            from lumos_notes import validate_refs, note_version
+            validate_refs(request["note_refs"], nodes)
+            with store.db() as db:
+                for ref in request["note_refs"]:
+                    version = note_version(db, ref["id"], ref["revision"])
+                    require(ref["excerpt"] in version["data"]["body"], "Excerpt must match the referenced note version")
+            data["note_refs"] = request["note_refs"]
         data = task_defaults(data)
         require(data.get("text", "").strip(), "任务标题不能为空")
         require(data.get("status") in STATES, "Invalid task status")

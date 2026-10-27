@@ -8,8 +8,50 @@ let state, editing = null, baseline, pending = null;
 let dirty = false, discardArmed = false, saving = false, opening = false;
 let editMode = false, savedValues;
 let dragging = null, movePending = null;
+let taskView = 'list', quickPending = null;
+const selectedStatuses = new Set(['todo', 'doing']);
+let windowDays = null, sortKey = null, sortDirection = 1;
 const columnOf = task => task.data.status === 'cancelled' ? 'done' : task.data.status;
 const form = $('form');
+const preferencesKey = 'lumos.task-view.v1';
+
+function savePreferences() {
+  try {
+    localStorage.setItem(preferencesKey, JSON.stringify({workspace: $('workspace').value,
+      group: $('group-filter').value, owner: $('owner-filter').value, search: $('search').value,
+      statuses: [...selectedStatuses], windowDays, sortKey, sortDirection, taskView}));
+    $('preferences-message').textContent = '';
+  } catch {
+    $('preferences-message').textContent = '浏览器未允许保存偏好；本次筛选仍有效，重新打开后可能需要重设。';
+  }
+}
+
+function restorePreferences() {
+  try {
+    const p = JSON.parse(localStorage.getItem(preferencesKey));
+    if (!p || typeof p !== 'object' || Array.isArray(p)) return;
+    if (Object.hasOwn(workspaces, p.workspace)) $('workspace').value = p.workspace;
+    for (const [id, key] of [['group-filter', 'group'], ['owner-filter', 'owner']]) {
+      if (typeof p[key] !== 'string') continue;
+      $(id).append(new Option(p[key], p[key]));
+      $(id).value = p[key];
+    }
+    if (typeof p.search === 'string') $('search').value = p.search;
+    if (Array.isArray(p.statuses) && p.statuses.every(s => Object.hasOwn(labels, s))) {
+      selectedStatuses.clear();
+      p.statuses.forEach(s => selectedStatuses.add(s));
+    }
+    if (Number.isInteger(p.windowDays) && p.windowDays >= 0 && p.windowDays <= 36500) {
+      $('window-days').value = String(p.windowDays);
+      $('window-days').oninput();
+    }
+    if (['text', 'priority', 'group', 'owner', 'status', 'follow_up'].includes(p.sortKey)) sortKey = p.sortKey;
+    if (p.sortDirection === -1 || p.sortDirection === 1) sortDirection = p.sortDirection;
+    if (['list', 'board'].includes(p.taskView)) taskView = p.taskView;
+  } catch {
+    $('preferences-message').textContent = '未能读取上次的筛选设置，已使用默认设置。';
+  }
+}
 
 function element(tag, text, cls) {
   const node = document.createElement(tag);
@@ -77,7 +119,12 @@ function priorityTag(data) {
 function filtered() {
   const query = $('search').value.toLowerCase();
   const group = $('group-filter').value;
+  const end = new Date(state.today + 'T00:00:00Z');
+  if (windowDays !== null) end.setUTCDate(end.getUTCDate() + windowDays);
+  const until = end.toISOString().slice(0, 10);
   return state.tasks.filter(t => workspaceOf(t.data.context) === $('workspace').value
+    && selectedStatuses.has(t.data.status)
+    && (windowDays === null || (t.data.follow_up ? t.data.follow_up <= until : t.data.status === 'todo'))
     && (!group || (group === '-' ? !t.data.group : t.data.group === group.slice(1)))
     && (!$('owner-filter').value || ownerName(t.data) === $('owner-filter').value)
     && [t.data.text, t.data.details, t.data.next_step].join(' ').toLowerCase().includes(query));
@@ -124,26 +171,18 @@ function clearDropMarks() {
 }
 
 function render() {
-  const tasks = filtered(), focus = tasks.filter(t => t.attention.length);
-  $('focus-count').textContent = focus.length;
-  $('focus-list').replaceChildren();
-  if (!focus.length) {
-    const message = tasks.length ? '暂无触发提醒的事项。没有日期的任务仍保留在下方看板。'
-      : state.tasks.length ? '没有符合筛选条件的任务。试试其他关键词或工作脉络。'
-      : '还没有任务。写下第一件要做的事，或在对话里告诉我。';
-    $('focus-list').append(element('div', message, 'empty'));
+  const tasks = filtered();
+  for (const status of Object.keys(labels)) {
+    const selected = selectedStatuses.has(status);
+    $('status-' + status).setAttribute('aria-pressed', String(selected));
+    $('status-' + status).setAttribute('aria-label', labels[status]);
+    $('status-' + status).textContent = (selected ? '✓ ' : '') + labels[status];
   }
-  for (const t of focus) {
-    const button = element('button', undefined, 'focus-item');
-    button.type = 'button';
-    const text = element('span');
-    text.append(element('span', t.data.text, 'title'), element('small', t.data.next_step || '下一步尚未补充'));
-    const badges = tags(t.attention);
-    badges.append(element('span', ownerName(t.data), 'tag'), priorityTag(t.data));
-    button.append(text, badges);
-    button.onclick = () => openTask(t.id);
-    $('focus-list').append(button);
-  }
+  for (const name of ['list', 'board']) $('view-' + name).setAttribute('aria-pressed', String(taskView === name));
+  $('view-hint').textContent = taskView === 'list' ? '点击标题查看详情；优先级、当前状态和下次关心时间可直接修改。'
+    : '看板沿用上方筛选。拖动卡片切换状态或排序；也可聚焦卡片后按 Alt + 方向键。';
+  renderList(tasks);
+  $('board').hidden = taskView !== 'board';
   $('board').replaceChildren();
   for (const status of ['todo', 'doing', 'blocked', 'done']) {
     const items = columnTasks(tasks, status);
@@ -204,6 +243,98 @@ function render() {
       col.append(button);
     }
     $('board').append(col);
+  }
+}
+
+function sortedTasks(tasks) {
+  const order = state.board_order || state.tasks.map(t => t.id);
+  const value = t => sortKey === 'owner' ? ownerName(t.data)
+    : sortKey === 'priority' ? ({low: 0, normal: 1, high: 2}[t.data.priority || 'normal'])
+    : sortKey === 'status' ? Object.keys(labels).indexOf(t.data.status) : t.data[sortKey] || '';
+  return [...tasks].sort((a, b) => {
+    const original = order.indexOf(a.id) - order.indexOf(b.id);
+    if (!sortKey) return original;
+    const av = value(a), bv = value(b);
+    // Undated tasks stay visible at the bottom in either date sort direction.
+    if (sortKey === 'follow_up' && (!av || !bv)) return !av === !bv ? original : !av ? 1 : -1;
+    const comparison = typeof av === 'number' ? av - bv : av.localeCompare(bv, 'zh-CN', {numeric: true});
+    return comparison * sortDirection || original;
+  });
+}
+
+function renderList(tasks) {
+  savePreferences();
+  const list = $('task-list');
+  list.hidden = taskView !== 'list';
+  list.replaceChildren();
+  const heading = element('div', undefined, 'task-row list-heading');
+  for (const [key, title] of [['text', '任务'], ['priority', '优先级'], ['group', '项目标签'], ['owner', '负责人'], ['status', '当前状态'], ['follow_up', '下次关心时间']]) {
+    const button = element('button', title + (sortKey === key ? sortDirection === 1 ? ' ↑' : ' ↓' : ' ↕'), 'sort-heading');
+    button.type = 'button';
+    button.setAttribute('aria-label', title + '排序');
+    button.title = '点击切换正序、倒序、原顺序';
+    button.setAttribute('aria-pressed', String(sortKey === key));
+    button.onclick = () => {
+      if (sortKey !== key) { sortKey = key; sortDirection = key === 'priority' ? -1 : 1; }
+      else if (sortDirection === (key === 'priority' ? -1 : 1)) sortDirection *= -1;
+      else sortKey = null;
+      renderList(filtered());
+    };
+    heading.append(button);
+  }
+  list.append(heading);
+  const items = sortedTasks(tasks);
+  if (!items.length) list.append(element('p', selectedStatuses.size
+    ? '已筛选：' + [...selectedStatuses].map(s => labels[s]).join('、') + '。暂无符合条件的任务，可调整状态或时间范围。'
+    : '尚未选择状态，请点击上方状态按钮（可多选）。', 'empty'));
+  for (const t of items) {
+    const row = element('div', undefined, 'task-row status-' + t.data.status);
+    row.dataset.id = t.id;
+    const title = element('button', t.data.text, 'row-title');
+    title.type = 'button';
+    title.title = [t.data.next_step, ...t.attention, t.data.due ? '截止 ' + t.data.due : ''].filter(Boolean).join('\n');
+    title.onclick = () => openTask(t.id);
+    const priority = element('select', undefined, 'row-priority priority-' + (t.data.priority || 'normal'));
+    priority.append(...Object.entries(priorities).map(([value, label]) => new Option(label, value)));
+    priority.value = t.data.priority || 'normal';
+    const status = element('select', undefined, 'row-status');
+    status.append(...Object.entries(labels).map(([value, label]) => new Option(label, value)));
+    status.value = t.data.status;
+    const date = element('input', undefined, 'row-date');
+    date.type = 'date';
+    date.value = t.data.follow_up || '';
+    for (const [control, key, label] of [[priority, 'priority', '优先级'], [status, 'status', '当前状态'], [date, 'follow_up', '下次关心时间']]) {
+      control.setAttribute('aria-label', t.data.text + ' · ' + label);
+      control.title = label + ' · 修改即保存';
+      control.disabled = !state.writable || saving || !!quickPending;
+      control.onchange = () => quickSave(t.id, {[key]: control.value});
+    }
+    const owner = element('span', ownerName(t.data), 'row-owner');
+    owner.title = ownerName(t.data);
+    row.append(title, priority, element('span', t.data.group || '未分组', 'project-tag'), owner, status, date);
+    list.append(row);
+  }
+}
+
+async function quickSave(id, changes) {
+  if (saving || opening || !state.writable || $('editor').open) return;
+  quickPending ||= {request_id: crypto.randomUUID().replaceAll('-', ''), expected_seq: state.seq, id, changes};
+  saving = true;
+  $('quick-retry').hidden = true;
+  renderList(filtered());
+  $('message').textContent = '正在保存…';
+  try {
+    await api('/api/tasks', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Lumos-Token': state.token},
+      body: JSON.stringify(quickPending)});
+    quickPending = null;
+    const loaded = await refresh();
+    $('message').textContent = loaded ? '修改已保存。' : '修改已保存，但列表刷新失败。请点击刷新。';
+  } catch (e) {
+    $('message').textContent = e.message + '\n尚未确认保存成功。可重试上次修改；若版本冲突，请刷新后核对再修改。';
+    $('quick-retry').hidden = false;
+  } finally {
+    saving = false;
+    renderList(filtered());
   }
 }
 
@@ -288,18 +419,27 @@ function renderHistory(detail) {
   }
   if (!Object.keys(detail.documents).length && !detail.related.length) background.append(element('p', '尚无关联资料。'));
   const sources = disclosure('来源与依据', $('history'));
+  for (const ref of detail.note_sources || []) {
+    const fold = disclosure('笔记 · ' + ref.note.data.title + ' · 版本 ' + ref.revision +
+      (ref.current_status === 'archived' ? ' · 已归档' : ''), sources);
+    fold.append(element('p', ref.excerpt));
+    const link = element('a', '查看引用时的完整笔记');
+    link.href = '/notes?id=' + encodeURIComponent(ref.id) + '&revision=' + ref.revision;
+    link.target = '_blank'; link.rel = 'noopener'; fold.append(link);
+  }
   sources.append(element('h4', '最初来源'), element('p', sourceText(detail.task.data.source)));
   if (detail.task.data.last_source) sources.append(element('h4', '最近修改来源'), element('p', sourceText(detail.task.data.last_source)));
   const history = disclosure('修改历史 · ' + detail.history.length + ' 次', $('history'));
   const names = {text: '任务', context: '背景脉络', status: '状态', next_step: '下一步', progress: '进展',
     details: '背景', due: '截止日期', follow_up: '跟进日期', owner: '负责人', group: '分组',
-    priority: '优先级', condition: '完成条件', completion: '完成依据', board_order: '看板顺序'};
+    priority: '优先级', condition: '完成条件', completion: '完成依据', board_order: '看板顺序', note_refs: '笔记来源'};
   const value = (key, v) => {
     if (v === undefined || v === null || v === '') return '未设置';
     if (key === 'status') return labels[v] || v;
     if (key === 'priority') return priorities[v] || v;
     if (key === 'context') return state.contexts.find(c => c.id === v)?.data.title || v;
     if (key === 'board_order') return '第 ' + (v + 1) + ' 位';
+    if (key === 'note_refs') return v.map(r => r.id + ' · 版本 ' + r.revision + '：' + r.excerpt).join('\n') || '未关联';
     if (key === 'completion') return (v.basis === 'user_report' ? '用户报告完成' : v.basis) + '：' + (v.ref || '');
     return String(v);
   };
@@ -473,7 +613,37 @@ $('cancel-edit').onclick = () => {
   $('edit').focus();
 };
 $('new').onclick = () => openTask();
-$('refresh').onclick = refresh;
+$('refresh').onclick = async () => {
+  if (saving) return;
+  if (await refresh()) {
+    quickPending = null;
+    $('quick-retry').hidden = true;
+    renderList(filtered());
+  }
+};
+$('quick-retry').onclick = () => quickPending && quickSave(quickPending.id, quickPending.changes);
+for (const view of ['list', 'board']) $('view-' + view).onclick = () => {
+  taskView = view;
+  render();
+};
+for (const status of Object.keys(labels)) $('status-' + status).onclick = () => {
+  if (selectedStatuses.has(status)) selectedStatuses.delete(status);
+  else selectedStatuses.add(status);
+  render();
+};
+$('window-days').oninput = () => {
+  const raw = $('window-days').value;
+  const days = Number(raw);
+  if (raw !== '' && (!Number.isInteger(days) || days < 0 || days > 36500)) {
+    $('window-hint').textContent = '请输入 0–36500 的整数天数；当前仍保留上次有效筛选。';
+    return;
+  }
+  windowDays = raw === '' ? null : days;
+  $('window-hint').textContent = windowDays === null ? '状态可多选；时间留空显示全部日期。'
+    : '包含今天至未来第 ' + days + ' 天、此前已到跟进日的任务，以及未填日期的待处理任务。';
+  if (state) render();
+};
+$('clear-window').onclick = () => { $('window-days').value = ''; $('window-days').oninput(); };
 $('workspace').onchange = () => {
   $('group-filter').value = '';
   $('owner-filter').value = '';
@@ -491,4 +661,5 @@ form.elements.namedItem('workspace').onchange = () => {
 $('owner-filter').onchange = render;
 $('search').oninput = () => {if (state) render();};
 window.addEventListener('beforeunload', event => {if (dirty || saving) {event.preventDefault(); event.returnValue = '';}});
+restorePreferences();
 refresh();

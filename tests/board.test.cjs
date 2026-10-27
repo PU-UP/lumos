@@ -10,6 +10,7 @@ class Element {
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
   addEventListener(name, fn) { this.events[name] = fn; }
+  setAttribute(name, value) { this[name] = value; }
   showModal() { this.open = true; }
   close() { this.open = false; }
   focus() { this.focused = true; }
@@ -24,7 +25,7 @@ function deferred() {
   return {promise, resolve};
 }
 
-async function page() {
+async function page(storage = new Map(), initialBoard = {}) {
   const nodes = new Map();
   const get = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
   const names = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'follow_up', 'priority', 'owner', 'group', 'workspace'];
@@ -35,7 +36,9 @@ async function page() {
   get('workspace').value = 'lingguang';
   const board = {seq: 3, today: '2026-10-21', writable: true, tasks: [], token: 'test-token',
     contexts: [{id: 'work-current', data: {title: '模拟工作'}}], integrity: {drafts_or_missing_working_copies: []}};
+  Object.assign(board, initialBoard);
   const world = {document: {getElementById: get, createElement: () => new Element()},
+    localStorage: {getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value)},
     window: {addEventListener() {}}, Option: function(text, value) { this.text = text; this.value = value; },
     crypto: {randomUUID: () => '11111111-1111-1111-1111-111111111111'},
     fetch: async () => response(board)};
@@ -399,4 +402,169 @@ test('history shows only changed fields, including cleared dates, state and comp
   history.open = true;
   p.world.renderHistory(detail);
   assert.equal(p.get('history').children[2].open, false);
+});
+
+test('status filters default to todo and doing, compose as toggles and apply to board', async () => {
+  const p = await page();
+  p.board.tasks = ['todo','doing','blocked','done','cancelled'].map((status, i) => ({id: String(i),
+    data: {text: status, status, context: 'work-current', group: '项目甲'}, attention: status === 'blocked' ? ['受阻'] : []}));
+  await p.world.refresh();
+  assert.equal(p.get('board').hidden, true);
+  assert.equal(p.get('task-list').children.length, 3);
+  assert.equal(p.get('task-list').children[1].children[2].textContent, '项目甲');
+  assert.equal(p.get('task-list').children[1].children[3].textContent, 'Mango');
+  p.get('status-todo').onclick();
+  p.get('status-doing').onclick();
+  p.get('status-done').onclick();
+  assert.equal(p.get('task-list').children.length, 2);
+  assert.deepEqual(Array.from(p.world.filtered(), t => t.id), ['3']);
+  p.get('status-cancelled').onclick();
+  assert.deepEqual(Array.from(p.world.filtered(), t => t.id), ['3', '4']);
+  p.get('view-board').onclick();
+  assert.equal(p.get('board').hidden, false);
+  assert.equal(p.get('task-list').hidden, true);
+  assert.equal(p.get('board').children.length, 4);
+  await p.world.refresh();
+  assert.deepEqual(Array.from(p.world.filtered(), t => t.id), ['3', '4']);
+  p.get('status-done').onclick();
+  p.get('status-cancelled').onclick();
+  assert.equal(p.world.filtered().length, 0);
+});
+
+test('inline updates send one field, lock during save, retry identically and refresh after conflict', async () => {
+  const p = await page();
+  p.board.tasks = [{id:'a', data:{text:'模拟任务',status:'doing',context:'work-current'},attention:[]}];
+  await p.world.refresh();
+  const writes = [], delayed = deferred();
+  p.world.fetch = async (url, options) => {
+    if (!options) return response(p.board);
+    writes.push(options.body);
+    if (writes.length === 1) return delayed.promise;
+    return response({});
+  };
+  const operation = p.world.quickSave('a', {priority:'high'});
+  assert.equal(p.get('task-list').children[1].children[1].disabled, true);
+  await p.world.quickSave('a', {follow_up:'2026-11-01'});
+  assert.equal(writes.length, 1);
+  delayed.resolve({ok:false,json:async()=>({error:'version conflict'})});
+  await operation;
+  assert.equal(p.get('quick-retry').hidden, false);
+  await p.get('quick-retry').onclick();
+  assert.equal(writes[0], writes[1]);
+  assert.deepEqual(JSON.parse(writes[0]).changes, {priority:'high'});
+  assert.equal(p.get('task-list').children[1].children[1].disabled, false);
+  await p.world.quickSave('a', {follow_up:''});
+  assert.deepEqual(JSON.parse(writes[2]).changes, {follow_up:''});
+  p.world.fetch = async (url, options) => options ? {ok:false,json:async()=>({error:'version conflict'})} : response(p.board);
+  await p.world.quickSave('a', {status:'done'});
+  p.board.seq = 4;
+  await p.get('refresh').onclick();
+  assert.equal(p.get('quick-retry').hidden, true);
+  assert.equal(p.get('task-list').children[1].children[1].disabled, false);
+  p.board.writable = false;
+  await p.world.refresh();
+  assert.equal(p.get('task-list').children[1].children[5].disabled, true);
+});
+
+test('time window uses server Shanghai date, includes overdue and undated todo, composes with status', async () => {
+  const p = await page();
+  p.board.today = '2026-10-29';
+  const cases = [['past','todo','2026-10-28'],['today','doing','2026-10-29'],
+    ['edge','doing','2026-11-03'],['later','todo','2026-11-04'],['undated','todo',''],
+    ['doing-empty','doing',''],['blocked','blocked','2026-11-01']];
+  p.board.tasks = cases.map(([id,status,follow_up]) => ({id,data:{text:id,status,follow_up,context:'work-current'},attention:[]}));
+  await p.world.refresh();
+  const ids = () => Array.from(p.world.filtered(), t => t.id);
+  assert.equal(ids().length, 6);
+  p.get('window-days').value = '5'; p.get('window-days').oninput();
+  assert.deepEqual(ids(), ['past','today','edge','undated']);
+  p.get('status-blocked').onclick();
+  assert.deepEqual(ids(), ['past','today','edge','undated','blocked']);
+  p.get('window-days').value = '-1'; p.get('window-days').oninput();
+  assert.deepEqual(ids(), ['past','today','edge','undated','blocked']);
+  p.get('window-days').value = '0'; p.get('window-days').oninput();
+  assert.deepEqual(ids(), ['past','today','undated']);
+  p.get('owner-filter').value = 'other';
+  assert.deepEqual(ids(), []);
+  p.get('owner-filter').value = '';
+  p.get('clear-window').onclick();
+  assert.equal(ids().length, 7);
+});
+
+test('all list columns sort without writes; date blanks stay last and third click restores order', async () => {
+  const p = await page();
+  p.board.tasks = [
+    {id:'a',data:{text:'A',owner:'Z',priority:'low',group:'Z',status:'doing',follow_up:'2026-11-01',context:'work-current'},attention:[]},
+    {id:'b',data:{text:'B',owner:'A',priority:'high',group:'A',status:'todo',follow_up:'2026-10-30',context:'work-current'},attention:[]},
+    {id:'c',data:{text:'C',status:'todo',context:'work-current'},attention:[]}
+  ];
+  p.board.board_order = ['a','b','c'];
+  await p.world.refresh();
+  p.world.fetch = () => { throw new Error('sorting must not request or write'); };
+  const ids = () => p.get('task-list').children.slice(1).map(row => row.dataset.id);
+  const click = i => p.get('task-list').children[0].children[i].onclick();
+  click(5); assert.deepEqual(ids(), ['b','a','c']);
+  click(5); assert.deepEqual(ids(), ['a','b','c']);
+  click(5); assert.deepEqual(ids(), ['a','b','c']);
+  click(1); assert.deepEqual(ids(), ['b','c','a']);
+  click(3); assert.deepEqual(ids(), ['b','c','a']);
+  click(2); assert.deepEqual(ids(), ['c','b','a']);
+  click(4); assert.deepEqual(ids(), ['b','c','a']);
+  click(0); assert.deepEqual(ids(), ['a','b','c']);
+  click(0); assert.deepEqual(ids(), ['c','b','a']);
+  assert.deepEqual(p.board.board_order, ['a','b','c']);
+  assert.deepEqual(p.board.tasks.map(t => t.id), ['a','b','c']);
+});
+
+test('preferences survive reopening with filters, sort and view, including an empty status selection', async () => {
+  const storage = new Map();
+  const initial = {contexts:[{id:'lumos-maintenance',data:{title:'维护',workspace:'lumos'}}],
+    tasks:[{id:'a',data:{context:'lumos-maintenance',text:'维护任务',status:'todo',owner:'同事',group:'界面'},attention:[]}]};
+  const p = await page(storage, initial);
+  p.get('workspace').value = 'lumos'; p.get('workspace').onchange();
+  p.get('group-filter').value = ':界面'; p.get('group-filter').onchange();
+  p.get('owner-filter').value = '同事'; p.get('owner-filter').onchange();
+  p.get('search').value = '维护'; p.get('search').oninput();
+  p.get('window-days').value = '5'; p.get('window-days').oninput();
+  p.get('status-blocked').onclick();
+  p.get('task-list').children[0].children[5].onclick();
+  p.get('task-list').children[0].children[5].onclick();
+  p.get('view-board').onclick();
+  const before = storage.get('lumos.task-view.v1');
+  const q = await page(storage, initial);
+  assert.equal(storage.get('lumos.task-view.v1'), before);
+  assert.equal(q.get('workspace').value, 'lumos');
+  assert.equal(q.get('group-filter').value, ':界面');
+  assert.equal(q.get('owner-filter').value, '同事');
+  assert.equal(q.get('search').value, '维护');
+  assert.equal(q.get('window-days').value, '5');
+  assert.equal(q.get('status-blocked')['aria-pressed'], 'true');
+  assert.equal(q.get('view-board')['aria-pressed'], 'true');
+  assert.equal(q.get('board').hidden, false);
+  assert.match(q.get('task-list').children[0].children[5].textContent, /↓/);
+  for (const s of ['todo','doing','blocked']) q.get('status-' + s).onclick();
+  const r = await page(storage, initial);
+  assert.equal(r.world.filtered().length, 0);
+  assert.match(textOf(r.get('task-list')), /尚未选择状态/);
+});
+
+test('blocked remains selectable with zero tasks and storage failures do not break filtering', async () => {
+  const p = await page();
+  assert.equal(p.get('status-blocked').disabled, false);
+  p.get('status-todo').onclick(); p.get('status-doing').onclick(); p.get('status-blocked').onclick();
+  assert.equal(p.get('status-blocked')['aria-pressed'], 'true');
+  assert.match(textOf(p.get('task-list')), /已筛选：受阻/);
+  p.world.localStorage.setItem = () => {throw new Error('storage disabled');};
+  p.get('status-blocked').onclick();
+  assert.match(p.get('preferences-message').textContent, /未允许保存偏好/);
+  assert.match(textOf(p.get('task-list')), /尚未选择状态/);
+  const storage = new Map([['lumos.task-view.v1','{bad json']]);
+  const q = await page(storage);
+  assert.equal(q.get('status-todo')['aria-pressed'], 'true');
+  assert.equal(q.get('status-doing')['aria-pressed'], 'true');
+  storage.set('lumos.task-view.v1', JSON.stringify({statuses:['invalid'],sortKey:'invalid',windowDays:-1,workspace:'bad'}));
+  const r = await page(storage);
+  assert.equal(r.get('workspace').value, 'lingguang');
+  assert.equal(r.get('window-days').value, '');
+  assert.equal(r.get('status-todo')['aria-pressed'], 'true');
 });

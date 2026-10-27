@@ -35,3 +35,7 @@ py -3 -m unittest discover -s tests -v
 Windows 也可双击仓库根目录的 `Lumos.exe`：自动启动本机服务并打开默认浏览器；服务已运行时直接打开，不重复启动。EXE需要与仓库和数据放在一起，并使用本机已安装的Python 3.12+，不是独立打包的完整应用。可为它创建桌面快捷方式，不要只移动EXE。关闭网页不会停止后台服务；重启电脑后再次双击即可。启动器源代码在 `tools/LumosLauncher.cs`，运行 `tools/build-launcher.ps1` 重新生成（生成的EXE不进Git）。
 
 使用细节见[任务与看板说明](docs/task-board.md)。设计文档保留历史评审状态，不能覆盖后续已授权功能。Notion、云同步、定时推送和自动备份未实现。Git 不携带工作数据，本机备份尚不代表设备故障保障。
+
+## 随手笔记
+
+从看板点击“笔记”，或访问本机服务的 `/notes`。支持日期分组、标题、正文自动保存、Markdown阅读、归档恢复和来源版本追溯。Agent通过 `notes`、`note`、`note-save` 与网页共用正式数据，可在整理任务时引用确切笔记版本。使用与保存边界见 [笔记说明](docs/notes.md)。

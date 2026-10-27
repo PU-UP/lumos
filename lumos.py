@@ -20,7 +20,7 @@ if __name__ == "__main__":
 
 ENGINE = Path(__file__).resolve().parent
 SCHEMA = 1
-KINDS = {"context", "evidence", "decision", "action", "document"}
+KINDS = {"context", "evidence", "decision", "action", "document", "note"}
 RELATIONS = {"related", "supports", "refutes", "depends_on", "derived_from", "supersedes"}
 
 
@@ -270,7 +270,7 @@ class Store:
                         "Invalid context status")
                 require(data.get("entry") in nodes and nodes[data["entry"]]["kind"] == "document",
                         f"Context needs an entry document: {ident}")
-            else:
+            elif kind != "note":
                 require(data.get("context") in nodes and nodes[data["context"]]["kind"] == "context",
                         f"Missing context for {ident}")
             if kind in {"evidence", "decision", "action"}:
@@ -284,6 +284,8 @@ class Store:
             if kind == "action":
                 from lumos_tasks import validate_fields
                 validate_fields(data)
+                from lumos_notes import validate_refs
+                validate_refs(data.get("note_refs", []), nodes)
                 require(data["source"]["type"] != "agent", "Suggestions are not committed actions")
                 require(data.get("condition"), "Agent must infer a minimal action completion condition")
                 require(data.get("status") in {"todo", "doing", "blocked", "done", "cancelled"}, "Invalid action status")
@@ -296,6 +298,15 @@ class Store:
                             "Technical pass requires acceptance conditions and evidence")
             if kind == "document":
                 require(data.get("version") and data.get("sha256"), "Document must go through candidate save")
+            if kind == "note":
+                from lumos_notes import validate_note
+                validate_note(data)
+                previous = old.get(ident)
+                if previous != node:
+                    require(data["revision"] == (previous["data"]["revision"] + 1 if previous else 1),
+                            "Note revision must advance once")
+                    require(not previous or data["created_at"] == previous["data"]["created_at"],
+                            "Note creation time is immutable")
         documents = [n for n in nodes.values() if n["kind"] == "document"]
         document_ids = [n["id"].casefold() for n in documents]
         require(len(document_ids) == len(set(document_ids)), "Duplicate document ID (case-insensitive)")
@@ -489,7 +500,7 @@ class Store:
             ids = {n["id"] for n in matched}
             selected = {i: n for i, n in nodes.items() if i in ids or n["data"].get("context") in ids}
             for src, dst, _ in links:
-                if src in selected and dst not in selected:
+                if src in selected and dst not in selected and nodes[dst]["kind"] != "note":
                     selected[dst] = nodes[dst]
             documents = {}
             for i, node in selected.items():
@@ -530,6 +541,15 @@ def main():
     command = subs.add_parser("task")
     command.add_argument("id")
     command = subs.add_parser("task-save")
+    command.add_argument("request", type=Path)
+    command = subs.add_parser("notes")
+    command.add_argument("--workspace", choices=["lingguang", "lumos"], default="lingguang")
+    command.add_argument("--archived", action="store_true")
+    command.add_argument("--query", default="")
+    command = subs.add_parser("note")
+    command.add_argument("id")
+    command.add_argument("--revision", type=int)
+    command = subs.add_parser("note-save")
     command.add_argument("request", type=Path)
     command = subs.add_parser("serve")
     command.add_argument("--port", type=int, default=8765)
@@ -578,6 +598,14 @@ def main():
                     result = task_detail(store, args.id)
                 else:
                     result = save_task(store, read_json(args.request))
+            elif args.command in {"notes", "note", "note-save"}:
+                from lumos_notes import list_notes, note_detail, save_note
+                if args.command == "notes":
+                    result = list_notes(store, args.workspace, args.archived, args.query)
+                elif args.command == "note":
+                    result = note_detail(store, args.id, args.revision)
+                else:
+                    result = save_note(store, read_json(args.request))
             elif args.command == "serve":
                 from lumos_web import serve
                 serve(store, args.port)

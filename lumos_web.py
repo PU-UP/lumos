@@ -7,6 +7,7 @@ from urllib.parse import urlsplit, parse_qs
 
 from lumos import ENGINE, Error, require
 from lumos_tasks import list_tasks, task_detail, save_task
+from lumos_notes import list_notes, note_detail, save_note
 
 
 def make_server(store, port=8765):
@@ -34,30 +35,43 @@ def make_server(store, port=8765):
 
         def handle_request(self, write=False):
             try:
+                if write:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    require(0 < length <= 1000000, "Request too large or empty")
+                    # Drain bounded bodies before rejecting headers, avoiding a TCP reset hiding the error.
+                    raw = self.rfile.read(length)
+                    require(len(raw) == length, "Incomplete request")
                 host = f"127.0.0.1:{self.server.server_port}"
                 require(self.headers.get("Host") == host, "Invalid host")
                 require(self.headers.get("Sec-Fetch-Site") not in {"cross-site"}, "Cross-site request refused")
                 path = urlsplit(self.path)
                 if write:
-                    require(path.path == "/api/tasks", "Unknown route")
+                    require(path.path in {"/api/tasks", "/api/notes"}, "Unknown route")
                     require(self.headers.get("Origin") == "http://" + host, "Invalid origin")
                     require(secrets.compare_digest(self.headers.get("X-Lumos-Token", ""), token), "Invalid token")
                     require(self.headers.get("Content-Type", "").split(";")[0] == "application/json", "Expected JSON")
-                    length = int(self.headers.get("Content-Length", "0"))
-                    require(0 < length <= 1000000, "Request too large or empty")
-                    request = json.loads(self.rfile.read(length))
+                    request = json.loads(raw)
                     require(isinstance(request, dict), "Expected request object")
                     request["source"] = {"type": "user", "ref": "本地看板用户保存，request=" + str(request.get("request_id", ""))}
-                    self.reply(200, save_task(store, request))
+                    self.reply(200, (save_note if path.path == "/api/notes" else save_task)(store, request))
+                elif path.path == "/api/notes":
+                    query = parse_qs(path.query)
+                    self.reply(200, {**list_notes(store, query.get("workspace", ["lingguang"])[0],
+                                                 query.get("archived", ["false"])[0] == "true",
+                                                 query.get("query", [""])[0]), "token": token})
+                elif path.path == "/api/note":
+                    query = parse_qs(path.query)
+                    revision = query.get("revision", [None])[0]
+                    self.reply(200, note_detail(store, query.get("id", [""])[0], int(revision) if revision else None))
                 elif path.path == "/api/health":
                     self.reply(200, {"app": "lumos", "root": str(store.root)})
                 elif path.path == "/api/tasks":
                     self.reply(200, {**list_tasks(store), "token": token})
                 elif path.path == "/api/task":
                     self.reply(200, task_detail(store, parse_qs(path.query).get("id", [""])[0]))
-                elif path.path in {"/", "/board.js", "/board.css"}:
-                    name = {"/": "index.html", "/board.js": "board.js", "/board.css": "board.css"}[path.path]
-                    content_type = {"/": "text/html", "/board.js": "text/javascript", "/board.css": "text/css"}[path.path]
+                elif path.path in {"/", "/board.js", "/board.css", "/notes", "/notes.js", "/notes.css"}:
+                    name = {"/": "index.html", "/notes": "notes.html"}.get(path.path, path.path[1:])
+                    content_type = "text/javascript" if name.endswith(".js") else "text/css" if name.endswith(".css") else "text/html"
                     self.reply(200, (ENGINE / "web" / name).read_bytes(), content_type + "; charset=utf-8")
                 else:
                     self.reply(404, {"error": "Not found"})
