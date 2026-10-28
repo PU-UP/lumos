@@ -16,6 +16,10 @@ def context_workspace(node):
 
 
 def validate_fields(data):
+    if "follow_up_pending" in data:
+        require(type(data["follow_up_pending"]) is bool, "Invalid follow-up pending flag")
+        require(not data["follow_up_pending"] or (not data.get("follow_up")
+                and data.get("status") not in {"done", "cancelled"}), "Pending follow-up must be open and undated")
     if "board_order" in data:
         require(type(data["board_order"]) is int and data["board_order"] >= 0, "Invalid board order")
     for field in FIELDS & data.keys():
@@ -43,6 +47,8 @@ def attention(data, today):
     if data["status"] in {"done", "cancelled"}:
         return []
     reasons = []
+    if data.get("follow_up_pending"):
+        reasons.append("待设置关心时间")
     due = data.get("due")
     if due and due < today.isoformat():
         reasons.append("已逾期")
@@ -130,11 +136,12 @@ def task_detail(store, ident):
 
 def save_task(store, request):
     require(isinstance(request, dict), "Expected task request object")
-    require(set(request) <= {"request_id", "expected_seq", "id", "changes", "source", "before_id", "note_refs"}, "Unknown request field")
+    require(set(request) <= {"request_id", "expected_seq", "id", "changes", "source", "before_id", "note_refs", "follow_up_reviewed"}, "Unknown request field")
+    require(type(request.get("follow_up_reviewed", False)) is bool, "follow_up_reviewed must be boolean")
     key = request.get("request_id", "")
     require(isinstance(key, str) and bool(re.fullmatch(r"[a-f0-9]{32}", key)), "request_id must be UUID hex")
     changes = request.get("changes")
-    require(isinstance(changes, dict) and (changes or "note_refs" in request) and set(changes) <= FIELDS, "Invalid task fields")
+    require(isinstance(changes, dict) and (changes or "note_refs" in request or request.get("follow_up_reviewed")) and set(changes) <= FIELDS, "Invalid task fields")
     validate_fields(changes)
     source = request.get("source", {})
     require(isinstance(source, dict) and source.get("type") in {"user", "user_report"}
@@ -162,6 +169,15 @@ def save_task(store, request):
             require(old is None, "Task ID already exists")
         data = dict(old["data"]) if old else {"status": "todo", "priority": "normal", "source": source}
         data.update(changes)
+        if request.get("follow_up_reviewed"):
+            require(old is not None, "Follow-up review requires an existing task")
+            if "follow_up" not in changes:
+                data["follow_up"] = ""
+            data["follow_up_pending"] = not bool(data.get("follow_up"))
+        elif "follow_up" in changes and (changes["follow_up"] or (old and old["data"].get("follow_up"))):
+            data["follow_up_pending"] = not bool(changes["follow_up"])
+        if data.get("status") in {"done", "cancelled"}:
+            data["follow_up_pending"] = False
         if "note_refs" in request:
             from lumos_notes import validate_refs, note_version
             validate_refs(request["note_refs"], nodes)

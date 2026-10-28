@@ -16,7 +16,7 @@ class Element {
   focus() { this.focused = true; }
   reset() { for (const control of this.elements) control.value = ''; }
 }
-const textOf = node => [node.textContent || '', ...node.children.map(textOf)].join('\n');
+const textOf = node => [node.textContent || '', ...(node.children || []).map(textOf)].join('\n');
 const response = data => ({ok: true, json: async () => data});
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function deferred() {
@@ -463,7 +463,7 @@ test('inline updates send one field, lock during save, retry identically and ref
   assert.equal(p.get('task-list').children[1].children[1].disabled, false);
   p.board.writable = false;
   await p.world.refresh();
-  assert.equal(p.get('task-list').children[1].children[5].disabled, true);
+  assert.equal(p.get('task-list').children[1].children[5].children[0].disabled, true);
 });
 
 test('time window uses server Shanghai date, includes overdue and undated todo, composes with status', async () => {
@@ -567,4 +567,25 @@ test('blocked remains selectable with zero tasks and storage failures do not bre
   assert.equal(r.get('workspace').value, 'lingguang');
   assert.equal(r.get('window-days').value, '');
   assert.equal(r.get('status-todo')['aria-pressed'], 'true');
+});
+
+test('follow-up colors use Shanghai day and pending open tasks remain in the time window', async () => {
+  const p = await page();
+  p.board.today = '2026-03-01';
+  assert.equal(p.world.followUpHint({status:'doing',follow_up:'2026-02-27'}).text, '已过 2 天');
+  assert.equal(p.world.followUpHint({status:'todo',follow_up:'2026-03-01'}).cls, 'follow-up-today');
+  assert.equal(p.world.followUpHint({status:'done',follow_up:'2026-02-27'}).text, '');
+  assert.equal(p.world.followUpHint({status:'cancelled',follow_up_pending:true}).text, '');
+  p.board.tasks = ['doing','blocked'].map(status => ({id:status,data:{text:status,context:'work-current',status,follow_up:'',follow_up_pending:true},attention:['待设置关心时间']}));
+  await p.world.refresh();
+  p.get('window-days').value='0'; p.get('window-days').oninput();
+  assert.deepEqual(Array.from(p.world.filtered(), t=>t.id), ['doing']);
+  p.get('status-blocked').onclick();
+  assert.deepEqual(Array.from(p.world.filtered(), t=>t.id), ['doing','blocked']);
+  assert.match(textOf(p.get('task-list')), /待设置关心时间/);
+  assert.match(textOf(p.get('board')), /待设置关心时间/);
+  p.board.tasks[0].data.follow_up='2026-03-05'; p.board.tasks[0].data.follow_up_pending=false;
+  assert.deepEqual(Array.from(p.world.filtered(), t=>t.id), ['blocked']);
+  p.get('owner-filter').value='其他人';
+  assert.equal(p.world.filtered().length,0);
 });

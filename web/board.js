@@ -124,7 +124,7 @@ function filtered() {
   const until = end.toISOString().slice(0, 10);
   return state.tasks.filter(t => workspaceOf(t.data.context) === $('workspace').value
     && selectedStatuses.has(t.data.status)
-    && (windowDays === null || (t.data.follow_up ? t.data.follow_up <= until : t.data.status === 'todo'))
+    && (windowDays === null || (t.data.follow_up ? t.data.follow_up <= until : t.data.status === 'todo' || t.data.follow_up_pending))
     && (!group || (group === '-' ? !t.data.group : t.data.group === group.slice(1)))
     && (!$('owner-filter').value || ownerName(t.data) === $('owner-filter').value)
     && [t.data.text, t.data.details, t.data.next_step].join(' ').toLowerCase().includes(query));
@@ -133,6 +133,17 @@ function filtered() {
 function columnTasks(tasks, status) {
   const order = state.board_order || state.tasks.map(t => t.id);
   return tasks.filter(t => columnOf(t) === status).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+}
+
+function followUpHint(data) {
+  if (['done', 'cancelled'].includes(data.status)) return {text: '', cls: ''};
+  if (data.follow_up_pending && !data.follow_up) return {text: '待设置关心时间', cls: 'follow-up-pending'};
+  if (data.follow_up === state.today) return {text: '今天', cls: 'follow-up-today'};
+  if (data.follow_up && data.follow_up < state.today) {
+    const days = Math.round((Date.parse(state.today + 'T00:00:00Z') - Date.parse(data.follow_up + 'T00:00:00Z')) / 86400000);
+    return {text: '已过 ' + days + ' 天', cls: 'follow-up-overdue'};
+  }
+  return {text: '', cls: ''};
 }
 
 async function moveTask(id, status, beforeId = null) {
@@ -235,6 +246,8 @@ function render() {
       if (t.data.next_step) button.append(element('p', t.data.next_step));
       const dates = [t.data.due ? '截止 ' + t.data.due : '', t.data.follow_up ? '跟进 ' + t.data.follow_up : ''].filter(Boolean);
       button.append(element('p', dates.join(' · ') || '日期未定'));
+      const hint = followUpHint(t.data);
+      if (hint.text) button.append(element('span', hint.text, 'follow-up-label ' + hint.cls));
       if (t.data.status === 'cancelled') button.append(element('span', '已取消', 'tag'));
       const badges = tags(t.attention);
       badges.append(element('span', ownerName(t.data), 'tag'), priorityTag(t.data));
@@ -303,6 +316,10 @@ function renderList(tasks) {
     const date = element('input', undefined, 'row-date');
     date.type = 'date';
     date.value = t.data.follow_up || '';
+    const hint = followUpHint(t.data);
+    const dateCell = element('div', undefined, 'follow-up-cell ' + hint.cls);
+    dateCell.append(date);
+    if (hint.text) dateCell.append(element('small', hint.text));
     for (const [control, key, label] of [[priority, 'priority', '优先级'], [status, 'status', '当前状态'], [date, 'follow_up', '下次关心时间']]) {
       control.setAttribute('aria-label', t.data.text + ' · ' + label);
       control.title = label + ' · 修改即保存';
@@ -311,7 +328,7 @@ function renderList(tasks) {
     }
     const owner = element('span', ownerName(t.data), 'row-owner');
     owner.title = ownerName(t.data);
-    row.append(title, priority, element('span', t.data.group || '未分组', 'project-tag'), owner, status, date);
+    row.append(title, priority, element('span', t.data.group || '未分组', 'project-tag'), owner, status, dateCell);
     list.append(row);
   }
 }
@@ -431,7 +448,7 @@ function renderHistory(detail) {
   if (detail.task.data.last_source) sources.append(element('h4', '最近修改来源'), element('p', sourceText(detail.task.data.last_source)));
   const history = disclosure('修改历史 · ' + detail.history.length + ' 次', $('history'));
   const names = {text: '任务', context: '背景脉络', status: '状态', next_step: '下一步', progress: '进展',
-    details: '背景', due: '截止日期', follow_up: '跟进日期', owner: '负责人', group: '分组',
+    details: '背景', due: '截止日期', follow_up: '跟进日期', follow_up_pending: '待设置关心时间', owner: '负责人', group: '分组',
     priority: '优先级', condition: '完成条件', completion: '完成依据', board_order: '看板顺序', note_refs: '笔记来源'};
   const value = (key, v) => {
     if (v === undefined || v === null || v === '') return '未设置';
@@ -494,6 +511,8 @@ function renderTask(data) {
   const badges = tags(meta);
   badges.append(priorityTag(data));
   view.append(badges);
+  const hint = followUpHint(data);
+  if (hint.text) view.append(element('p', hint.text, 'follow-up-label ' + hint.cls));
   for (const [key, title] of [['progress', '当前结论与进展'], ['next_step', '下一步'], ['details', '背景与详细内容'], ['condition', '怎样算完成']]) {
     if (!data[key]) continue;
     const folded = key === 'details' || key === 'condition';
@@ -523,7 +542,7 @@ async function openTask(id = null) {
     for (const k of fields) form.elements.namedItem(k).value = data[k] || (k === 'priority' ? 'normal' : '');
     form.elements.namedItem('owner').value = ownerName(data);
     savedValues = values();
-    renderTask(savedValues);
+    renderTask({...savedValues, follow_up_pending: data.follow_up_pending});
     setEditMode(!id && state.writable);
     $('form-message').textContent = '';
     $('evidence').hidden = !id;
@@ -640,7 +659,7 @@ $('window-days').oninput = () => {
   }
   windowDays = raw === '' ? null : days;
   $('window-hint').textContent = windowDays === null ? '状态可多选；时间留空显示全部日期。'
-    : '包含今天至未来第 ' + days + ' 天、此前已到跟进日的任务，以及未填日期的待处理任务。';
+    : '包含今天至未来第 ' + days + ' 天、此前已到跟进日、待设置关心时间，以及未填日期的待处理任务。';
   if (state) render();
 };
 $('clear-window').onclick = () => { $('window-days').value = ''; $('window-days').oninput(); };

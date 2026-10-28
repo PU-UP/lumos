@@ -299,3 +299,38 @@ class TaskTest(BaseStoreCase):
         large = self.request(details="中" * 20000, progress="文" * 20000)
         status, raw = call("POST", "/api/tasks", large, headers)
         self.assertEqual(status, 200, raw)
+
+    def test_follow_up_review_pending_and_date_lifecycle(self):
+        ident = save_task(self.store, self.request(status='doing', follow_up='2099-01-01', due='2099-02-01'))['id']
+        def update(changes, **extra):
+            return save_task(self.store, {**self.request(), 'id': ident, 'changes': changes, **extra})
+        def data():
+            return task_detail(self.store, ident)['task']['data']
+        update({'progress': '仅补充进展'})
+        self.assertEqual(data()['follow_up'], '2099-01-01')
+        req = {**self.request(), 'id': ident, 'changes': {}, 'follow_up_reviewed': True}
+        save_task(self.store, req)
+        self.assertTrue(save_task(self.store, req)['replayed'])
+        self.assertEqual(data()['status'], 'doing')
+        self.assertEqual(data()['follow_up'], '')
+        self.assertTrue(data()['follow_up_pending'])
+        self.assertEqual(data()['due'], '2099-02-01')
+        task = next(t for t in list_tasks(self.store)['tasks'] if t['id'] == ident)
+        self.assertIn('待设置关心时间', task['attention'])
+        update({'progress': '再次补充'})
+        self.assertTrue(data()['follow_up_pending'])
+        update({'follow_up': '2099-01-02'}, follow_up_reviewed=True)
+        self.assertFalse(data()['follow_up_pending'])
+        self.assertEqual(data()['follow_up'], '2099-01-02')
+        update({'follow_up': ''})
+        self.assertTrue(data()['follow_up_pending'])
+        for status in ['done', 'cancelled']:
+            update({'status': status}, follow_up_reviewed=True)
+            self.assertFalse(data()['follow_up_pending'])
+            task = next(t for t in list_tasks(self.store)['tasks'] if t['id'] == ident)
+            self.assertEqual(task['attention'], [])
+        with self.assertRaises(lumos.Error):
+            update({}, follow_up_reviewed='true')
+        with self.assertRaises(lumos.Error):
+            save_task(self.store, {**self.request(), 'follow_up_reviewed': True})
+        self.assertIsNone(self.store.status()['session'])
