@@ -147,7 +147,7 @@ test('recorded tasks open read-only, edit is explicit, cancel restores saved con
   assert.ok(Object.values(p.controls).every(c => c.disabled));
   assert.equal(p.get('edit-actions').hidden, true);
   assert.equal(p.get('editor-title').textContent, '已记录的任务');
-  assert.equal(p.get('task-view').children[2].children[1].textContent, '第一行\n第二行');
+  assert.equal(p.get('task-view').children.find(c => c.className === 'task-section').children[1].textContent, '第一行\n第二行');
   let writes = 0;
   p.world.fetch = async () => { writes++; return response({}); };
   await p.form.onsubmit({preventDefault() {}});
@@ -466,7 +466,7 @@ test('inline updates send one field, lock during save, retry identically and ref
   assert.equal(p.get('task-list').children[1].children[5].children[0].disabled, true);
 });
 
-test('time window uses server Shanghai date, includes overdue and undated todo, composes with status', async () => {
+test('time window uses server Shanghai date, includes overdue and undated open tasks, composes with status', async () => {
   const p = await page();
   p.board.today = '2026-10-29';
   const cases = [['past','todo','2026-10-28'],['today','doing','2026-10-29'],
@@ -477,13 +477,13 @@ test('time window uses server Shanghai date, includes overdue and undated todo, 
   const ids = () => Array.from(p.world.filtered(), t => t.id);
   assert.equal(ids().length, 6);
   p.get('window-days').value = '5'; p.get('window-days').oninput();
-  assert.deepEqual(ids(), ['past','today','edge','undated']);
+  assert.deepEqual(ids(), ['past','today','edge','undated','doing-empty']);
   p.get('status-blocked').onclick();
-  assert.deepEqual(ids(), ['past','today','edge','undated','blocked']);
+  assert.deepEqual(ids(), ['past','today','edge','undated','doing-empty','blocked']);
   p.get('window-days').value = '-1'; p.get('window-days').oninput();
-  assert.deepEqual(ids(), ['past','today','edge','undated','blocked']);
+  assert.deepEqual(ids(), ['past','today','edge','undated','doing-empty','blocked']);
   p.get('window-days').value = '0'; p.get('window-days').oninput();
-  assert.deepEqual(ids(), ['past','today','undated']);
+  assert.deepEqual(ids(), ['past','today','undated','doing-empty']);
   p.get('owner-filter').value = 'other';
   assert.deepEqual(ids(), []);
   p.get('owner-filter').value = '';
@@ -576,7 +576,13 @@ test('follow-up colors use Shanghai day and pending open tasks remain in the tim
   assert.equal(p.world.followUpHint({status:'todo',follow_up:'2026-03-01'}).cls, 'follow-up-today');
   assert.equal(p.world.followUpHint({status:'done',follow_up:'2026-02-27'}).text, '');
   assert.equal(p.world.followUpHint({status:'cancelled',follow_up_pending:true}).text, '');
-  p.board.tasks = ['doing','blocked'].map(status => ({id:status,data:{text:status,context:'work-current',status,follow_up:'',follow_up_pending:true},attention:['待设置关心时间']}));
+  for (const status of ['todo','doing','blocked','done','cancelled']) {
+    for (const legacy of [{}, {follow_up_pending:false}, {follow_up_pending:true}]) {
+      const hint = p.world.followUpHint({status, ...legacy});
+      assert.equal(hint.cls, ['done','cancelled'].includes(status) ? '' : 'follow-up-pending');
+    }
+  }
+  p.board.tasks = ['doing','blocked'].map(status => ({id:status,data:{text:status,context:'work-current',status,follow_up:''},attention:['待设置关心时间']}));
   await p.world.refresh();
   p.get('window-days').value='0'; p.get('window-days').oninput();
   assert.deepEqual(Array.from(p.world.filtered(), t=>t.id), ['doing']);

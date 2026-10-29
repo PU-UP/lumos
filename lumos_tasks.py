@@ -47,7 +47,7 @@ def attention(data, today):
     if data["status"] in {"done", "cancelled"}:
         return []
     reasons = []
-    if data.get("follow_up_pending"):
+    if not data.get("follow_up"):
         reasons.append("待设置关心时间")
     due = data.get("due")
     if due and due < today.isoformat():

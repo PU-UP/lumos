@@ -124,7 +124,7 @@ function filtered() {
   const until = end.toISOString().slice(0, 10);
   return state.tasks.filter(t => workspaceOf(t.data.context) === $('workspace').value
     && selectedStatuses.has(t.data.status)
-    && (windowDays === null || (t.data.follow_up ? t.data.follow_up <= until : t.data.status === 'todo' || t.data.follow_up_pending))
+    && (windowDays === null || (t.data.follow_up ? t.data.follow_up <= until : !['done', 'cancelled'].includes(t.data.status)))
     && (!group || (group === '-' ? !t.data.group : t.data.group === group.slice(1)))
     && (!$('owner-filter').value || ownerName(t.data) === $('owner-filter').value)
     && [t.data.text, t.data.details, t.data.next_step].join(' ').toLowerCase().includes(query));
@@ -137,7 +137,7 @@ function columnTasks(tasks, status) {
 
 function followUpHint(data) {
   if (['done', 'cancelled'].includes(data.status)) return {text: '', cls: ''};
-  if (data.follow_up_pending && !data.follow_up) return {text: '待设置关心时间', cls: 'follow-up-pending'};
+  if (!data.follow_up) return {text: '待设置关心时间', cls: 'follow-up-pending'};
   if (data.follow_up === state.today) return {text: '今天', cls: 'follow-up-today'};
   if (data.follow_up && data.follow_up < state.today) {
     const days = Math.round((Date.parse(state.today + 'T00:00:00Z') - Date.parse(data.follow_up + 'T00:00:00Z')) / 86400000);
@@ -659,7 +659,7 @@ $('window-days').oninput = () => {
   }
   windowDays = raw === '' ? null : days;
   $('window-hint').textContent = windowDays === null ? '状态可多选；时间留空显示全部日期。'
-    : '包含今天至未来第 ' + days + ' 天、此前已到跟进日、待设置关心时间，以及未填日期的待处理任务。';
+    : '包含今天至未来第 ' + days + ' 天、此前已到跟进日，以及所有未设置关心时间的未结束任务。';
   if (state) render();
 };
 $('clear-window').onclick = () => { $('window-days').value = ''; $('window-days').oninput(); };

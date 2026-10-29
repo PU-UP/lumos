@@ -6,9 +6,10 @@ import subprocess
 import sys
 import threading
 import uuid
+from datetime import date
 
 import lumos
-from lumos_tasks import list_tasks, task_detail, save_task
+from lumos_tasks import attention, list_tasks, task_detail, save_task
 from lumos_transfer import backup, restore
 from lumos_web import make_server
 from test_core import BaseStoreCase
@@ -163,7 +164,7 @@ class TaskTest(BaseStoreCase):
         later = save_task(self.store, self.request(due="2026-10-29"))["id"]
         done = save_task(self.store, self.request(due="2026-10-20", status="done"))["id"]
         tasks = list_tasks(self.store, "2026-10-21")
-        self.assertEqual(set(tasks["attention"]), {overdue, near})
+        self.assertEqual(set(tasks["attention"]), {overdue, near, later, "talk"})
         self.assertEqual(next(t for t in tasks["tasks"] if t["id"] == overdue)["attention"],
                          ["已逾期", "到跟进日", "有阻塞", "重要事项"])
         self.assertTrue({"talk", later, done} <= {t["id"] for t in tasks["tasks"]})
@@ -299,6 +300,17 @@ class TaskTest(BaseStoreCase):
         large = self.request(details="中" * 20000, progress="文" * 20000)
         status, raw = call("POST", "/api/tasks", large, headers)
         self.assertEqual(status, 200, raw)
+
+    def test_undated_open_tasks_need_follow_up_regardless_of_legacy_flag(self):
+        for status in ['todo', 'doing', 'blocked', 'done', 'cancelled']:
+            for legacy in [{}, {'follow_up_pending': False}, {'follow_up_pending': True}]:
+                for follow_up in [None, '', '2099-01-01']:
+                    with self.subTest(status=status, legacy=legacy, follow_up=follow_up):
+                        data = {'status': status, **legacy}
+                        if follow_up is not None:
+                            data['follow_up'] = follow_up
+                        self.assertEqual('待设置关心时间' in attention(data, date(2026, 10, 29)),
+                                         status not in {'done', 'cancelled'} and not follow_up)
 
     def test_follow_up_review_pending_and_date_lifecycle(self):
         ident = save_task(self.store, self.request(status='doing', follow_up='2099-01-01', due='2099-02-01'))['id']
