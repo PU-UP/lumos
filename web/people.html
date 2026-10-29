@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lumos · 人员</title><link rel="stylesheet" href="/board.css"><link rel="stylesheet" href="/people.css"><script src="/people.js" defer></script></head>
+<body>
+<header><div class="brand"><span class="mark">L</span><strong>Lumos</strong><span class="divider">/</span><span>人员工作量</span></div><button id="refresh">刷新</button></header>
+<nav aria-label="工作视图" class="view-nav"><a href="/">任务</a> · <a href="/people" aria-current="page">人员</a> · <a href="/notes">笔记</a></nav>
+<main>
+<div class="intro"><div><h1>人员工作量</h1><p class="muted">按组了解任务分布，展开成员查看具体事项。</p></div><label>工作空间<select id="workspace"><option value="lingguang">灵光</option><option value="lumos">Lumos 仓库维护</option></select></label></div>
+<p id="message" role="status" aria-live="polite"></p>
+<section aria-labelledby="workload-title"><div class="section-heading"><h2 id="workload-title">工作量概况</h2><div class="period-controls"><label>查看<select id="period-mode"><option value="future">未来安排</option><option value="recent">近期进展</option></select></label><label>天数<select id="days"><option value="3">3 天</option><option value="7" selected>7 天</option><option value="15">15 天</option><option value="30">30 天</option></select></label></div></div><p id="period-hint" class="muted"></p><div id="people-list"></div></section>
+</main></body></html>

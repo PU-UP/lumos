@@ -47,7 +47,7 @@ function restorePreferences() {
     }
     if (['text', 'priority', 'group', 'owner', 'status', 'follow_up'].includes(p.sortKey)) sortKey = p.sortKey;
     if (p.sortDirection === -1 || p.sortDirection === 1) sortDirection = p.sortDirection;
-    if (['list', 'board'].includes(p.taskView)) taskView = p.taskView;
+    if (['list', 'board', 'schedule'].includes(p.taskView)) taskView = p.taskView;
   } catch {
     $('preferences-message').textContent = '未能读取上次的筛选设置，已使用默认设置。';
   }
@@ -80,17 +80,62 @@ function groupNames(workspace) {
     .map(t => t.data.group || '').filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
 }
 
+function workspacePeople(workspace) {
+  return (state.people || []).filter(p => p.data.workspaces.includes(workspace));
+}
+
+function personTeam(data) {
+  return (data.team || '其他人员') + (data.team_status === 'proposed' ? '（构思中 · 分组未定）' : '');
+}
+
+function ownerOptions(workspace, current = '', teams = false) {
+  const groups = new Map(), names = new Set(['Mango']);
+  for (const {data} of workspacePeople(workspace)) {
+    if (data.title === 'Mango') continue;
+    const label = personTeam(data);
+    if (!groups.has(label)) {
+      const group = element('optgroup'); group.label = label;
+      groups.set(label, group);
+    }
+    groups.get(label).append(new Option(data.title + (data.member_type === 'agent' ? '（Agent）' : ''), data.title));
+    names.add(data.title);
+  }
+  const extra = [...new Set(['Mango', current, ...state.tasks.filter(t => workspaceOf(t.data.context) === workspace)
+    .map(t => ownerName(t.data))])].filter(name => name && !names.has(name));
+  if (extra.length) {
+    const group = element('optgroup'); group.label = '其他负责人';
+    group.append(...extra.sort((a, b) => a.localeCompare(b, 'zh-CN')).map(name => new Option(name, name)));
+    groups.set('other-owners', group);
+  }
+  if (!teams) return [new Option('Mango', 'Mango'), ...groups.values()];
+  const options = [new Option('Mango', 'Mango')];
+  for (const [key, group] of groups) {
+    const heading = new Option(group.label, key === 'other-owners' ? '@other' : '@team:' + group.label);
+    heading.className = 'owner-team'; options.push(heading);
+    for (const member of group.children) options.push(new Option('　' + member.text, member.value));
+  }
+  return options;
+}
+
+function matchesOwner(task, selection) {
+  if (!selection) return true;
+  if (selection === '@other') return ownerName(task.data) !== 'Mango' && !workspacePeople($('workspace').value).some(p => p.data.title === ownerName(task.data));
+  if (!selection.startsWith('@team:')) return ownerName(task.data) === selection;
+  return workspacePeople($('workspace').value).some(p => personTeam(p.data) === selection.slice(6)
+    && p.data.title === ownerName(task.data));
+}
+
 function updateFilters() {
+  if (!state) return;
   const workspace = $('workspace').value, selectedGroup = $('group-filter').value;
   const groups = groupNames(workspace);
   $('group-filter').replaceChildren(new Option('全部分组', ''), new Option('未分组', '-'),
     ...groups.map(name => new Option(name, ':' + name)));
   $('group-filter').value = selectedGroup === '-' || groups.includes(selectedGroup.slice(1)) ? selectedGroup : '';
   const selectedOwner = $('owner-filter').value;
-  const owners = [...new Set(state.tasks.filter(t => workspaceOf(t.data.context) === workspace)
-    .map(t => ownerName(t.data)))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
-  $('owner-filter').replaceChildren(new Option('全部负责人', ''), ...owners.map(name => new Option(name, name)));
-  $('owner-filter').value = owners.includes(selectedOwner) ? selectedOwner : '';
+  const owners = [...workspacePeople(workspace).map(p => p.data.title), 'Mango', ...state.tasks.filter(t => workspaceOf(t.data.context) === workspace).map(t => ownerName(t.data))];
+  $('owner-filter').replaceChildren(new Option('全部负责人', ''), ...ownerOptions(workspace, '', true));
+  $('owner-filter').value = (selectedOwner === '@other' || owners.includes(selectedOwner) || workspacePeople(workspace).some(p => '@team:' + personTeam(p.data) === selectedOwner)) ? selectedOwner : '';
   $('new').disabled = !state.writable || !workspaceContexts(workspace).length;
 }
 
@@ -103,6 +148,9 @@ function setTaskWorkspace(workspace, context = null) {
   control.value = contexts.some(c => c.id === context) ? context
     : contexts.find(c => c.id === preferred)?.id || contexts[0]?.id || '';
   $('group-options').replaceChildren(...groupNames(workspace).map(name => new Option(name, name)));
+  const owner = form.elements.namedItem('owner'), selectedOwner = owner.value || 'Mango';
+  owner.replaceChildren(...ownerOptions(workspace, selectedOwner));
+  owner.value = selectedOwner;
 }
 
 function tags(reasons) {
@@ -126,7 +174,7 @@ function filtered() {
     && selectedStatuses.has(t.data.status)
     && (windowDays === null || (t.data.follow_up ? t.data.follow_up <= until : !['done', 'cancelled'].includes(t.data.status)))
     && (!group || (group === '-' ? !t.data.group : t.data.group === group.slice(1)))
-    && (!$('owner-filter').value || ownerName(t.data) === $('owner-filter').value)
+    && matchesOwner(t, $('owner-filter').value)
     && [t.data.text, t.data.details, t.data.next_step].join(' ').toLowerCase().includes(query));
 }
 
@@ -182,6 +230,7 @@ function clearDropMarks() {
 }
 
 function render() {
+  if (!state) return;
   const tasks = filtered();
   for (const status of Object.keys(labels)) {
     const selected = selectedStatuses.has(status);
@@ -189,10 +238,12 @@ function render() {
     $('status-' + status).setAttribute('aria-label', labels[status]);
     $('status-' + status).textContent = (selected ? '✓ ' : '') + labels[status];
   }
-  for (const name of ['list', 'board']) $('view-' + name).setAttribute('aria-pressed', String(taskView === name));
+  for (const name of ['list', 'board', 'schedule']) $('view-' + name).setAttribute('aria-pressed', String(taskView === name));
   $('view-hint').textContent = taskView === 'list' ? '点击标题查看详情；优先级、当前状态和下次关心时间可直接修改。'
+    : taskView === 'schedule' ? '近期安排按下次关心时间分组，沿用上方全部筛选；点击任务查看详情。'
     : '看板沿用上方筛选。拖动卡片切换状态或排序；也可聚焦卡片后按 Alt + 方向键。';
   renderList(tasks);
+  renderSchedule(tasks);
   $('board').hidden = taskView !== 'board';
   $('board').replaceChildren();
   for (const status of ['todo', 'doing', 'blocked', 'done']) {
@@ -273,6 +324,36 @@ function sortedTasks(tasks) {
     const comparison = typeof av === 'number' ? av - bv : av.localeCompare(bv, 'zh-CN', {numeric: true});
     return comparison * sortDirection || original;
   });
+}
+
+function scheduleBuckets(tasks, today) {
+  const buckets = new Map();
+  for (const task of tasks) {
+    const date = task.data.follow_up;
+    const key = !date ? '未设关心时间' : date < today ? '已过关心时间' : date;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(task);
+  }
+  const order = key => key === '已过关心时间' ? '0000' : key === '未设关心时间' ? '9999' : key;
+  return [...buckets].sort(([a],[b]) => order(a).localeCompare(order(b)));
+}
+
+function renderSchedule(tasks) {
+  const list = $('schedule-list'); list.hidden = taskView !== 'schedule'; list.replaceChildren();
+  for (const [date, items] of scheduleBuckets(tasks, state.today)) {
+    const section = element('section', undefined, 'schedule-block');
+    section.append(element('h3', date + (date === state.today ? ' · 今天' : '') + ' · ' + items.length + ' 项'));
+    for (const task of items) {
+      const row = element('div', undefined, 'schedule-task'), button = element('button', task.data.text, 'row-title');
+      button.type = 'button'; button.onclick = () => openTask(task.id);
+      row.append(button, element('span', ownerName(task.data) + ' · ' + labels[task.data.status] + ' · ' + (task.data.follow_up || '未设关心时间'), 'muted'));
+      const hint = followUpHint(task.data);
+      if (hint.text) row.append(element('span', hint.text, 'follow-up-label ' + hint.cls));
+      section.append(row);
+    }
+    list.append(section);
+  }
+  if (!tasks.length) list.append(element('p', '当前筛选下暂无任务，可调整状态、负责人或时间范围。', 'empty'));
 }
 
 function renderList(tasks) {
@@ -540,6 +621,7 @@ async function openTask(id = null) {
       group: $('group-filter').value.startsWith(':') ? $('group-filter').value.slice(1) : '',
       status: 'todo', priority: 'normal'};
     for (const k of fields) form.elements.namedItem(k).value = data[k] || (k === 'priority' ? 'normal' : '');
+    form.elements.namedItem('owner').replaceChildren(...ownerOptions(workspace, ownerName(data)));
     form.elements.namedItem('owner').value = ownerName(data);
     savedValues = values();
     renderTask({...savedValues, follow_up_pending: data.follow_up_pending});
@@ -622,6 +704,7 @@ $('edit').onclick = () => {
 $('cancel-edit').onclick = () => {
   if (saving) return;
   setTaskWorkspace(workspaceOf(savedValues.context), savedValues.context);
+  form.elements.namedItem('owner').replaceChildren(...ownerOptions(workspaceOf(savedValues.context), savedValues.owner));
   for (const k of fields) form.elements.namedItem(k).value = savedValues[k];
   dirty = false;
   discardArmed = false;
@@ -641,7 +724,7 @@ $('refresh').onclick = async () => {
   }
 };
 $('quick-retry').onclick = () => quickPending && quickSave(quickPending.id, quickPending.changes);
-for (const view of ['list', 'board']) $('view-' + view).onclick = () => {
+for (const view of ['list', 'board', 'schedule']) $('view-' + view).onclick = () => {
   taskView = view;
   render();
 };
@@ -681,4 +764,7 @@ $('owner-filter').onchange = render;
 $('search').oninput = () => {if (state) render();};
 window.addEventListener('beforeunload', event => {if (dirty || saving) {event.preventDefault(); event.returnValue = '';}});
 restorePreferences();
-refresh();
+refresh().then(() => {
+  const id = new URLSearchParams(window.location?.search || '').get('task');
+  if (id && state?.tasks.some(t => t.id === id)) openTask(id);
+});

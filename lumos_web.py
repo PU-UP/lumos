@@ -69,8 +69,8 @@ def make_server(store, port=8765):
                     self.reply(200, {**list_tasks(store), "token": token})
                 elif path.path == "/api/task":
                     self.reply(200, task_detail(store, parse_qs(path.query).get("id", [""])[0]))
-                elif path.path in {"/", "/board.js", "/board.css", "/notes", "/notes.js", "/notes.css"}:
-                    name = {"/": "index.html", "/notes": "notes.html"}.get(path.path, path.path[1:])
+                elif path.path in {"/", "/board.js", "/board.css", "/notes", "/notes.js", "/notes.css", "/people", "/people.js", "/people.css"}:
+                    name = {"/": "index.html", "/notes": "notes.html", "/people": "people.html"}.get(path.path, path.path[1:])
                     content_type = "text/javascript" if name.endswith(".js") else "text/css" if name.endswith(".css") else "text/html"
                     self.reply(200, (ENGINE / "web" / name).read_bytes(), content_type + "; charset=utf-8")
                 else:

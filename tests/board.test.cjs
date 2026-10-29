@@ -39,7 +39,7 @@ async function page(storage = new Map(), initialBoard = {}) {
   Object.assign(board, initialBoard);
   const world = {document: {getElementById: get, createElement: () => new Element()},
     localStorage: {getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value)},
-    window: {addEventListener() {}}, Option: function(text, value) { this.text = text; this.value = value; },
+    window: {addEventListener() {}}, URLSearchParams, Option: function(text, value) { this.text = text; this.value = value; },
     crypto: {randomUUID: () => '11111111-1111-1111-1111-111111111111'},
     fetch: async () => response(board)};
   vm.createContext(world);
@@ -594,4 +594,87 @@ test('follow-up colors use Shanghai day and pending open tasks remain in the tim
   assert.deepEqual(Array.from(p.world.filtered(), t=>t.id), ['blocked']);
   p.get('owner-filter').value='其他人';
   assert.equal(p.world.filtered().length,0);
+});
+
+test('roster includes people without tasks, grouped owners and workspace isolation', async () => {
+  const people = [
+    {id:'p1',data:{title:'模拟甲',team:'模拟平台组',team_status:'proposed',role:'<script>保留文字</script>',workspaces:['lingguang']}},
+    {id:'p2',data:{title:'模拟乙',team:'模拟协作方',role:'不在管理范围',workspaces:['lingguang']}},
+    {id:'p3',data:{title:'模拟维护者',team:'维护',member_type:'agent',workspaces:['lumos']}},
+    {id:'p4',data:{title:'Mango',team:'本人',workspaces:['lingguang','lumos']}}
+  ];
+  const tasks = [{id:'t1',data:{text:'模拟任务',context:'work-current',owner:'模拟乙',status:'todo',group:'原标签'},attention:[]}];
+  const p = await page(new Map(), {people,tasks,contexts:[{id:'work-current',data:{}},{id:'lumos-maintenance',data:{}}]});
+  const options = p.world.ownerOptions('lingguang', '历史负责人', true);
+  assert.equal(p.get('owner-filter').children[0].text, '全部负责人');
+  assert.equal(p.get('owner-filter').children[1].value, 'Mango');
+  assert.match(options[1].text, /构思中/);
+  assert.equal(options[1].className, 'owner-team');
+  assert.ok(!options.some(o=>o.text.includes('全组')));
+  assert.ok(options.some(o=>o.value==='历史负责人'));
+  p.get('owner-filter').value = '@team:模拟协作方';
+  assert.equal(p.world.filtered().length, 1);
+  await p.world.refresh();
+  assert.equal(p.get('owner-filter').value, '@team:模拟协作方');
+  p.get('owner-filter').value = '@team:模拟平台组（构思中 · 分组未定）';
+  assert.equal(p.world.filtered().length, 0);
+  assert.ok(!p.world.ownerOptions('lingguang').flatMap(g=>g.children || []).some(o=>o.value.startsWith('@team:')));
+  await p.world.openTask();
+  assert.equal(p.controls.owner.value, 'Mango');
+  assert.ok(p.controls.owner.children.flatMap(g=>g.children || []).some(o=>o.value==='模拟甲'));
+  p.world.closeEditor();
+  p.get('workspace').value='lumos'; p.get('workspace').onchange();
+  assert.ok(p.world.ownerOptions('lumos').flatMap(g=>g.children || []).some(o=>o.value==='模拟维护者'));
+  assert.ok(!p.world.ownerOptions('lumos').flatMap(g=>g.children || []).some(o=>o.value==='模拟甲'));
+  assert.equal(p.board.tasks[0].data.group, '原标签');
+});
+
+test('editing an owner absent from roster preserves it when cancelling', async () => {
+  const p = await page();
+  p.world.fetch=async()=>response({seq:3,task:{data:{text:'旧任务',context:'work-current',status:'doing',owner:'旧负责人',group:'原标签',source:{ref:'fixture'}}},related:[],documents:{},history:[]});
+  await p.world.openTask('old');
+  assert.ok(p.controls.owner.children.flatMap(g=>g.children || []).some(o=>o.value==='旧负责人'));
+  p.get('edit').onclick(); p.controls.owner.value='Mango'; p.form.events.input();
+  p.get('cancel-edit').onclick();
+  assert.ok(p.controls.owner.children.flatMap(g=>g.children || []).some(o=>o.value==='旧负责人'));
+  assert.equal(p.controls.owner.value, '旧负责人');
+  assert.equal(p.controls.group.value, '原标签');
+});
+
+test('personnel periods include today as first or middle day and use Shanghai update dates', () => {
+  const nodes = new Map();
+  const get = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
+  const world = {document:{getElementById:get,createElement:()=>new Element()}, fetch:()=>new Promise(()=>{})};
+  vm.createContext(world);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../web/people.js'), 'utf8'),world);
+  const task = (id,status,date,updated_at) => ({id,data:{status,follow_up:date,updated_at}});
+  const tasks = [task('old','done','','2026-10-27T15:59:59Z'),task('edge','done','','2026-10-27T16:00:00Z'),
+    task('today','doing','2026-10-29'),task('next','todo','2026-10-30'),task('last','todo','2026-10-31'),
+    task('outside','todo','2026-11-01'),task('undated','blocked','')];
+  assert.deepEqual(Array.from(world.periodRange('2026-10-29',3,'future')),['2026-10-29','2026-10-31']);
+  assert.deepEqual(Array.from(world.periodRange('2026-10-29',3,'recent')),['2026-10-28','2026-10-30']);
+  assert.deepEqual(Array.from(world.periodRange('2026-10-29',30,'recent')),['2026-10-15','2026-11-13']);
+  assert.deepEqual(Array.from(world.periodTasks(tasks,'2026-10-29',3,'future'),t=>t.id),['today','next','last','undated']);
+  assert.deepEqual(Array.from(world.periodTasks(tasks,'2026-10-29',3,'recent'),t=>t.id),['edge','today','next','undated']);
+});
+
+test('schedule is a third persistent view and composes with all task filters', async () => {
+  const storage = new Map();
+  const tasks = [
+    {id:'a',data:{text:'选中任务',context:'work-current',owner:'Mango',group:'组',status:'doing',follow_up:'2026-10-21'},attention:[]},
+    {id:'b',data:{text:'排除任务',context:'work-current',owner:'其他',group:'组',status:'doing'},attention:[]},
+    {id:'c',data:{text:'排除完成',context:'work-current',owner:'Mango',group:'组',status:'done'},attention:[]}];
+  const p = await page(storage,{tasks});
+  p.get('owner-filter').value='Mango';p.get('group-filter').value=':组';p.get('view-schedule').onclick();
+  assert.equal(p.get('schedule-list').hidden,false);assert.equal(p.get('task-list').hidden,true);assert.equal(p.get('board').hidden,true);
+  assert.match(textOf(p.get('schedule-list')), /选中任务/);assert.doesNotMatch(textOf(p.get('schedule-list')), /排除/);
+  const q = await page(storage,{tasks});assert.equal(q.get('view-schedule')['aria-pressed'],'true');
+  q.get('search').value='无匹配';q.get('search').oninput();assert.match(textOf(q.get('schedule-list')), /当前筛选下暂无任务/);
+});
+
+test('filter changes before initial data arrives do not crash', async () => {
+  const p = await page();
+  vm.runInContext('state = undefined', p.world);
+  assert.doesNotThrow(() => p.get('owner-filter').onchange());
+  assert.doesNotThrow(() => p.get('workspace').onchange());
 });

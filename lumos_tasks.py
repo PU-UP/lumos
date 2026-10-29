@@ -91,7 +91,8 @@ def list_tasks(store, today=None):
                                  n["data"].get("due") or "9999", n["id"]))
         board_order = [n["id"] for n in sorted(tasks, key=board_key)]
         ctl = store.control()
-        return {"seq": seq, "today": today.isoformat(), "contexts": contexts, "tasks": tasks, "board_order": board_order,
+        from lumos_people import list_people
+        return {"seq": seq, "today": today.isoformat(), "contexts": contexts, "tasks": tasks, "people": list_people(nodes, ids), "board_order": board_order,
                 "attention": [n["id"] for n in tasks if n["attention"]],
                 "writable": ctl["mode"] in {"active", "trial", "sandbox"}
                 and ctl["bound_root"] == str(store.root) and not store.status()["session"],

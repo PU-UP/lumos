@@ -20,7 +20,7 @@ if __name__ == "__main__":
 
 ENGINE = Path(__file__).resolve().parent
 SCHEMA = 1
-KINDS = {"context", "evidence", "decision", "action", "document", "note"}
+KINDS = {"context", "evidence", "decision", "action", "document", "note", "person"}
 RELATIONS = {"related", "supports", "refutes", "depends_on", "derived_from", "supersedes"}
 
 
@@ -273,10 +273,13 @@ class Store:
             elif kind != "note":
                 require(data.get("context") in nodes and nodes[data["context"]]["kind"] == "context",
                         f"Missing context for {ident}")
-            if kind in {"evidence", "decision", "action"}:
+            if kind in {"evidence", "decision", "action", "person"}:
                 source = data.get("source", {})
                 require(source.get("type") in {"user", "user_report", "source", "agent"}
                         and source.get("ref"), f"Source type/ref required: {ident}")
+            if kind == "person":
+                from lumos_people import validate_person
+                validate_person(data)
             if kind == "decision":
                 require(data["source"]["type"] == "user" and data.get("reason") and data.get("scope"),
                         "A decision requires user provenance, reason and scope")
@@ -307,6 +310,8 @@ class Store:
                             "Note revision must advance once")
                     require(not previous or data["created_at"] == previous["data"]["created_at"],
                             "Note creation time is immutable")
+        from lumos_people import list_people
+        list_people(nodes, {n["id"] for n in nodes.values() if n["kind"] == "context"})
         documents = [n for n in nodes.values() if n["kind"] == "document"]
         document_ids = [n["id"].casefold() for n in documents]
         require(len(document_ids) == len(set(document_ids)), "Duplicate document ID (case-insensitive)")
