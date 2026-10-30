@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from lumos import Error, digest, now, process_lock, require, safe_path
 
 FIELDS = {"text", "context", "status", "condition", "details", "next_step", "progress",
-          "due", "follow_up", "priority", "owner", "group"}
+          "due", "completed_on", "follow_up", "priority", "owner", "group"}
 STATES = {"todo", "doing", "blocked", "done", "cancelled"}
 WORKSPACES = {"lingguang", "lumos"}
 
@@ -25,7 +25,7 @@ def validate_fields(data):
     for field in FIELDS & data.keys():
         require(isinstance(data[field], str), f"{field} must be text")
         require(len(data[field]) <= (300 if field in {"text", "owner"} else 20000), f"{field} too long")
-    for field in ("due", "follow_up"):
+    for field in ("due", "completed_on", "follow_up"):
         value = data.get(field, "")
         if field == "due" and value == "long_term":
             continue
@@ -36,6 +36,8 @@ def validate_fields(data):
             except ValueError as exc:
                 raise Error(f"{field}: invalid date") from exc
     require(data.get("priority", "normal") in {"low", "normal", "high"}, "Invalid priority")
+    if data.get("completed_on") and "status" in data:
+        require(data["status"] == "done", "Completion date requires a completed task")
     require(len(data.get("group", "")) <= 80 and not any(c in data.get("group", "") for c in "\r\n\t"),
             "Group must be one line, at most 80 characters")
 
@@ -207,13 +209,16 @@ def save_task(store, request):
         data["last_source"] = source
         if data["status"] == "done" and (not old or old["data"]["status"] != "done"):
             data["completion"] = {"basis": "user_report", "ref": source["ref"]}
+            if "completed_on" not in changes:
+                data["completed_on"] = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
         elif data["status"] != "done":
-            for field in ("completion", "technical_result", "acceptance", "result_evidence"):
+            require(not changes.get("completed_on"), "Completion date requires a completed task")
+            for field in ("completion", "completed_on", "technical_result", "acceptance", "result_evidence"):
                 data.pop(field, None)
         update = {"id": ident, "kind": "action", "data": data}
         batch_request = {"reason": reason, "updates": [update]}
         if "before_id" in request:
-            require(old is not None and set(changes) <= {"status"}, "Move requires an existing task and only status")
+            require(old is not None and set(changes) <= {"status", "completed_on"}, "Move requires an existing task and status/completion date only")
             before = request["before_id"]
             require(before is None or isinstance(before, str), "Invalid move target")
             peers = sorted((n for n in nodes.values() if n["kind"] == "action" and n["id"] != ident

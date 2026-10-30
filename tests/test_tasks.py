@@ -363,3 +363,40 @@ class TaskTest(BaseStoreCase):
         self.assertNotIn("关心时间晚于交付日期", attention({**data, "follow_up": data["due"]}, date(2026, 10, 30)))
         with self.assertRaises(lumos.Error):
             save_task(self.store, self.request(follow_up="long_term"))
+
+    def test_completion_date_preserves_plan_reopens_and_replays(self):
+        ident = save_task(self.store, self.request(due="2026-10-20", follow_up="2026-10-21"))["id"]
+        req = self.request(status="done", completed_on="2026-10-22")
+        req["id"] = ident
+        save_task(self.store, req)
+        self.assertTrue(save_task(self.store, req)["replayed"])
+        detail = task_detail(self.store, ident)
+        self.assertEqual(detail["task"]["data"]["due"], "2026-10-20")
+        self.assertEqual(detail["task"]["data"]["completed_on"], "2026-10-22")
+        edit = self.request(progress="补充说明")
+        edit["id"] = ident
+        save_task(self.store, edit)
+        self.assertEqual(task_detail(self.store, ident)["task"]["data"]["completed_on"], "2026-10-22")
+        reopen = self.request(status="doing")
+        reopen["id"] = ident
+        save_task(self.store, reopen)
+        detail = task_detail(self.store, ident)
+        self.assertNotIn("completed_on", detail["task"]["data"])
+        self.assertEqual(detail["task"]["data"]["due"], "2026-10-20")
+        self.assertTrue(any(h["after"]["data"].get("completed_on") == "2026-10-22" for h in detail["history"]))
+        self.assertEqual(list_tasks(self.store, "2099-01-01")["tasks"][0]["data"]["status"], "doing")
+
+    def test_completion_date_default_validation_and_move(self):
+        ident = save_task(self.store, self.request(status="done", due="long_term"))["id"]
+        data = task_detail(self.store, ident)["task"]["data"]
+        self.assertEqual(data["completed_on"], list_tasks(self.store)["today"])
+        for changes in ({"completed_on": "long_term", "status": "done"},
+                        {"completed_on": "2026-02-30", "status": "done"},
+                        {"completed_on": "2026-10-30", "status": "doing"}):
+            with self.assertRaises(lumos.Error):
+                save_task(self.store, self.request(**changes))
+        other = save_task(self.store, self.request(due="2026-10-25"))["id"]
+        req = self.request()
+        req.update(id=other, before_id=ident, changes={"status": "done", "completed_on": "2026-10-25"})
+        save_task(self.store, req)
+        self.assertEqual(task_detail(self.store, other)["task"]["data"]["completed_on"], "2026-10-25")

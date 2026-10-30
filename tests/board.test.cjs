@@ -29,7 +29,7 @@ function deferred() {
 async function page(storage = new Map(), initialBoard = {}) {
   const nodes = new Map();
   const get = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
-  const names = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'follow_up', 'priority', 'owner', 'group', 'workspace'];
+  const names = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'completed_on', 'follow_up', 'priority', 'owner', 'group', 'workspace'];
   const controls = Object.fromEntries(names.map(n => [n, new Element()]));
   const form = get('form');
   form.elements = [...Object.values(controls), get('save'), get('close')];
@@ -223,13 +223,15 @@ test('quick status saves only status, prevents duplicate writes and refreshes th
   };
   const done = buttons.find(b => b.value === 'done');
   const saving = done.onclick();
+  p.get('complete-today').onclick();
+  await tick();
   p.get('edit').onclick();
   p.world.closeEditor();
   await done.onclick();
   assert.equal(p.get('editor').open, true);
   assert.equal(p.get('task-fields').hidden, true);
   assert.equal(requests.length, 1);
-  assert.deepEqual(requests[0].changes, {status: 'done'});
+  assert.deepEqual(requests[0].changes, {status: 'done', completed_on: p.board.today});
   assert.equal(requests[0].id, 'existing');
   assert.equal(requests[0].expected_seq, 3);
   delayed.resolve(response({seq: 4}));
@@ -457,7 +459,9 @@ test('inline updates send one field, lock during save, retry identically and ref
   await p.world.quickSave('a', {follow_up:''});
   assert.deepEqual(JSON.parse(writes[2]).changes, {follow_up:''});
   p.world.fetch = async (url, options) => options ? {ok:false,json:async()=>({error:'version conflict'})} : response(p.board);
-  await p.world.quickSave('a', {status:'done'});
+  const completing=p.world.quickSave('a', {status:'done'});
+  p.get('complete-today').onclick();
+  await completing;
   p.board.seq = 4;
   await p.get('refresh').onclick();
   assert.equal(p.get('quick-retry').hidden, true);
@@ -686,7 +690,7 @@ test('delivery dates are visible and sortable independently of follow-up dates',
     {id:'b',data:{text:'B',context:'work-current',status:'todo',follow_up:'2026-10-22'},attention:[]}
   ]});
   const rows = p.get('task-list').children;
-  assert.equal(rows[0].children[6].textContent, '交付日期 ↕');
+  assert.equal(rows[0].children[6].textContent, '交付 / 完成日期 ↕');
   assert.equal(rows[1].children[6].children[0].children[0].textContent, '2026/11/02');
   assert.equal(rows[1].children[5].children[0].value, '2026-10-21');
   assert.equal(rows[2].children[6].children[0].children[0].textContent, '未约定');
@@ -804,4 +808,38 @@ test('date cells show explanatory reminders only when needed, and explain closed
   assert.equal(closed.children[5].children[0].hidden,true);
   assert.match(textOf(closed.children[5]),/已取消，不再提醒/);
   assert.doesNotMatch(textOf(closed.children[6]),/待约定/);
+});
+
+test('completion picker can cancel, choose the planned date, retry without reprompt and show actual date', async () => {
+  const p=await page(undefined,{tasks:[{id:'a',data:{text:'计划任务',context:'work-current',status:'doing',due:'2026-10-20'},attention:[]}]});
+  const writes=[];
+  p.world.fetch=async(url,options)=>{if(!options)return response(p.board);writes.push(JSON.parse(options.body));if(writes.length===1)throw new Error('lost');return response({});};
+  let op=p.world.quickSave('a',{status:'done'});
+  assert.equal(p.get('completion-picker').open,true);
+  assert.equal(writes.length,0);
+  p.get('completion-cancel').onclick();await op;
+  assert.equal(writes.length,0);
+  op=p.world.quickSave('a',{status:'done'});
+  assert.equal(p.get('complete-due').disabled,false);
+  p.get('complete-due').onclick();await op;
+  assert.deepEqual(writes[0].changes,{status:'done',completed_on:'2026-10-20'});
+  await p.get('quick-retry').onclick();
+  assert.deepEqual(writes[1],writes[0]);
+  p.board.tasks[0].data.status='done';p.board.tasks[0].data.completed_on='2026-10-21';
+  p.get('status-done').onclick();
+  const cell=p.get('task-list').children.find(n=>n.dataset.id==='a').children[6];
+  assert.equal(cell.children[0].value,'2026-10-21');
+  assert.match(textOf(cell),/完成日期/);
+  assert.match(cell.title,/2026-10-20/);
+  assert.equal(p.world.taskDate({status:'done'}),'完成日期：未记录');
+});
+
+test('completion picker disables unavailable plan dates and board moves carry selected date', async () => {
+  const p=await page(undefined,{tasks:[{id:'a',data:{text:'长期任务',context:'work-current',status:'doing',due:'long_term'},attention:[]}]});
+  let request;p.world.fetch=async(url,options)=>{if(options){request=JSON.parse(options.body);return response({});}return response(p.board);};
+  const op=p.world.moveTask('a','done');
+  assert.equal(p.get('complete-due').disabled,true);
+  p.get('complete-today').onclick();await op;
+  assert.deepEqual(request.changes,{status:'done',completed_on:p.board.today});
+  assert.equal(request.before_id,null);
 });

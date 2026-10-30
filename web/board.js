@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-const fields = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'follow_up', 'priority', 'owner', 'group'];
+const fields = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'completed_on', 'follow_up', 'priority', 'owner', 'group'];
 const workspaces = {lingguang: '灵光', lumos: 'Lumos 仓库维护'};
 const labels = {todo: '待处理', doing: '进行中', blocked: '受阻', done: '已完成', cancelled: '已取消'};
 const priorities = {low: '低', normal: '中', high: '高'};
@@ -9,6 +9,7 @@ let dirty = false, discardArmed = false, saving = false, opening = false;
 let editMode = false, savedValues;
 let dragging = null, movePending = null;
 let taskView = 'list', quickPending = null;
+let completionChoice = null;
 const selectedStatuses = new Set(['todo', 'doing']);
 let windowDays = null, sortKey = null, sortDirection = 1;
 const columnOf = task => task.data.status === 'cancelled' ? 'done' : task.data.status;
@@ -196,15 +197,21 @@ function followUpHint(data) {
 }
 
 async function moveTask(id, status, beforeId = null) {
-  if (saving || opening || !state.writable || $('editor').open) return;
+  if (saving || opening || completionChoice || !state.writable || $('editor').open) return;
   const task = state.tasks.find(t => t.id === id);
   if (!task || beforeId === id) return;
   // Reordering the combined closed column must preserve cancellation.
   const targetStatus = columnOf(task) === status ? task.data.status : status;
   const signature = JSON.stringify([id, targetStatus, beforeId, state.seq]);
   if (movePending?.signature !== signature) {
+    const changes = {status: targetStatus};
+    if (targetStatus === 'done' && task.data.status !== 'done') {
+      const date = await chooseCompletionDate(task.data);
+      if (date === null) return;
+      changes.completed_on = date;
+    }
     movePending = {signature, request: {request_id: crypto.randomUUID().replaceAll('-', ''),
-      expected_seq: state.seq, id, changes: {status: targetStatus}, before_id: beforeId}};
+      expected_seq: state.seq, id, changes, before_id: beforeId}};
   }
   saving = true;
   $('message').textContent = '正在保存位置…';
@@ -218,6 +225,7 @@ async function moveTask(id, status, beforeId = null) {
     $('message').textContent = e.message + '\n尚未确认保存成功。网络失败可重复同一拖动重试；记录发生变化时请刷新后核对。';
   } finally {
     saving = false;
+    renderList(filtered());
   }
 }
 
@@ -300,7 +308,7 @@ function render() {
       if (t.data.progress && t.data.progress.length <= 300) renderDocument(t.data.progress, summary);
       else summary.append(element('p', t.data.progress ? '进展待整理为简短摘要，请打开详情查看。' : '尚未记录当前进展，请打开详情查看下一步。'));
       button.append(summary);
-      button.append(element('p', '下次关心：' + (t.data.follow_up || '未设置') + '\n交付日期：' + dueLabel(t.data.due), 'card-dates'));
+      button.append(element('p', '下次关心：' + (t.data.follow_up || '未设置') + '\n' + taskDate(t.data), 'card-dates'));
       const hint = followUpHint(t.data);
       if (hint.text) button.append(element('span', hint.text, 'follow-up-label ' + hint.cls));
       if (t.data.status === 'cancelled') button.append(element('span', '已取消', 'tag'));
@@ -321,6 +329,7 @@ function sortedTasks(tasks) {
   const order = state.board_order || state.tasks.map(t => t.id);
   const value = t => sortKey === 'owner' ? ownerName(t.data)
     : sortKey === 'priority' ? ({low: 0, normal: 1, high: 2}[t.data.priority || 'normal'])
+    : sortKey === 'due' && t.data.status === 'done' ? t.data.completed_on || ''
     : sortKey === 'status' ? Object.keys(labels).indexOf(t.data.status) : t.data[sortKey] || '';
   return [...tasks].sort((a, b) => {
     const original = order.indexOf(a.id) - order.indexOf(b.id);
@@ -357,7 +366,7 @@ function renderSchedule(tasks) {
       const hint = followUpHint(task.data);
       if (hint.text) row.append(element('span', hint.text, 'follow-up-label ' + hint.cls));
       const deliveryHint = dueHint(task.data);
-      row.append(element('span', ' · 交付：' + dueLabel(task.data.due), 'muted'));
+      row.append(element('span', ' · ' + taskDate(task.data), 'muted'));
       if (deliveryHint.text) row.append(element('span', deliveryHint.text, 'follow-up-label ' + deliveryHint.cls));
       section.append(row);
     }
@@ -367,6 +376,29 @@ function renderSchedule(tasks) {
 }
 
 function dueLabel(value) { return value === 'long_term' ? '长期' : value || '未约定'; }
+
+function taskDate(data) {
+  return data.status === 'done' ? '完成日期：' + (data.completed_on || '未记录') : '交付日期：' + dueLabel(data.due);
+}
+
+function chooseCompletionDate(data) {
+  $('completion-title').textContent = '完成任务：' + data.text;
+  $('complete-today').textContent = '完成当天 · ' + state.today;
+  $('complete-due').textContent = '原交付日期 · ' + dueLabel(data.due);
+  $('complete-due').disabled = !data.due || data.due === 'long_term';
+  return new Promise(resolve => {
+    completionChoice = date => {
+      completionChoice = null;
+      $('completion-picker').close();
+      resolve(date);
+    };
+    $('complete-today').onclick = () => completionChoice(state.today);
+    $('complete-due').onclick = () => completionChoice(data.due);
+    $('completion-cancel').onclick = () => completionChoice(null);
+    $('completion-picker').showModal();
+  });
+}
+$('completion-picker').addEventListener('cancel', event => {event.preventDefault(); completionChoice?.(null);});
 
 function dueHint(data) {
   return !['done', 'cancelled'].includes(data.status) && !data.due
@@ -427,7 +459,7 @@ function renderList(tasks) {
   list.hidden = taskView !== 'list';
   list.replaceChildren();
   const heading = element('div', undefined, 'task-row list-heading');
-  for (const [key, title] of [['text', '任务'], ['priority', '优先级'], ['group', '项目标签'], ['owner', '负责人'], ['status', '当前状态'], ['follow_up', '下次关心时间'], ['due', '交付日期']]) {
+  for (const [key, title] of [['text', '任务'], ['priority', '优先级'], ['group', '项目标签'], ['owner', '负责人'], ['status', '当前状态'], ['follow_up', '下次关心时间'], ['due', '交付 / 完成日期']]) {
     const button = element('button', title + (sortKey === key ? sortDirection === 1 ? ' ↑' : ' ↓' : ' ↕'), 'sort-heading');
     button.type = 'button';
     button.setAttribute('aria-label', title + '排序');
@@ -478,9 +510,17 @@ function renderList(tasks) {
     }
     const deliveryHint = dueHint(t.data);
     const dueCell = element('div', undefined, 'row-due follow-up-cell ' + deliveryHint.cls);
-    renderDueEditor(dueCell, t.data.due, !state.writable || saving || !!quickPending, value => quickSave(t.id, {due: value}));
+    if (t.data.status === 'done') {
+      const completed = element('input', undefined, 'row-date');
+      completed.type = 'date';
+      completed.value = t.data.completed_on || '';
+      completed.setAttribute('aria-label', t.data.text + ' · 完成日期');
+      completed.disabled = !state.writable || saving || !!quickPending;
+      completed.onchange = () => quickSave(t.id, {completed_on: completed.value});
+      dueCell.append(completed, element('small', t.data.completed_on ? '完成日期' : '完成日期未记录'));
+    } else renderDueEditor(dueCell, t.data.due, !state.writable || saving || !!quickPending, value => quickSave(t.id, {due: value}));
     if (deliveryHint.text) dueCell.append(element('small', '待约定交付时间'));
-    dueCell.title = '交付日期：明确约定的成果节点；不随关心时间自动变化';
+    dueCell.title = '原交付日期：' + dueLabel(t.data.due) + '；完成日期独立记录';
     const owner = element('span', ownerName(t.data), 'row-owner');
     owner.title = ownerName(t.data);
     row.append(title, priority, element('span', t.data.group || '未分组', 'project-tag'), owner, status, dateCell, dueCell);
@@ -489,7 +529,13 @@ function renderList(tasks) {
 }
 
 async function quickSave(id, changes) {
-  if (saving || opening || !state.writable || $('editor').open) return;
+  if (saving || opening || completionChoice || !state.writable || $('editor').open) return;
+  const task = state.tasks.find(t => t.id === id);
+  if (!quickPending && changes.status === 'done' && task?.data.status !== 'done') {
+    const date = await chooseCompletionDate(task.data);
+    if (date === null) {renderList(filtered()); return;}
+    changes = {...changes, completed_on: date};
+  }
   quickPending ||= {request_id: crypto.randomUUID().replaceAll('-', ''), expected_seq: state.seq, id, changes};
   saving = true;
   $('quick-retry').hidden = true;
@@ -603,7 +649,7 @@ function renderHistory(detail) {
   if (detail.task.data.last_source) sources.append(element('h4', '最近修改来源'), element('p', sourceText(detail.task.data.last_source)));
   const history = disclosure('修改历史 · ' + detail.history.length + ' 次', $('history'));
   const names = {text: '任务', context: '背景脉络', status: '状态', next_step: '下一步', progress: '进展',
-    details: '背景', due: '交付日期', follow_up: '下次关心时间', follow_up_pending: '待设置关心时间', owner: '负责人', group: '分组',
+    details: '背景', due: '交付日期', completed_on: '完成日期', follow_up: '下次关心时间', follow_up_pending: '待设置关心时间', owner: '负责人', group: '分组',
     priority: '优先级', condition: '完成条件', completion: '完成依据', board_order: '看板顺序', note_refs: '笔记来源'};
   const value = (key, v) => {
     if (v === undefined || v === null || v === '') return '未设置';
@@ -648,6 +694,7 @@ function setEditMode(enabled) {
     button.disabled = !state.writable || button.value === savedValues.status;
   }
   $('editor-title').textContent = enabled ? (editing ? '编辑任务' : '新增任务') : savedValues.text;
+  $('completed-field').hidden = savedValues.status !== 'done';
   renderDueEditor($('due-editor'), form.elements.namedItem('due').value, !enabled || !state.writable, value => {
     form.elements.namedItem('due').value = value;
     markDirty();
@@ -667,7 +714,7 @@ function renderTask(data) {
   view.replaceChildren();
   view.append(element('p', workspaces[workspaceOf(data.context)] + ' / ' + (data.group || '未分组'), 'muted'));
   const meta = [labels[data.status], '负责人：' + ownerName(data),
-    '交付日期：' + dueLabel(data.due), '下次关心：' + (data.follow_up || '未设置')].filter(Boolean);
+    taskDate(data), ...(data.status === 'done' ? ['原交付日期：' + dueLabel(data.due)] : []), '下次关心：' + (data.follow_up || '未设置')].filter(Boolean);
   const badges = tags(meta);
   badges.append(priorityTag(data));
   view.append(badges);
@@ -687,7 +734,7 @@ function renderTask(data) {
 }
 
 async function openTask(id = null) {
-  if (opening || saving || $('editor').open) return;
+  if (opening || saving || completionChoice || $('editor').open) return;
   opening = true;
   try {
     const detail = id ? await api('/api/task?id=' + encodeURIComponent(id)) : null;
@@ -749,9 +796,15 @@ form.onsubmit = async event => {
 };
 
 async function saveChanges(changes, quick = false) {
-  if (saving || !state.writable || (quick ? !editing || editMode : !editMode)) return;
+  if (saving || completionChoice || !state.writable || (quick ? !editing || editMode : !editMode)) return;
   if (quick && changes.status === savedValues.status) return;
   if (quick && pending?.changes.status !== changes.status) pending = null;
+  if (!pending && changes.status === 'done' && savedValues.status !== 'done') {
+    const date = await chooseCompletionDate({...savedValues, ...changes});
+    if (date === null) return;
+    changes = {...changes, completed_on: date};
+  }
+  if (changes.status && changes.status !== 'done' && 'completed_on' in changes) changes.completed_on = '';
   saving = true;
   for (const control of form.elements) control.disabled = true;
   $('form-message').textContent = '正在保存…';
