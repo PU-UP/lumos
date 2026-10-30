@@ -7,7 +7,7 @@ function element(tag, text, cls) {
   if (cls) node.className = cls;
   return node;
 }
-const ownerName = task => task.data.owner?.trim() || 'Mango';
+const ownerName = task => task.data.owner?.trim() || '王牧楠';
 function workspaceOf(context) {
   return state.contexts.find(c => c.id === context)?.data.workspace || (context === 'lumos-maintenance' ? 'lumos' : 'lingguang');
 }

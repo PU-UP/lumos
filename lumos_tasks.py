@@ -43,7 +43,7 @@ def validate_fields(data):
 
 
 def task_defaults(data):
-    return {**data, "owner": data.get("owner", "").strip() or "Mango",
+    return {**data, "owner": data.get("owner", "").strip() or "王牧楠",
             "priority": data.get("priority", "normal"), "group": data.get("group", "").strip()}
 
 

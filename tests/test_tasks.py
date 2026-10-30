@@ -191,12 +191,12 @@ class TaskTest(BaseStoreCase):
 
     def test_owner_defaults_updates_and_three_priorities(self):
         legacy = task_detail(self.store, "talk")
-        self.assertEqual(legacy["task"]["data"]["owner"], "Mango")
+        self.assertEqual(legacy["task"]["data"]["owner"], "王牧楠")
         self.assertEqual(legacy["task"]["data"]["priority"], "normal")
         ident = save_task(self.store, self.request())["id"]
         task = task_detail(self.store, ident)
-        self.assertEqual(task["task"]["data"]["owner"], "Mango")
-        self.assertEqual(task["history"][0]["after"]["data"]["owner"], "Mango")
+        self.assertEqual(task["task"]["data"]["owner"], "王牧楠")
+        self.assertEqual(task["history"][0]["after"]["data"]["owner"], "王牧楠")
         for priority in ("low", "normal", "high"):
             request = self.request(owner="  同事  ", priority=priority)
             request["id"] = ident
@@ -212,7 +212,7 @@ class TaskTest(BaseStoreCase):
         request = self.request(owner="  ")
         request["id"] = ident
         save_task(self.store, request)
-        self.assertEqual(task_detail(self.store, ident)["task"]["data"]["owner"], "Mango")
+        self.assertEqual(task_detail(self.store, ident)["task"]["data"]["owner"], "王牧楠")
 
     def test_generic_batches_share_date_validation(self):
         node = next(n for n in self.store.context("mapping")["nodes"] if n["id"] == "talk")

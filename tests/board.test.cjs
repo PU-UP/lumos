@@ -186,7 +186,7 @@ test('owner filtering composes with group and search, and survives refresh', asy
     {id: 'elsewhere', data: {text: '模拟地图', context: 'other-context', owner: '同事', status: 'todo'}, attention: []}
   ];
   await p.world.refresh();
-  p.get('owner-filter').value = 'Mango';
+  p.get('owner-filter').value = '王牧楠';
   assert.deepEqual(Array.from(p.world.filtered(), t => t.id), ['mine']);
   p.get('owner-filter').value = '同事';
   p.get('group-filter').value = ':地图';
@@ -198,10 +198,10 @@ test('owner filtering composes with group and search, and survives refresh', asy
   assert.equal(p.world.filtered().length, 0);
 });
 
-test('new tasks default to Mango and medium, and priorities have distinct text and color classes', async () => {
+test('new tasks default to 王牧楠 and medium, and priorities have distinct text and color classes', async () => {
   const p = await page();
   await p.world.openTask();
-  assert.equal(p.controls.owner.value, 'Mango');
+  assert.equal(p.controls.owner.value, '王牧楠');
   assert.equal(p.controls.priority.value, 'normal');
   const badges = ['low', 'normal', 'high'].map(priority => p.world.priorityTag({priority}));
   assert.deepEqual(badges.map(b => b.textContent), ['低优先级', '中优先级', '高优先级']);
@@ -415,7 +415,7 @@ test('status filters default to todo and doing, compose as toggles and apply to 
   assert.equal(p.get('board').hidden, true);
   assert.equal(p.get('task-list').children.length, 3);
   assert.equal(p.get('task-list').children[1].children[2].textContent, '项目甲');
-  assert.equal(p.get('task-list').children[1].children[3].textContent, 'Mango');
+  assert.equal(p.get('task-list').children[1].children[3].textContent, '王牧楠');
   p.get('status-todo').onclick();
   p.get('status-doing').onclick();
   p.get('status-done').onclick();
@@ -512,7 +512,7 @@ test('all list columns sort without writes; date blanks stay last and third clic
   click(5); assert.deepEqual(ids(), ['a','b','c']);
   click(5); assert.deepEqual(ids(), ['a','b','c']);
   click(1); assert.deepEqual(ids(), ['b','c','a']);
-  click(3); assert.deepEqual(ids(), ['b','c','a']);
+  click(3); assert.deepEqual(ids(), ['c','b','a']);
   click(2); assert.deepEqual(ids(), ['c','b','a']);
   click(4); assert.deepEqual(ids(), ['b','c','a']);
   click(0); assert.deepEqual(ids(), ['a','b','c']);
@@ -606,13 +606,13 @@ test('roster includes people without tasks, grouped owners and workspace isolati
     {id:'p1',data:{title:'模拟甲',team:'模拟平台组',team_status:'proposed',role:'<script>保留文字</script>',workspaces:['lingguang']}},
     {id:'p2',data:{title:'模拟乙',team:'模拟协作方',role:'不在管理范围',workspaces:['lingguang']}},
     {id:'p3',data:{title:'模拟维护者',team:'维护',member_type:'agent',workspaces:['lumos']}},
-    {id:'p4',data:{title:'Mango',team:'本人',workspaces:['lingguang','lumos']}}
+    {id:'p4',data:{title:'王牧楠',team:'本人',workspaces:['lingguang','lumos']}}
   ];
   const tasks = [{id:'t1',data:{text:'模拟任务',context:'work-current',owner:'模拟乙',status:'todo',group:'原标签'},attention:[]}];
   const p = await page(new Map(), {people,tasks,contexts:[{id:'work-current',data:{}},{id:'lumos-maintenance',data:{}}]});
   const options = p.world.ownerOptions('lingguang', '历史负责人', true);
   assert.equal(p.get('owner-filter').children[0].text, '全部负责人');
-  assert.equal(p.get('owner-filter').children[1].value, 'Mango');
+  assert.equal(p.get('owner-filter').children[1].value, '王牧楠');
   assert.match(options[1].text, /构思中/);
   assert.equal(options[1].className, 'owner-team');
   assert.ok(!options.some(o=>o.text.includes('全组')));
@@ -625,7 +625,7 @@ test('roster includes people without tasks, grouped owners and workspace isolati
   assert.equal(p.world.filtered().length, 0);
   assert.ok(!p.world.ownerOptions('lingguang').flatMap(g=>g.children || []).some(o=>o.value.startsWith('@team:')));
   await p.world.openTask();
-  assert.equal(p.controls.owner.value, 'Mango');
+  assert.equal(p.controls.owner.value, '王牧楠');
   assert.ok(p.controls.owner.children.flatMap(g=>g.children || []).some(o=>o.value==='模拟甲'));
   p.world.closeEditor();
   p.get('workspace').value='lumos'; p.get('workspace').onchange();
@@ -639,7 +639,7 @@ test('editing an owner absent from roster preserves it when cancelling', async (
   p.world.fetch=async()=>response({seq:3,task:{data:{text:'旧任务',context:'work-current',status:'doing',owner:'旧负责人',group:'原标签',source:{ref:'fixture'}}},related:[],documents:{},history:[]});
   await p.world.openTask('old');
   assert.ok(p.controls.owner.children.flatMap(g=>g.children || []).some(o=>o.value==='旧负责人'));
-  p.get('edit').onclick(); p.controls.owner.value='Mango'; p.form.events.input();
+  p.get('edit').onclick(); p.controls.owner.value='王牧楠'; p.form.events.input();
   p.get('cancel-edit').onclick();
   assert.ok(p.controls.owner.children.flatMap(g=>g.children || []).some(o=>o.value==='旧负责人'));
   assert.equal(p.controls.owner.value, '旧负责人');
@@ -666,11 +666,11 @@ test('personnel periods include today as first or middle day and use Shanghai up
 test('schedule is a third persistent view and composes with all task filters', async () => {
   const storage = new Map();
   const tasks = [
-    {id:'a',data:{text:'选中任务',context:'work-current',owner:'Mango',group:'组',status:'doing',follow_up:'2026-10-21'},attention:[]},
+    {id:'a',data:{text:'选中任务',context:'work-current',owner:'王牧楠',group:'组',status:'doing',follow_up:'2026-10-21'},attention:[]},
     {id:'b',data:{text:'排除任务',context:'work-current',owner:'其他',group:'组',status:'doing'},attention:[]},
-    {id:'c',data:{text:'排除完成',context:'work-current',owner:'Mango',group:'组',status:'done'},attention:[]}];
+    {id:'c',data:{text:'排除完成',context:'work-current',owner:'王牧楠',group:'组',status:'done'},attention:[]}];
   const p = await page(storage,{tasks});
-  p.get('owner-filter').value='Mango';p.get('group-filter').value=':组';p.get('view-schedule').onclick();
+  p.get('owner-filter').value='王牧楠';p.get('group-filter').value=':组';p.get('view-schedule').onclick();
   assert.equal(p.get('schedule-list').hidden,false);assert.equal(p.get('task-list').hidden,true);assert.equal(p.get('board').hidden,true);
   assert.match(textOf(p.get('schedule-list')), /选中任务/);assert.doesNotMatch(textOf(p.get('schedule-list')), /排除/);
   const q = await page(storage,{tasks});assert.equal(q.get('view-schedule')['aria-pressed'],'true');
@@ -842,4 +842,11 @@ test('completion picker disables unavailable plan dates and board moves carry se
   p.get('complete-today').onclick();await op;
   assert.deepEqual(request.changes,{status:'done',completed_on:p.board.today});
   assert.equal(request.before_id,null);
+});
+
+test('saved Mango owner filter follows the user rename', async () => {
+  const storage=new Map([['lumos.task-view.v1',JSON.stringify({workspace:'lingguang',owner:'Mango'})]]);
+  const p=await page(storage,{tasks:[{id:'self',data:{text:'本人任务',context:'work-current',status:'todo',owner:'王牧楠'},attention:[]}]});
+  assert.equal(p.get('owner-filter').value,'王牧楠');
+  assert.equal(p.get('task-list').children[1].dataset.id,'self');
 });

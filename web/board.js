@@ -3,7 +3,7 @@ const fields = ['text', 'context', 'status', 'condition', 'details', 'next_step'
 const workspaces = {lingguang: '灵光', lumos: 'Lumos 仓库维护'};
 const labels = {todo: '待处理', doing: '进行中', blocked: '受阻', done: '已完成', cancelled: '已取消'};
 const priorities = {low: '低', normal: '中', high: '高'};
-const ownerName = data => data.owner?.trim() || 'Mango';
+const ownerName = data => data.owner?.trim() || '王牧楠';
 let state, editing = null, baseline, pending = null;
 let dirty = false, discardArmed = false, saving = false, opening = false;
 let editMode = false, savedValues;
@@ -31,6 +31,7 @@ function restorePreferences() {
   try {
     const p = JSON.parse(localStorage.getItem(preferencesKey));
     if (!p || typeof p !== 'object' || Array.isArray(p)) return;
+    if (p.owner === 'Mango') p.owner = '王牧楠';
     if (Object.hasOwn(workspaces, p.workspace)) $('workspace').value = p.workspace;
     for (const [id, key] of [['group-filter', 'group'], ['owner-filter', 'owner']]) {
       if (typeof p[key] !== 'string') continue;
@@ -90,9 +91,9 @@ function personTeam(data) {
 }
 
 function ownerOptions(workspace, current = '', teams = false) {
-  const groups = new Map(), names = new Set(['Mango']);
+  const groups = new Map(), names = new Set(['王牧楠']);
   for (const {data} of workspacePeople(workspace)) {
-    if (data.title === 'Mango') continue;
+    if (data.title === '王牧楠') continue;
     const label = personTeam(data);
     if (!groups.has(label)) {
       const group = element('optgroup'); group.label = label;
@@ -101,15 +102,15 @@ function ownerOptions(workspace, current = '', teams = false) {
     groups.get(label).append(new Option(data.title + (data.member_type === 'agent' ? '（Agent）' : ''), data.title));
     names.add(data.title);
   }
-  const extra = [...new Set(['Mango', current, ...state.tasks.filter(t => workspaceOf(t.data.context) === workspace)
+  const extra = [...new Set(['王牧楠', current, ...state.tasks.filter(t => workspaceOf(t.data.context) === workspace)
     .map(t => ownerName(t.data))])].filter(name => name && !names.has(name));
   if (extra.length) {
     const group = element('optgroup'); group.label = '其他负责人';
     group.append(...extra.sort((a, b) => a.localeCompare(b, 'zh-CN')).map(name => new Option(name, name)));
     groups.set('other-owners', group);
   }
-  if (!teams) return [new Option('Mango', 'Mango'), ...groups.values()];
-  const options = [new Option('Mango', 'Mango')];
+  if (!teams) return [new Option('王牧楠', '王牧楠'), ...groups.values()];
+  const options = [new Option('王牧楠', '王牧楠')];
   for (const [key, group] of groups) {
     const heading = new Option(group.label, key === 'other-owners' ? '@other' : '@team:' + group.label);
     heading.className = 'owner-team'; options.push(heading);
@@ -120,7 +121,7 @@ function ownerOptions(workspace, current = '', teams = false) {
 
 function matchesOwner(task, selection) {
   if (!selection) return true;
-  if (selection === '@other') return ownerName(task.data) !== 'Mango' && !workspacePeople($('workspace').value).some(p => p.data.title === ownerName(task.data));
+  if (selection === '@other') return ownerName(task.data) !== '王牧楠' && !workspacePeople($('workspace').value).some(p => p.data.title === ownerName(task.data));
   if (!selection.startsWith('@team:')) return ownerName(task.data) === selection;
   return workspacePeople($('workspace').value).some(p => personTeam(p.data) === selection.slice(6)
     && p.data.title === ownerName(task.data));
@@ -134,7 +135,7 @@ function updateFilters() {
     ...groups.map(name => new Option(name, ':' + name)));
   $('group-filter').value = selectedGroup === '-' || groups.includes(selectedGroup.slice(1)) ? selectedGroup : '';
   const selectedOwner = $('owner-filter').value;
-  const owners = [...workspacePeople(workspace).map(p => p.data.title), 'Mango', ...state.tasks.filter(t => workspaceOf(t.data.context) === workspace).map(t => ownerName(t.data))];
+  const owners = [...workspacePeople(workspace).map(p => p.data.title), '王牧楠', ...state.tasks.filter(t => workspaceOf(t.data.context) === workspace).map(t => ownerName(t.data))];
   $('owner-filter').replaceChildren(new Option('全部负责人', ''), ...ownerOptions(workspace, '', true));
   $('owner-filter').value = (selectedOwner === '@other' || owners.includes(selectedOwner) || workspacePeople(workspace).some(p => '@team:' + personTeam(p.data) === selectedOwner)) ? selectedOwner : '';
   $('new').disabled = !state.writable || !workspaceContexts(workspace).length;
@@ -149,7 +150,7 @@ function setTaskWorkspace(workspace, context = null) {
   control.value = contexts.some(c => c.id === context) ? context
     : contexts.find(c => c.id === preferred)?.id || contexts[0]?.id || '';
   $('group-options').replaceChildren(...groupNames(workspace).map(name => new Option(name, name)));
-  const owner = form.elements.namedItem('owner'), selectedOwner = owner.value || 'Mango';
+  const owner = form.elements.namedItem('owner'), selectedOwner = owner.value || '王牧楠';
   owner.replaceChildren(...ownerOptions(workspace, selectedOwner));
   owner.value = selectedOwner;
 }
