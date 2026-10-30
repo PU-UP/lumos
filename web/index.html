@@ -12,6 +12,7 @@
 <div class="time-filter"><label for="window-days">下次关心时间 · 未来</label><input id="window-days" type="number" min="0" max="36500" step="1" placeholder="不限" aria-label="未来天数"><span>天</span><button id="clear-window">不限时间</button><span id="window-hint">状态可多选；时间留空显示全部日期。</span></div>
 
 <section aria-label="任务看板"><div class="section-heading board-heading"><h2>任务清单</h2><div class="board-filters"><label class="search"><span>负责人</span><select id="owner-filter"><option value="">全部负责人</option></select></label><label class="search"><span>查找任务</span><input id="search" type="search" placeholder="标题、背景或下一步"></label></div></div><div id="board" class="board"></div></section>
+<p class="date-help muted">下次关心：何时再问进展。交付日期：明确约定的成果节点（可为方案或报告，详见完成条件）；未约定则留空。两者独立，近期安排按关心时间排列。</p>
 <div id="task-list" class="task-list" aria-label="任务列表"></div>
 <div id="schedule-list" aria-label="近期安排" hidden></div>
 <button id="quick-retry" hidden>重试上次修改</button>
@@ -29,12 +30,12 @@
 <label>分组<input name="group" list="group-options" maxlength="80" placeholder="选择已有分组，或输入新名称；留空为未分组"></label><datalist id="group-options"></datalist>
 <details id="context-details"><summary>关联背景</summary><label>背景脉络<select name="context" required></select></label><p>保留任务的来源、背景和历史；分组只影响分类与筛选。</p></details>
 <label>下一步<textarea name="next_step" rows="2" placeholder="下一次可以直接开始的动作"></textarea></label>
-<div class="form-grid three"><label>截止日期<input name="due" type="date"></label><label>下次关心时间<input name="follow_up" type="date"></label><label>优先级<select name="priority"><option value="low">低</option><option value="normal" selected>中</option><option value="high">高</option></select></label></div>
+<div class="form-grid three"><label>交付日期<input name="due" type="date"></label><label>下次关心时间<input name="follow_up" type="date"></label><label>优先级<select name="priority"><option value="low">低</option><option value="normal" selected>中</option><option value="high">高</option></select></label></div>
 <label>背景与详细内容<textarea name="details" rows="4" placeholder="背景、约束、需要判断的问题"></textarea></label>
-<label>进展记录<textarea name="progress" rows="3" placeholder="最近发生了什么，遇到什么阻塞"></textarea></label>
+<label>当前摘要<textarea name="progress" rows="3" placeholder="现状、关键结论、待确认；建议2–4条，不追加历史流水账"></textarea></label>
 <label>怎样算完成<textarea name="condition" rows="2" placeholder="留空时，以你确认完成为准"></textarea></label>
 </fieldset>
 <div id="evidence"><div id="history"></div></div>
-<div class="form-actions" id="edit-actions" hidden><span>日期可留空；标记完成按你的报告记录。</span><div class="dialog-tools"><button type="button" id="cancel-edit">取消编辑</button><button type="submit" class="primary" id="save">保存任务</button></div></div>
+<div class="form-actions" id="edit-actions" hidden><span>关心是提醒，交付是成果节点；日期可留空。</span><div class="dialog-tools"><button type="button" id="cancel-edit">取消编辑</button><button type="submit" class="primary" id="save">保存任务</button></div></div>
 </form></dialog>
 </body></html>

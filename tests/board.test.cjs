@@ -678,3 +678,58 @@ test('filter changes before initial data arrives do not crash', async () => {
   assert.doesNotThrow(() => p.get('owner-filter').onchange());
   assert.doesNotThrow(() => p.get('workspace').onchange());
 });
+
+test('delivery dates are visible and sortable independently of follow-up dates', async () => {
+  const p = await page(undefined, {tasks: [
+    {id:'a',data:{text:'A',context:'work-current',status:'todo',due:'2026-11-02',follow_up:'2026-10-21'},attention:[]},
+    {id:'b',data:{text:'B',context:'work-current',status:'todo',follow_up:'2026-10-22'},attention:[]}
+  ]});
+  const rows = p.get('task-list').children;
+  assert.equal(rows[0].children[6].textContent, '交付日期 ↕');
+  assert.equal(rows[1].children[6].textContent, '2026-11-02');
+  assert.equal(rows[1].children[5].children[0].value, '2026-10-21');
+  assert.equal(rows[2].children[6].textContent, '未约定');
+  rows[0].children[6].onclick();
+  assert.equal(p.get('task-list').children[2].dataset.id, 'b');
+  p.world.renderTask(p.board.tasks[1].data);
+  assert.match(textOf(p.get('task-view')), /交付日期：未约定/);
+});
+
+test('summary formats bullets safely and folds uncurated long progress without losing text', async () => {
+  const p = await page();
+  const data = {context:'work-current',status:'doing',progress:'- 现状：正在优化\n- 待确认：<img src=x>',next_step:'询问实际效果'};
+  p.world.renderTask(data);
+  const view = p.get('task-view');
+  assert.match(textOf(view), /当前摘要/);
+  const walk = n => [n,...n.children.flatMap(walk)];
+  assert.ok(walk(view).some(n => n.textContent === '待确认：<img src=x>'));
+  assert.ok(walk(view).every(n => n.innerHTML === undefined));
+  p.world.renderTask({...data,progress:'历史内容'.repeat(100)});
+  const fold = view.children.find(n => n.children[0]?.textContent === '详细进展（待整理为当前摘要）');
+  assert.ok(fold);
+  assert.equal(fold.open, false);
+  assert.ok(textOf(fold).includes('历史内容'.repeat(100)));
+  assert.match(textOf(view), /询问实际效果/);
+});
+
+test('outside click closes only after an outside press and cannot discard dirty edits', async () => {
+  const p = await page();
+  await p.world.openTask();
+  const editor=p.get('editor');
+  editor.getBoundingClientRect=()=>({left:10,right:100,top:10,bottom:100});
+  const outside={target:editor,clientX:0,clientY:50};
+  const inside={target:editor,clientX:20,clientY:50};
+  editor.events.pointerdown(inside); editor.events.click(outside);
+  assert.equal(editor.open,true);
+  editor.events.pointerdown(inside); editor.events.click(inside);
+  assert.equal(editor.open,true);
+  editor.events.pointerdown(outside); editor.events.click(outside);
+  assert.equal(editor.open,false);
+  await p.world.openTask();
+  p.controls.text.value='未保存'; p.form.events.input();
+  for(let i=0;i<2;i++){editor.events.pointerdown(outside); editor.events.click(outside);}
+  assert.equal(editor.open,true);
+  assert.equal(p.controls.text.value,'未保存');
+  p.get('close').onclick();
+  assert.equal(editor.open,false);
+});

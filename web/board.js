@@ -45,7 +45,7 @@ function restorePreferences() {
       $('window-days').value = String(p.windowDays);
       $('window-days').oninput();
     }
-    if (['text', 'priority', 'group', 'owner', 'status', 'follow_up'].includes(p.sortKey)) sortKey = p.sortKey;
+    if (['text', 'priority', 'group', 'owner', 'status', 'follow_up', 'due'].includes(p.sortKey)) sortKey = p.sortKey;
     if (p.sortDirection === -1 || p.sortDirection === 1) sortDirection = p.sortDirection;
     if (['list', 'board', 'schedule'].includes(p.taskView)) taskView = p.taskView;
   } catch {
@@ -295,7 +295,7 @@ function render() {
       };
       button.append(element('span', t.data.group || '未分组', 'context-label'), element('h4', t.data.text));
       if (t.data.next_step) button.append(element('p', t.data.next_step));
-      const dates = [t.data.due ? '截止 ' + t.data.due : '', t.data.follow_up ? '跟进 ' + t.data.follow_up : ''].filter(Boolean);
+      const dates = [t.data.due ? '交付 ' + t.data.due : '', t.data.follow_up ? '关心 ' + t.data.follow_up : ''].filter(Boolean);
       button.append(element('p', dates.join(' · ') || '日期未定'));
       const hint = followUpHint(t.data);
       if (hint.text) button.append(element('span', hint.text, 'follow-up-label ' + hint.cls));
@@ -320,7 +320,7 @@ function sortedTasks(tasks) {
     if (!sortKey) return original;
     const av = value(a), bv = value(b);
     // Undated tasks stay visible at the bottom in either date sort direction.
-    if (sortKey === 'follow_up' && (!av || !bv)) return !av === !bv ? original : !av ? 1 : -1;
+    if (['follow_up', 'due'].includes(sortKey) && (!av || !bv)) return !av === !bv ? original : !av ? 1 : -1;
     const comparison = typeof av === 'number' ? av - bv : av.localeCompare(bv, 'zh-CN', {numeric: true});
     return comparison * sortDirection || original;
   });
@@ -362,7 +362,7 @@ function renderList(tasks) {
   list.hidden = taskView !== 'list';
   list.replaceChildren();
   const heading = element('div', undefined, 'task-row list-heading');
-  for (const [key, title] of [['text', '任务'], ['priority', '优先级'], ['group', '项目标签'], ['owner', '负责人'], ['status', '当前状态'], ['follow_up', '下次关心时间']]) {
+  for (const [key, title] of [['text', '任务'], ['priority', '优先级'], ['group', '项目标签'], ['owner', '负责人'], ['status', '当前状态'], ['follow_up', '下次关心时间'], ['due', '交付日期']]) {
     const button = element('button', title + (sortKey === key ? sortDirection === 1 ? ' ↑' : ' ↓' : ' ↕'), 'sort-heading');
     button.type = 'button';
     button.setAttribute('aria-label', title + '排序');
@@ -386,7 +386,7 @@ function renderList(tasks) {
     row.dataset.id = t.id;
     const title = element('button', t.data.text, 'row-title');
     title.type = 'button';
-    title.title = [t.data.next_step, ...t.attention, t.data.due ? '截止 ' + t.data.due : ''].filter(Boolean).join('\n');
+    title.title = [t.data.next_step, ...t.attention, t.data.due ? '交付 ' + t.data.due : ''].filter(Boolean).join('\n');
     title.onclick = () => openTask(t.id);
     const priority = element('select', undefined, 'row-priority priority-' + (t.data.priority || 'normal'));
     priority.append(...Object.entries(priorities).map(([value, label]) => new Option(label, value)));
@@ -407,9 +407,11 @@ function renderList(tasks) {
       control.disabled = !state.writable || saving || !!quickPending;
       control.onchange = () => quickSave(t.id, {[key]: control.value});
     }
+    const dueCell = element('span', t.data.due || '未约定', 'row-due');
+    dueCell.title = '交付日期：明确约定的成果节点；不随关心时间自动变化';
     const owner = element('span', ownerName(t.data), 'row-owner');
     owner.title = ownerName(t.data);
-    row.append(title, priority, element('span', t.data.group || '未分组', 'project-tag'), owner, status, dateCell);
+    row.append(title, priority, element('span', t.data.group || '未分组', 'project-tag'), owner, status, dateCell, dueCell);
     list.append(row);
   }
 }
@@ -529,7 +531,7 @@ function renderHistory(detail) {
   if (detail.task.data.last_source) sources.append(element('h4', '最近修改来源'), element('p', sourceText(detail.task.data.last_source)));
   const history = disclosure('修改历史 · ' + detail.history.length + ' 次', $('history'));
   const names = {text: '任务', context: '背景脉络', status: '状态', next_step: '下一步', progress: '进展',
-    details: '背景', due: '截止日期', follow_up: '跟进日期', follow_up_pending: '待设置关心时间', owner: '负责人', group: '分组',
+    details: '背景', due: '交付日期', follow_up: '下次关心时间', follow_up_pending: '待设置关心时间', owner: '负责人', group: '分组',
     priority: '优先级', condition: '完成条件', completion: '完成依据', board_order: '看板顺序', note_refs: '笔记来源'};
   const value = (key, v) => {
     if (v === undefined || v === null || v === '') return '未设置';
@@ -548,8 +550,8 @@ function renderHistory(detail) {
     const entry = disclosure(new Date(h.at).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) + ' · ' + title, history);
     for (const key of changed) {
       entry.append(element('h4', names[key]));
-      if (h.before) entry.append(element('p', '原：' + value(key, before[key]), 'muted'));
-      entry.append(element('p', '现：' + value(key, after[key])));
+      if (h.before) renderDocument('原：' + value(key, before[key]), disclosure('修改前', entry));
+      renderDocument('现：' + value(key, after[key]), disclosure('修改后', entry));
     }
     if (h.reason) entry.append(element('p', '修改原因：' + (h.reason.startsWith('task:') ? '任务更新' : h.reason), 'muted'));
     entry.append(element('p', sourceText(after.last_source || after.source), 'muted'));
@@ -588,17 +590,19 @@ function renderTask(data) {
   view.replaceChildren();
   view.append(element('p', workspaces[workspaceOf(data.context)] + ' / ' + (data.group || '未分组'), 'muted'));
   const meta = [labels[data.status], '负责人：' + ownerName(data),
-    data.due ? '截止 ' + data.due : '', data.follow_up ? '跟进 ' + data.follow_up : ''].filter(Boolean);
+    '交付日期：' + (data.due || '未约定'), '下次关心：' + (data.follow_up || '未设置')].filter(Boolean);
   const badges = tags(meta);
   badges.append(priorityTag(data));
   view.append(badges);
   const hint = followUpHint(data);
   if (hint.text) view.append(element('p', hint.text, 'follow-up-label ' + hint.cls));
-  for (const [key, title] of [['progress', '当前结论与进展'], ['next_step', '下一步'], ['details', '背景与详细内容'], ['condition', '怎样算完成']]) {
+  for (const [key, title] of [['progress', '当前摘要'], ['next_step', '下一步'], ['details', '背景与详细内容'], ['condition', '怎样算完成']]) {
     if (!data[key]) continue;
-    const folded = key === 'details' || key === 'condition';
+    const longProgress = key === 'progress' && data[key].length > 300;
+    const folded = key === 'details' || key === 'condition' || longProgress;
     const section = element(folded ? 'details' : 'section', undefined, 'task-section');
-    section.append(element(folded ? 'summary' : 'h3', title), element('p', data[key]));
+    section.append(element(folded ? 'summary' : 'h3', longProgress ? '详细进展（待整理为当前摘要）' : title));
+    renderDocument(data[key], section);
     view.append(section);
   }
 }
@@ -694,6 +698,21 @@ async function saveChanges(changes, quick = false) {
   }
 }
 $('editor').addEventListener('cancel', event => {event.preventDefault(); closeEditor();});
+let backdropStart = false;
+function outsideEditor(event) {
+  if (event.target !== $('editor')) return false;
+  const r = $('editor').getBoundingClientRect();
+  return event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom;
+}
+$('editor').addEventListener('pointerdown', event => { backdropStart = outsideEditor(event); });
+$('editor').addEventListener('click', event => {
+  if (backdropStart && outsideEditor(event)) {
+    // Accidental outside clicks must never discard an unsaved edit.
+    if (dirty) discardArmed = false;
+    closeEditor();
+  }
+  backdropStart = false;
+});
 $('close').onclick = closeEditor;
 $('edit').onclick = () => {
   if (!state.writable || saving) return;
