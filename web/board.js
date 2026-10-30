@@ -375,25 +375,50 @@ function dueHint(data) {
 
 function renderDueEditor(parent, value, disabled, onChange) {
   parent.replaceChildren();
-  const mode = element('select');
-  mode.append(new Option('未约定', ''), new Option('长期', 'long_term'), new Option('具体日期', 'date'));
-  mode.value = value === 'long_term' ? value : value ? 'date' : '';
-  mode.setAttribute('aria-label', '交付时间类型');
+  const trigger = element('button', undefined, 'due-trigger');
+  trigger.type = 'button';
+  trigger.disabled = disabled;
+  trigger.setAttribute('aria-expanded', 'false');
+  const label = element('span', dueLabel(value).replaceAll('-', '/'));
+  trigger.append(label, element('span', undefined, 'calendar-icon'));
+  trigger.setAttribute('aria-label', '交付时间：' + dueLabel(value) + '，点击修改');
+  const panel = element('div', undefined, 'due-popover');
+  panel.setAttribute('popover', 'auto');
+  panel.setAttribute('aria-label', '选择交付时间');
   const date = element('input');
   date.type = 'date';
-  date.value = mode.value === 'date' ? value : '';
+  date.value = value && value !== 'long_term' ? value : '';
   date.setAttribute('aria-label', '交付日期');
-  date.hidden = mode.value !== 'date';
-  date.required = mode.value === 'date';
-  mode.disabled = date.disabled = disabled;
-  mode.onchange = () => {
-    date.hidden = mode.value !== 'date';
-    date.required = mode.value === 'date';
-    if (mode.value === 'date') date.focus();
-    else onChange(mode.value);
+  date.disabled = disabled;
+  const choose = next => {
+    panel.hidePopover();
+    label.textContent = dueLabel(next).replaceAll('-', '/');
+    trigger.setAttribute('aria-label', '交付时间：' + dueLabel(next) + '，点击修改');
+    date.value = next && next !== 'long_term' ? next : '';
+    trigger.focus();
+    onChange(next);
   };
-  date.onchange = () => onChange(date.value);
-  parent.append(mode, date);
+  date.onchange = () => choose(date.value);
+  const shortcuts = element('div', undefined, 'due-shortcuts');
+  for (const [text, next] of [['未约定', ''], ['长期', 'long_term']]) {
+    const button = element('button', text);
+    button.type = 'button';
+    button.disabled = disabled;
+    button.onclick = () => choose(next);
+    shortcuts.append(button);
+  }
+  panel.append(date, shortcuts);
+  panel.addEventListener('toggle', event => trigger.setAttribute('aria-expanded', String(event.newState === 'open')));
+  trigger.onclick = () => {
+    if (panel.matches(':popover-open')) { panel.hidePopover(); return; }
+    panel.showPopover();
+    const rect = trigger.getBoundingClientRect();
+    panel.style.left = Math.max(8, Math.min(rect.right - panel.offsetWidth, window.innerWidth - panel.offsetWidth - 8)) + 'px';
+    panel.style.top = Math.max(8, rect.bottom + panel.offsetHeight + 8 <= window.innerHeight
+      ? rect.bottom + 4 : rect.top - panel.offsetHeight - 4) + 'px';
+    date.focus();
+  };
+  parent.append(trigger, panel);
 }
 
 function renderList(tasks) {
@@ -450,7 +475,6 @@ function renderList(tasks) {
     const deliveryHint = dueHint(t.data);
     const dueCell = element('div', undefined, 'row-due follow-up-cell ' + deliveryHint.cls);
     renderDueEditor(dueCell, t.data.due, !state.writable || saving || !!quickPending, value => quickSave(t.id, {due: value}));
-    if (deliveryHint.text) dueCell.append(element('small', deliveryHint.text));
     dueCell.title = '交付日期：明确约定的成果节点；不随关心时间自动变化';
     const owner = element('span', ownerName(t.data), 'row-owner');
     owner.title = ownerName(t.data);
