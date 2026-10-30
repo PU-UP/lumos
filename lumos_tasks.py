@@ -27,6 +27,8 @@ def validate_fields(data):
         require(len(data[field]) <= (300 if field in {"text", "owner"} else 20000), f"{field} too long")
     for field in ("due", "follow_up"):
         value = data.get(field, "")
+        if field == "due" and value == "long_term":
+            continue
         if value:
             require(bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)), f"{field}: use YYYY-MM-DD")
             try:
@@ -50,6 +52,12 @@ def attention(data, today):
     if not data.get("follow_up"):
         reasons.append("待设置关心时间")
     due = data.get("due")
+    if not due:
+        reasons.append("未约定交付时间")
+    if due == "long_term":
+        due = None
+    if due and data.get("follow_up", "") > due:
+        reasons.append("关心时间晚于交付日期")
     if due and due < today.isoformat():
         reasons.append("已逾期")
     elif due and due <= (today + timedelta(days=7)).isoformat():

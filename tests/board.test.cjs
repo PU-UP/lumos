@@ -686,9 +686,9 @@ test('delivery dates are visible and sortable independently of follow-up dates',
   ]});
   const rows = p.get('task-list').children;
   assert.equal(rows[0].children[6].textContent, '交付日期 ↕');
-  assert.equal(rows[1].children[6].textContent, '2026-11-02');
+  assert.equal(rows[1].children[6].children[1].value, '2026-11-02');
   assert.equal(rows[1].children[5].children[0].value, '2026-10-21');
-  assert.equal(rows[2].children[6].textContent, '未约定');
+  assert.equal(rows[2].children[6].children[0].value, '');
   rows[0].children[6].onclick();
   assert.equal(p.get('task-list').children[2].dataset.id, 'b');
   p.world.renderTask(p.board.tasks[1].data);
@@ -755,4 +755,33 @@ test('board cards show structured current summaries instead of long next steps',
   assert.equal(empty.split('待设置关心时间').length-1,1);
   assert.match(textOf(cards.find(n=>n.dataset.id==='long')),/进展待整理/);
   assert.equal(tasks[0].data.next_step,'不应铺开的行动全文');
+});
+
+
+test('inline delivery editor saves modes and dates only, with independent warning colors', async () => {
+  const p=await page(undefined,{tasks:[{id:'a',data:{text:'A',context:'work-current',status:'todo',follow_up:'2026-11-03'},attention:[]}]});
+  let cell=p.get('task-list').children[1].children[6];
+  assert.match(cell.className,/follow-up-pending/);
+  let request;
+  p.world.fetch=async(url,options)=>{if(options){request=JSON.parse(options.body);return response({});}return response(p.board);};
+  cell.children[0].value='long_term';cell.children[0].onchange();await tick();
+  assert.deepEqual(request.changes,{due:'long_term'});
+  cell=p.get('task-list').children[1].children[6];
+  cell.children[0].value='date';cell.children[0].onchange();
+  assert.equal(cell.children[1].hidden,false);
+  cell.children[1].value='2026-11-02';cell.children[1].onchange();await tick();
+  assert.deepEqual(request.changes,{due:'2026-11-02'});
+  assert.equal(p.world.followUpHint({status:'todo',due:'2026-11-02',follow_up:'2026-11-03'}).cls,'date-conflict');
+  assert.notEqual(p.world.followUpHint({status:'todo',due:'long_term',follow_up:'2026-11-03'}).cls,'date-conflict');
+  assert.equal(p.world.dueHint({status:'done'}).text,'');
+  assert.equal(p.world.dueLabel('long_term'),'长期');
+});
+
+test('saving from detail restores inline delivery controls after refresh', async () => {
+  const p=await page(undefined,{tasks:[{id:'a',data:{text:'A',context:'work-current',status:'todo'},attention:[]}]});
+  await p.world.openTask();
+  p.controls.text.value='新任务';
+  p.world.fetch=async(url,options)=>response(options?{}:p.board);
+  await p.form.onsubmit({preventDefault(){}});
+  assert.equal(p.get('task-list').children[1].children[6].children[0].disabled,false);
 });

@@ -23,3 +23,5 @@ main{padding-top:18px}.intro{align-items:center;margin-bottom:24px}h1{font-size:
 
 .task-row{grid-template-columns:minmax(220px,1fr) 64px 100px 70px 90px 145px 105px;min-width:885px}.row-due{font-size:12px;font-variant-numeric:tabular-nums}.date-help{font-size:12px;margin:10px 0}.task-section li{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8;color:var(--ink)}.task-section ul{padding-left:22px}.task-section h4{color:var(--ink)}
 .card-summary{margin:12px 0;color:var(--ink);font-size:12px;line-height:1.8}.card-section-label{font-weight:600;color:var(--accent)}.card-summary ul{padding-left:18px;margin:6px 0}.card-summary li{margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere}.card-summary h4{font-size:12px;margin:6px 0}.card .card-dates{white-space:pre-line}.card-detail-link{display:block;margin-top:12px;font-size:12px;color:var(--accent)}
+
+.task-row{grid-template-columns:minmax(220px,1fr) 64px 100px 70px 90px 170px 145px;min-width:950px}.date-conflict{background:#ffe3c2;color:#8b3d00}.row-due select,.row-due input{width:100%}.row-due small{font-size:11px}#due-editor{display:grid;gap:6px}

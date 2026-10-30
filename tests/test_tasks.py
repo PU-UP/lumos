@@ -166,7 +166,7 @@ class TaskTest(BaseStoreCase):
         tasks = list_tasks(self.store, "2026-10-21")
         self.assertEqual(set(tasks["attention"]), {overdue, near, later, "talk"})
         self.assertEqual(next(t for t in tasks["tasks"] if t["id"] == overdue)["attention"],
-                         ["已逾期", "到跟进日", "有阻塞", "重要事项"])
+                         ["关心时间晚于交付日期", "已逾期", "到跟进日", "有阻塞", "重要事项"])
         self.assertTrue({"talk", later, done} <= {t["id"] for t in tasks["tasks"]})
         ctx = next(n for n in self.store.context("mapping")["nodes"] if n["id"] == "mapping")
         ctx["data"]["status"] = "archived"
@@ -346,3 +346,20 @@ class TaskTest(BaseStoreCase):
         with self.assertRaises(lumos.Error):
             save_task(self.store, {**self.request(), 'follow_up_reviewed': True})
         self.assertIsNone(self.store.status()['session'])
+
+    def test_delivery_modes_and_follow_up_conflict(self):
+        ident = save_task(self.store, self.request(due="long_term", follow_up="2099-01-02"))["id"]
+        data = task_detail(self.store, ident)["task"]["data"]
+        self.assertEqual(data["due"], "long_term")
+        self.assertEqual(attention(data, date(2026, 10, 30)), [])
+        for due, expected in [("", "未约定交付时间"), ("2099-01-01", "关心时间晚于交付日期")]:
+            req = self.request(due=due)
+            req["id"] = ident
+            save_task(self.store, req)
+            data = task_detail(self.store, ident)["task"]["data"]
+            self.assertIn(expected, attention(data, date(2026, 10, 30)))
+            self.assertEqual(data["follow_up"], "2099-01-02")
+        self.assertEqual(attention({**data, "status": "done"}, date(2026, 10, 30)), [])
+        self.assertNotIn("关心时间晚于交付日期", attention({**data, "follow_up": data["due"]}, date(2026, 10, 30)))
+        with self.assertRaises(lumos.Error):
+            save_task(self.store, self.request(follow_up="long_term"))
