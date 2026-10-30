@@ -380,7 +380,7 @@ function renderDueEditor(parent, value, disabled, onChange) {
   trigger.disabled = disabled;
   trigger.setAttribute('aria-expanded', 'false');
   const label = element('span', dueLabel(value).replaceAll('-', '/'));
-  trigger.append(label, element('span', undefined, 'calendar-icon'));
+  trigger.append(label);
   trigger.setAttribute('aria-label', '交付时间：' + dueLabel(value) + '，点击修改');
   const panel = element('div', undefined, 'due-popover');
   panel.setAttribute('popover', 'auto');
