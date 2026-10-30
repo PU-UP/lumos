@@ -294,15 +294,19 @@ function render() {
         [...$('board').querySelectorAll('.card')].find(card => card.dataset.id === t.id)?.focus();
       };
       button.append(element('span', t.data.group || '未分组', 'context-label'), element('h4', t.data.text));
-      if (t.data.next_step) button.append(element('p', t.data.next_step));
-      const dates = [t.data.due ? '交付 ' + t.data.due : '', t.data.follow_up ? '关心 ' + t.data.follow_up : ''].filter(Boolean);
-      button.append(element('p', dates.join(' · ') || '日期未定'));
+      const summary = element('div', undefined, 'card-summary');
+      summary.append(element('span', '当前摘要', 'card-section-label'));
+      if (t.data.progress && t.data.progress.length <= 300) renderDocument(t.data.progress, summary);
+      else summary.append(element('p', t.data.progress ? '进展待整理为简短摘要，请打开详情查看。' : '尚未记录当前进展，请打开详情查看下一步。'));
+      button.append(summary);
+      button.append(element('p', '下次关心：' + (t.data.follow_up || '未设置') + '\n交付日期：' + (t.data.due || '未约定'), 'card-dates'));
       const hint = followUpHint(t.data);
       if (hint.text) button.append(element('span', hint.text, 'follow-up-label ' + hint.cls));
       if (t.data.status === 'cancelled') button.append(element('span', '已取消', 'tag'));
-      const badges = tags(t.attention);
+      const badges = tags(t.attention.filter(item => item !== hint.text));
       badges.append(element('span', ownerName(t.data), 'tag'), priorityTag(t.data));
       button.append(badges);
+      button.append(element('span', '查看详情与下一步 →', 'card-detail-link'));
       button.onclick = () => openTask(t.id);
       col.append(button);
     }

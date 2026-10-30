@@ -733,3 +733,26 @@ test('outside click closes only after an outside press and cannot discard dirty 
   p.get('close').onclick();
   assert.equal(editor.open,false);
 });
+
+test('board cards show structured current summaries instead of long next steps', async () => {
+  const tasks = [
+    {id:'summary',data:{context:'work-current',status:'doing',text:'简洁任务',progress:'- 现状：优化中\n- 待确认：效果',next_step:'不应铺开的行动全文',follow_up:'2026-10-22',due:'2026-11-02'},attention:[]},
+    {id:'empty',data:{context:'work-current',status:'doing',text:'未整理任务',next_step:'不能冒充当前结论'},attention:['待设置关心时间']},
+    {id:'long',data:{context:'work-current',status:'doing',text:'旧长进展',progress:'旧记录'.repeat(110)},attention:[]}
+  ];
+  const p=await page(undefined,{tasks});
+  p.get('view-board').onclick();
+  const cards=p.get('board').children.flatMap(n=>n.children).filter(n=>n.dataset.id);
+  const summary=cards.find(n=>n.dataset.id==='summary');
+  assert.match(textOf(summary),/当前摘要/);
+  assert.match(textOf(summary),/现状：优化中/);
+  assert.match(textOf(summary),/待确认：效果/);
+  assert.doesNotMatch(textOf(summary),/不应铺开的行动全文/);
+  assert.match(textOf(summary),/下次关心：2026-10-22\n交付日期：2026-11-02/);
+  const empty=textOf(cards.find(n=>n.dataset.id==='empty'));
+  assert.match(empty,/尚未记录当前进展/);
+  assert.doesNotMatch(empty,/不能冒充当前结论/);
+  assert.equal(empty.split('待设置关心时间').length-1,1);
+  assert.match(textOf(cards.find(n=>n.dataset.id==='long')),/进展待整理/);
+  assert.equal(tasks[0].data.next_step,'不应铺开的行动全文');
+});
