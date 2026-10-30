@@ -465,6 +465,10 @@ function renderList(tasks) {
     const hint = followUpHint(t.data);
     const dateCell = element('div', undefined, 'follow-up-cell ' + hint.cls);
     dateCell.append(date);
+    if (!t.data.follow_up && ['done', 'cancelled'].includes(t.data.status)) {
+      date.hidden = true;
+      dateCell.append(element('span', labels[t.data.status] + '，不再提醒', 'closed-date'));
+    }
     if (hint.text) dateCell.append(element('small', hint.text));
     for (const [control, key, label] of [[priority, 'priority', '优先级'], [status, 'status', '当前状态'], [date, 'follow_up', '下次关心时间']]) {
       control.setAttribute('aria-label', t.data.text + ' · ' + label);
@@ -475,6 +479,7 @@ function renderList(tasks) {
     const deliveryHint = dueHint(t.data);
     const dueCell = element('div', undefined, 'row-due follow-up-cell ' + deliveryHint.cls);
     renderDueEditor(dueCell, t.data.due, !state.writable || saving || !!quickPending, value => quickSave(t.id, {due: value}));
+    if (deliveryHint.text) dueCell.append(element('small', '待约定交付时间'));
     dueCell.title = '交付日期：明确约定的成果节点；不随关心时间自动变化';
     const owner = element('span', ownerName(t.data), 'row-owner');
     owner.title = ownerName(t.data);

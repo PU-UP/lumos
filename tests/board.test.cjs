@@ -785,3 +785,23 @@ test('saving from detail restores inline delivery controls after refresh', async
   await p.form.onsubmit({preventDefault(){}});
   assert.equal(p.get('task-list').children[1].children[6].children[0].disabled,false);
 });
+
+test('date cells show explanatory reminders only when needed, and explain closed tasks', async () => {
+  const p=await page(undefined,{tasks:[
+    {id:'normal',data:{text:'普通日期',context:'work-current',status:'doing',due:'2026-11-02',follow_up:'2026-11-02'},attention:[]},
+    {id:'pending',data:{text:'待安排',context:'work-current',status:'doing'},attention:[]},
+    {id:'closed',data:{text:'旧报告',context:'work-current',status:'cancelled'},attention:[]}
+  ]});
+  p.get('status-cancelled').onclick();
+  const rows=p.get('task-list').children;
+  const normal=rows.find(n=>n.dataset.id==='normal');
+  assert.equal(normal.children[5].children.length,1);
+  assert.equal(normal.children[6].children.length,2);
+  const pending=rows.find(n=>n.dataset.id==='pending');
+  assert.match(textOf(pending.children[5]),/待设置关心时间/);
+  assert.match(textOf(pending.children[6]),/待约定交付时间/);
+  const closed=rows.find(n=>n.dataset.id==='closed');
+  assert.equal(closed.children[5].children[0].hidden,true);
+  assert.match(textOf(closed.children[5]),/已取消，不再提醒/);
+  assert.doesNotMatch(textOf(closed.children[6]),/待约定/);
+});
