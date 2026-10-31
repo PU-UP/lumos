@@ -8,6 +8,7 @@ function element(tag, text, cls) {
   return node;
 }
 const ownerName = task => task.data.owner?.trim() || '王牧楠';
+const ownerNames = task => ownerName(task).split('、').map(name => name.trim()).filter(Boolean);
 function workspaceOf(context) {
   return state.contexts.find(c => c.id === context)?.data.workspace || (context === 'lumos-maintenance' ? 'lumos' : 'lingguang');
 }
@@ -56,8 +57,8 @@ function render() {
     + '未设关心时间的未结束任务也保留，避免遗漏。已取消不计，数量不代表工时。';
   const people = (state.people || []).filter(p => p.data.workspaces.includes(workspace)).map(p => p.data);
   const known = new Set(people.map(p => p.title));
-  for (const task of allTasks) if (!known.has(ownerName(task))) {
-    known.add(ownerName(task)); people.push({title:ownerName(task), team:'名册外负责人'});
+  for (const task of allTasks) for (const name of ownerNames(task)) if (!known.has(name)) {
+    known.add(name); people.push({title:name, team:'名册外负责人'});
   }
   const groups = new Map();
   for (const person of people) {
@@ -71,9 +72,9 @@ function render() {
     section.append(element('h3', team));
     const head = element('div', undefined, 'workload-row workload-head');
     head.append(element('span', '成员'), ...Object.values(statuses).map(s => element('span', s))); section.append(head);
-    section.append(workloadRow('div', '全组 · ' + members.length + ' 位', tasks.filter(t => members.some(p => p.title === ownerName(t)))));
+    section.append(workloadRow('div', '全组 · ' + members.length + ' 位', tasks.filter(t => members.some(p => ownerNames(t).includes(p.title)))));
     for (const person of members) {
-      const owned = tasks.filter(t => ownerName(t) === person.title), details = element('details', undefined, 'member');
+      const owned = tasks.filter(t => ownerNames(t).includes(person.title)), details = element('details', undefined, 'member');
       details.append(workloadRow('summary', person.title + (person.member_type === 'agent' ? '（Agent）' : ''), owned));
       const body = element('div', undefined, 'member-body');
       if (person.role) body.append(element('p', person.role, 'muted'));

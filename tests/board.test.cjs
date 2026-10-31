@@ -850,3 +850,35 @@ test('saved Mango owner filter follows the user rename', async () => {
   assert.equal(p.get('owner-filter').value,'王牧楠');
   assert.equal(p.get('task-list').children[1].dataset.id,'self');
 });
+
+test('joint owners match individual and team filters while editing retains the full ownership', async () => {
+  const task={id:'joint',data:{text:'共同任务',owner:'模拟甲、 模拟乙',status:'todo',context:'work-current'},attention:[]};
+  const p=await page(new Map(),{tasks:[task],people:['模拟甲','模拟乙'].map(title=>({data:{title,team:'规控组',workspaces:['lingguang']}}))});
+  for(const owner of ['模拟甲','模拟乙','@team:规控组']) assert.equal(p.world.matchesOwner(task,owner),true);
+  assert.equal(p.world.matchesOwner(task,'@other'),false);
+  assert.equal(p.world.matchesOwner(task,'模拟'),false);
+  assert.ok(!p.world.ownerOptions('lingguang','',true).some(o=>o.value==='@other'));
+  await p.world.openTask();
+  assert.ok(p.world.ownerOptions('lingguang',task.data.owner).flatMap(o=>o.children||[]).some(o=>o.value===task.data.owner));
+  assert.equal(p.world.matchesOwner({...task,data:{...task.data,owner:'模拟甲、名册外乙'}},'@other'),true);
+});
+
+test('personnel assigns joint tasks to both members but counts each team task once', async () => {
+  const nodes=new Map();
+  const get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id)};
+  get('workspace').value='lingguang'; get('days').value='7'; get('period-mode').value='future';
+  const data={today:'2026-10-31',contexts:[],people:['模拟甲','模拟乙'].map(title=>({data:{title,team:'规控组',workspaces:['lingguang']}})),tasks:[{id:'joint',data:{text:'共同任务',owner:'模拟甲、 模拟乙',status:'todo'}}]};
+  const world={document:{getElementById:get,createElement:()=>new Element()},fetch:async()=>response(data)};
+  vm.createContext(world);vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/people.js'),'utf8'),world);await tick();
+  const groups=get('people-list').children;
+  assert.equal(groups.length,1);
+  assert.equal(groups[0].children[2].children[1].textContent,'1');
+  for(const member of groups[0].children.slice(3)) {
+    assert.equal(member.children[0].children[1].textContent,'1');
+    assert.ok(textOf(member).includes('共同任务'));
+  }
+  data.tasks[0].data.owner='模拟甲、外部同事';await world.refresh();
+  const outside=get('people-list').children[1];
+  assert.equal(outside.children[0].textContent,'名册外负责人');
+  assert.equal(outside.children[3].children[0].children[0].textContent,'外部同事');
+});

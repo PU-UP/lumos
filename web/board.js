@@ -4,6 +4,7 @@ const workspaces = {lingguang: '灵光', lumos: 'Lumos 仓库维护'};
 const labels = {todo: '待处理', doing: '进行中', blocked: '受阻', done: '已完成', cancelled: '已取消'};
 const priorities = {low: '低', normal: '中', high: '高'};
 const ownerName = data => data.owner?.trim() || '王牧楠';
+const ownerNames = data => ownerName(data).split('、').map(name => name.trim()).filter(Boolean);
 let state, editing = null, baseline, pending = null;
 let dirty = false, discardArmed = false, saving = false, opening = false;
 let editMode = false, savedValues;
@@ -103,7 +104,7 @@ function ownerOptions(workspace, current = '', teams = false) {
     names.add(data.title);
   }
   const extra = [...new Set(['王牧楠', current, ...state.tasks.filter(t => workspaceOf(t.data.context) === workspace)
-    .map(t => ownerName(t.data))])].filter(name => name && !names.has(name));
+    .flatMap(t => teams ? ownerNames(t.data) : [ownerName(t.data)])])].filter(name => name && !names.has(name));
   if (extra.length) {
     const group = element('optgroup'); group.label = '其他负责人';
     group.append(...extra.sort((a, b) => a.localeCompare(b, 'zh-CN')).map(name => new Option(name, name)));
@@ -121,10 +122,10 @@ function ownerOptions(workspace, current = '', teams = false) {
 
 function matchesOwner(task, selection) {
   if (!selection) return true;
-  if (selection === '@other') return ownerName(task.data) !== '王牧楠' && !workspacePeople($('workspace').value).some(p => p.data.title === ownerName(task.data));
-  if (!selection.startsWith('@team:')) return ownerName(task.data) === selection;
+  if (selection === '@other') return ownerNames(task.data).some(name => name !== '王牧楠' && !workspacePeople($('workspace').value).some(p => p.data.title === name));
+  if (!selection.startsWith('@team:')) return ownerNames(task.data).includes(selection) || ownerName(task.data) === selection;
   return workspacePeople($('workspace').value).some(p => personTeam(p.data) === selection.slice(6)
-    && p.data.title === ownerName(task.data));
+    && ownerNames(task.data).includes(p.data.title));
 }
 
 function updateFilters() {
@@ -135,7 +136,7 @@ function updateFilters() {
     ...groups.map(name => new Option(name, ':' + name)));
   $('group-filter').value = selectedGroup === '-' || groups.includes(selectedGroup.slice(1)) ? selectedGroup : '';
   const selectedOwner = $('owner-filter').value;
-  const owners = [...workspacePeople(workspace).map(p => p.data.title), '王牧楠', ...state.tasks.filter(t => workspaceOf(t.data.context) === workspace).map(t => ownerName(t.data))];
+  const owners = [...workspacePeople(workspace).map(p => p.data.title), '王牧楠', ...state.tasks.filter(t => workspaceOf(t.data.context) === workspace).flatMap(t => ownerNames(t.data))];
   $('owner-filter').replaceChildren(new Option('全部负责人', ''), ...ownerOptions(workspace, '', true));
   $('owner-filter').value = (selectedOwner === '@other' || owners.includes(selectedOwner) || workspacePeople(workspace).some(p => '@team:' + personTeam(p.data) === selectedOwner)) ? selectedOwner : '';
   $('new').disabled = !state.writable || !workspaceContexts(workspace).length;
