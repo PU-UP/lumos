@@ -27,7 +27,7 @@ async function page(){
  return {world,get,listing};
 }
 function edit(p,text){p.get('note-body').value=text;p.get('note-body').events.input();}
-function saved(req){return {note:{id:req.id,kind:'note',data:{...req.changes,revision:req.expected_revision+1}}};}
+function saved(req){return {note:{id:req.id,kind:'note',data:{...req.changes,recording:req.operation==='finish'?'finished':req.operation==='edit'?'editing':req.recording || 'editing',revision:req.expected_revision+1}}};}
 test('in-flight input is saved separately without loss or duplicate concurrent writes',async()=>{
  const p=await page();edit(p,'first');let release;const requests=[];
  p.world.fetch=async(url,options)=>{
@@ -39,7 +39,7 @@ test('in-flight input is saved separately without loss or duplicate concurrent w
  const saving=p.world.save();await tick();edit(p,'first and second');release();assert.equal(await saving,true);
  assert.equal(requests.length,2);assert.equal(requests[1].changes.body,'first and second');
  assert.equal(requests[1].expected_revision,1);assert.equal(p.get('note-body').value,'first and second');
- assert.equal(p.get('save-state').textContent,'已保存');assert.equal(Object.keys(p.world.localStorage).length,0);
+ assert.equal(p.get('save-state').textContent,'记录中 · 已自动保存');assert.equal(Object.keys(p.world.localStorage).length,0);
 });
 test('unknown network result retries identical request before saving newer input',async()=>{
  const p=await page();edit(p,'original');let first,failed=false;const requests=[];
@@ -91,4 +91,65 @@ test('recovered draft waits for explicit save and then clears its recovery copy'
  let writes=0;p.world.fetch=async(url,opt)=>{if(!opt)return response(p.listing);writes++;return response(saved(JSON.parse(opt.body)));};
  assert.equal(writes,0);assert.equal(await p.world.save(),true);assert.equal(writes,1);
  assert.equal(Object.keys(p.world.localStorage).length,0);
+});
+
+test('finish saves once as a checkpoint, reopens read-only, and edit explicitly unlocks',async()=>{
+ const p=await page();edit(p,'完成正文');const requests=[];let latest;
+ p.world.fetch=async(url,opt)=>{
+  if(!opt)return response(url.startsWith('/api/note?')?{note:latest,history:[],tasks:[]}:p.listing);
+  const req=JSON.parse(opt.body);requests.push(req);latest=saved(req).note;return response({note:latest});
+ };
+ await p.get('preview-note').onclick();
+ assert.deepEqual(requests.map(r=>r.operation),['save','finish']);
+ assert.equal(p.get('note-body').disabled,true);
+ assert.equal(p.get('note-preview').hidden,false);
+ await p.world.openNote(latest.id);
+ assert.equal(p.get('note-body').disabled,true);
+ assert.equal(p.get('preview-note').textContent,'编辑');
+ await p.get('preview-note').onclick();
+ assert.equal(requests.at(-1).operation,'edit');
+ assert.equal(p.get('note-body').disabled,false);
+ assert.equal(p.get('note-preview').hidden,true);
+});
+test('failed finish preserves text and does not enter reading mode',async()=>{
+ const p=await page();edit(p,'保留我');
+ p.world.fetch=async(url,opt)=>{
+  if(!opt)return response(p.listing);
+  const req=JSON.parse(opt.body);
+  if(req.operation==='finish')throw new Error('offline');
+  return response(saved(req));
+ };
+ await p.get('preview-note').onclick();
+ assert.equal(p.get('note-body').value,'保留我');
+ assert.equal(p.get('note-body').disabled,false);
+ assert.equal(p.get('note-preview').hidden,true);
+});
+
+test('note list shows Shanghai modification date and time, archive button stays concise',async()=>{
+ const p=await page();
+ p.listing.notes=[{id:'fixture-note',data:{title:'笔记',date:'2026-10-27',updated_at:'2026-10-30T03:14:00Z',recording:'finished',status:'active'}}];
+ await p.world.refreshList();
+ const label=p.get('note-list').children[1].children[0].textContent;
+ assert.match(label,/2026\/10\/30/);assert.match(label,/11:14/);
+ assert.equal(p.get('archive-note').textContent,'归档');
+});
+
+test('retrying finish or edit keeps the original intent after a lost response',async()=>{
+ for(const operation of ['finish','edit']) for(const retryWithSave of [false,true]) {
+  const p=await page();edit(p,'正文');let fail=false;const requests=[];
+  p.world.fetch=async(url,opt)=>{
+   if(!opt)return response(p.listing);
+   const req=JSON.parse(opt.body);requests.push(req);
+   if(fail && req.operation===operation){fail=false;throw new Error('lost response');}
+   return response(saved(req));
+  };
+  if(operation==='edit')await p.get('preview-note').onclick();
+  fail=true;await p.get('preview-note').onclick();
+  const failed=requests.at(-1);
+  if(retryWithSave) await p.get('save-note').onclick();
+  else await p.get('preview-note').onclick();
+  assert.deepEqual(requests.at(-1),failed);
+  assert.equal(p.get('note-body').disabled,operation==='finish');
+  assert.equal(p.get('note-preview').hidden,operation!=='finish');
+ }
 });

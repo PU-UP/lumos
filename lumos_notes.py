@@ -23,6 +23,10 @@ def validate_note(data):
     require(data['status'] in {'active', 'archived'}, 'Invalid note status')
     require(data['status'] != 'archived' or data['archive_reason'].strip(), 'Archive reason required')
     require(type(data.get('revision')) is int and data['revision'] > 0, 'Invalid note revision')
+    require(data.get('recording', 'finished') in {'editing', 'finished'}, 'Invalid recording state')
+    require(type(data.get('checkpoint', True)) is bool, 'Invalid checkpoint')
+    require(data['status'] != 'archived' or data.get('recording', 'finished') == 'finished',
+            '归档笔记不能处于编辑中。')
     source = data.get('source', {})
     require(isinstance(source, dict) and source.get('type') in {'user', 'agent', 'source', 'user_report'}
             and isinstance(source.get('ref'), str) and 0 < len(source['ref']) <= 2000, 'Note needs provenance')
@@ -79,20 +83,23 @@ def note_detail(store, ident, revision=None):
             note = note_version(db, ident, revision)
             history = [{'at': at, 'data': json.loads(raw)['data']} for at, raw in db.execute(
                 'SELECT b.at,h.after FROM history h JOIN batches b ON b.id=h.batch WHERE h.node=? ORDER BY b.seq DESC', (ident,))]
+            history = [h for h in history if h['data'].get('checkpoint', True)]
             tasks = [{'id': n['id'], 'title': n['data']['text']} for n in store.nodes(db).values()
                      if n['kind'] == 'action' and any(r['id'] == ident for r in n['data'].get('note_refs', []))]
         return {'note': note, 'history': history, 'tasks': tasks}
 
 
 def save_note(store, request):
-    require(isinstance(request, dict) and set(request) <= {'request_id', 'id', 'expected_revision', 'changes', 'source'}, 'Unknown note request field')
+    require(isinstance(request, dict) and set(request) <= {'request_id', 'id', 'expected_revision', 'changes', 'source', 'operation'}, 'Unknown note request field')
+    operation = request.get('operation', 'save')
+    require(operation in {'save', 'edit', 'finish'}, 'Invalid note operation')
     key = request.get('request_id')
     require(isinstance(key, str) and re.fullmatch(r'[a-f0-9]{32}', key), 'Invalid request_id')
     ident = request.get('id')
     require(isinstance(ident, str) and re.fullmatch(r'note-[a-f0-9]{32}', ident), 'Invalid note ID')
     require(type(request.get('expected_revision')) is int and request['expected_revision'] >= 0, 'expected_revision required')
     changes = request.get('changes')
-    require(isinstance(changes, dict) and changes and set(changes) <= FIELDS, 'Invalid note fields')
+    require(isinstance(changes, dict) and (changes or operation != 'save') and set(changes) <= FIELDS, 'Invalid note fields')
     reason = 'note:' + key + ':' + digest(json.dumps(request, ensure_ascii=False, sort_keys=True).encode())
     with process_lock(store.root):
         store.writable()
@@ -112,10 +119,21 @@ def save_note(store, request):
         data = dict(old['data']) if old else {'title': '未命名笔记', 'body': '', 'workspace': 'lingguang',
                 'date': datetime.now(timezone(timedelta(hours=8))).date().isoformat(),
                 'status': 'active', 'archive_reason': '', 'created_at': now()}
+        recording = data.get('recording', 'finished' if old else 'editing')
+        content_changed = any(k in changes and changes[k] != data.get(k) for k in ('title', 'body', 'date', 'workspace'))
+        require(operation == 'edit' or recording == 'editing' or not content_changed,
+                '请先点击编辑，再修改已结束的笔记。')
+        require(operation != 'finish' or recording == 'editing', '记录已经结束。')
+        require(operation != 'edit' or data['status'] != 'archived', '请先恢复已归档笔记。')
+        require(changes.get('status') != 'archived' or 'recording' not in data or recording == 'finished',
+                '请先结束记录，再归档已处理的笔记。')
         data.update(changes)
         if isinstance(data['title'], str):
             data['title'] = data['title'].strip() or '未命名笔记'
         data.update(revision=request['expected_revision'] + 1, updated_at=now(), source=request.get('source'))
+        # Keep audit revisions immutable for pinned task sources; only finishes enter reading history.
+        data.update(recording='finished' if operation == 'finish' else 'editing' if operation == 'edit' else recording,
+                    checkpoint=operation == 'finish')
         validate_note(data)
         node = {'id': ident, 'kind': 'note', 'data': data}
         batch_request = {'reason': reason, 'updates': [node]}
