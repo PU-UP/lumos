@@ -41,7 +41,7 @@ async function page(storage = new Map(), initialBoard = {}) {
   Object.assign(board, initialBoard);
   const timers = new Map();
   let nextTimer = 0;
-  const world = {setTimeout(fn, ms) {timers.set(++nextTimer, {fn, ms}); return nextTimer;},
+  const world = {ResizeObserver: class { observe() {} disconnect() {} }, setTimeout(fn, ms) {timers.set(++nextTimer, {fn, ms}); return nextTimer;},
     clearTimeout(id) {timers.delete(id);}, document: {getElementById: get, createElement: () => new Element()},
     localStorage: {getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value)},
     window: {addEventListener() {}}, URLSearchParams, Option: function(text, value) { this.text = text; this.value = value; },
@@ -1022,4 +1022,28 @@ test('rename dialog rejects an existing name and a changed task list before writ
   assert.match(p.get('rename-error').textContent, /任务已更新/);
   assert.equal(p.get('rename-dialog').open, true);
   assert.equal(writes, 0);
+});
+
+test('delivery timeline groups by due date and project, keeps undated tasks and opens the canonical task', async () => {
+  const tasks = ['甲','乙','丙','丁'].map((text,i) => ({id:'fixture-'+i, short_id:'T-00'+(i+1),
+    data:{text,group:'项目甲',context:'work-current',status:'doing',due:['2026-11-16','2026-11-16','','long_term'][i],
+      follow_up:'2099-01-01'},attention:[]}));
+  const p = await page(undefined,{tasks});
+  p.get('window-days').value='0'; p.get('window-days').oninput();
+  p.get('view-timeline').onclick();
+  const view = p.get('delivery-timeline');
+  assert.equal(view.hidden,false);
+  assert.match(textOf(view),/2026-11-16 当周/);
+  assert.match(textOf(view),/未约定交付日期 · 1/);
+  assert.match(textOf(view),/长期任务 · 1/);
+  const row = view.children[0].children[1].children[0].children[1].children[0];
+  assert.equal(row.children[0].textContent,'项目甲');
+  const monday = row.children[1];
+  assert.deepEqual(Array.from(monday.children,n=>n.dataset.id),['fixture-0','fixture-1']);
+  assert.match(monday.children[1].title,/T-002 · 乙/);
+  let requested;
+  p.world.fetch = async url => {requested=url; return response({seq:3,task:tasks[1],history:[],related:[],documents:{}});};
+  await monday.children[1].onclick();
+  assert.equal(requested,'/api/task?id=fixture-1');
+  assert.match(p.get('task-detail-label').textContent,/T-002/);
 });

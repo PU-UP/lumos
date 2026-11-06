@@ -50,7 +50,7 @@ function restorePreferences() {
     }
     if (['text', 'priority', 'group', 'owner', 'status', 'follow_up', 'due'].includes(p.sortKey)) sortKey = p.sortKey;
     if (p.sortDirection === -1 || p.sortDirection === 1) sortDirection = p.sortDirection;
-    if (['list', 'board', 'schedule'].includes(p.taskView)) taskView = p.taskView;
+    if (['list', 'board', 'schedule', 'timeline'].includes(p.taskView)) taskView = p.taskView;
   } catch {
     $('preferences-message').textContent = '未能读取上次的筛选设置，已使用默认设置。';
   }
@@ -196,10 +196,10 @@ function filtered() {
   const until = end.toISOString().slice(0, 10);
   return state.tasks.filter(t => workspaceOf(t.data.context) === $('workspace').value
     && selectedStatuses.has(t.data.status)
-    && (windowDays === null || (!isClosed(t.data) && (!t.data.follow_up || t.data.follow_up <= until)))
+    && (taskView === 'timeline' || windowDays === null || (!isClosed(t.data) && (!t.data.follow_up || t.data.follow_up <= until)))
     && (!group || (group === '-' ? !t.data.group : t.data.group === group.slice(1)))
     && matchesOwner(t, $('owner-filter').value)
-    && [t.data.text, t.data.details, t.data.next_step].join(' ').toLowerCase().includes(query));
+    && [t.short_id, t.data.text, t.data.details, t.data.next_step].join(' ').toLowerCase().includes(query));
 }
 
 function columnTasks(tasks, status) {
@@ -272,12 +272,15 @@ function render() {
     $('status-' + status).setAttribute('aria-label', labels[status]);
     $('status-' + status).textContent = (selected ? '✓ ' : '') + labels[status];
   }
-  for (const name of ['list', 'board', 'schedule']) $('view-' + name).setAttribute('aria-pressed', String(taskView === name));
+  for (const name of ['list', 'board', 'schedule', 'timeline']) $('view-' + name).setAttribute('aria-pressed', String(taskView === name));
   $('view-hint').textContent = taskView === 'list' ? '点击标题查看详情；可在列表中修改负责人、项目标签、优先级、状态和日期。'
+    : taskView === 'timeline' ? '按原交付日期排列。悬停查看全名，点击打开任务详情。'
     : taskView === 'schedule' ? '近期安排按下次关心时间分组，沿用上方全部筛选；点击任务查看详情。'
     : '看板沿用上方筛选。拖动卡片切换状态或排序；也可聚焦卡片后按 Alt + 方向键。';
   renderList(tasks);
   renderSchedule(tasks);
+  $('follow-up-window').hidden = taskView === 'timeline';
+  renderTimeline(tasks);
   $('board').hidden = taskView !== 'board';
   $('board').replaceChildren();
   for (const status of ['todo', 'doing', 'blocked', 'done']) {
@@ -402,6 +405,97 @@ function renderSchedule(tasks) {
   if (!list.children.length) list.append(element('p', '当前筛选下暂无任务，可调整状态、负责人或时间范围。', 'empty'));
 }
 
+// Measure the full title even while the compact number is visible.
+const timelineFit = new ResizeObserver(entries => {
+  for (const {target} of entries) target.parentElement.dataset.compact = String(target.scrollWidth > target.clientWidth);
+});
+
+function timelineTask(task, dated) {
+  const button = element('button', undefined, dated ? 'delivery-node' : 'delivery-unscheduled');
+  button.type = 'button';
+  button.dataset.id = task.id;
+  button.title = [task.short_id, task.data.text, ownerName(task.data), dueLabel(task.data.due)].join(' · ');
+  button.setAttribute('aria-label', button.title);
+  button.onclick = () => openTask(task.id);
+  const name = element('span', task.data.text, 'delivery-name');
+  button.append(name, element('span', task.short_id, 'delivery-id'));
+  if (dated) timelineFit.observe(name);
+  return button;
+}
+
+function renderTimeline(tasks) {
+  const view = $('delivery-timeline');
+  timelineFit.disconnect();
+  view.replaceChildren();
+  view.hidden = taskView !== 'timeline';
+  if (view.hidden) return;
+  const weeks = new Map(), undated = [], ongoing = [];
+  for (const task of tasks) {
+    const due = task.data.due;
+    if (!due || due === 'long_term') {
+      (due ? ongoing : undated).push(task);
+      continue;
+    }
+    const date = new Date(due + 'T00:00:00Z');
+    const day = (date.getUTCDay() + 6) % 7;
+    date.setUTCDate(date.getUTCDate() - day);
+    const monday = date.toISOString().slice(0, 10);
+    if (!weeks.has(monday)) weeks.set(monday, new Map());
+    const groups = weeks.get(monday), group = task.data.group || '';
+    if (!groups.has(group)) groups.set(group, Array.from({length: 7}, () => []));
+    groups.get(group)[day].push(task);
+  }
+  for (const monday of [...weeks.keys()].sort()) {
+    const groups = weeks.get(monday);
+    const week = element('section', undefined, 'delivery-week');
+    const heading = element('h3', monday + ' 当周');
+    const scroll = element('div', undefined, 'delivery-scroll');
+    const table = element('table'), head = element('thead'), header = element('tr');
+    table.setAttribute('aria-label', monday + ' 当周交付');
+    header.append(element('th', '项目标签'));
+    const date = new Date(monday + 'T00:00:00Z');
+    for (const weekday of '一二三四五六日') {
+      const col = element('th', '周' + weekday);
+      col.append(element('small', (date.getUTCMonth()+1) + '/' + date.getUTCDate()));
+      header.append(col);
+      date.setUTCDate(date.getUTCDate()+1);
+    }
+    head.append(header);
+    const body = element('tbody');
+    for (const group of [...groups.keys()].sort((a,b) => a.localeCompare(b,'zh-CN'))) {
+      const row = element('tr'), days = groups.get(group);
+      const label = element('th', group || '未分组');
+      label.scope = 'row';
+      row.append(label);
+      for (let day = 0; day < 7;) {
+        const cell = element('td'), items = days[day];
+        let span = 1;
+        // A lone milestone can use empty space to its right for its title.
+        if (items.length === 1) {
+          while (day + span < 7 && !days[day + span].length) span++;
+        }
+        cell.colSpan = span;
+        for (const task of items) cell.append(timelineTask(task, true));
+        row.append(cell);
+        day += span;
+      }
+      body.append(row);
+    }
+    table.append(head, body);
+    scroll.append(table);
+    week.append(heading, scroll);
+    view.append(week);
+  }
+  for (const [label, items] of [['未约定交付日期', undated], ['长期任务', ongoing]]) {
+    if (!items.length) continue;
+    const details = element('details', undefined, 'delivery-other');
+    details.append(element('summary', label + ' · ' + items.length));
+    for (const task of items) details.append(timelineTask(task, false));
+    view.append(details);
+  }
+  if (!tasks.length) view.append(element('p', '当前筛选下没有任务。', 'empty'));
+}
+
 function dueLabel(value) { return value === 'long_term' ? '长期' : value || '未约定'; }
 
 function taskDate(data) {
@@ -510,6 +604,7 @@ function renderList(tasks) {
     const row = element('div', undefined, 'task-row status-' + t.data.status);
     row.dataset.id = t.id;
     const title = element('button', t.data.text, 'row-title');
+    if (t.short_id) title.append(element('small', t.short_id, 'task-number'));
     title.type = 'button';
     title.title = [t.data.next_step, ...t.attention, t.data.due ? '交付 ' + dueLabel(t.data.due) : ''].filter(Boolean).join('\n');
     title.onclick = () => openTask(t.id);
@@ -838,6 +933,7 @@ async function openTask(id = null) {
   opening = true;
   try {
     const detail = id ? await api('/api/task?id=' + encodeURIComponent(id)) : null;
+    $('task-detail-label').textContent = detail?.task.short_id ? '任务详情 · ' + detail.task.short_id : '任务详情';
     editing = id;
     baseline = detail ? detail.seq : state.seq;
     pending = null;
@@ -980,7 +1076,7 @@ $('refresh').onclick = async () => {
   }
 };
 $('quick-retry').onclick = () => quickPending && quickSave(quickPending.id, quickPending.changes);
-for (const view of ['list', 'board', 'schedule']) $('view-' + view).onclick = () => {
+for (const view of ['list', 'board', 'schedule', 'timeline']) $('view-' + view).onclick = () => {
   taskView = view;
   render();
 };

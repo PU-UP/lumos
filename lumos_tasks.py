@@ -81,10 +81,19 @@ def board_key(node):
     return (node["data"].get("board_order", float("inf")), node["id"])
 
 
+def task_numbers(db):
+    # Creation history is append-only. Include archived tasks so numbers never shift.
+    rows = db.execute("SELECT h.node FROM history h JOIN batches b ON b.id=h.batch "
+                      "JOIN nodes n ON n.id=h.node WHERE n.kind='action' AND h.before='null' "
+                      "ORDER BY b.seq,h.node")
+    return {ident: f"T-{i:03d}" for i, (ident,) in enumerate(rows, 1)}
+
+
 def list_tasks(store, today=None):
     today = date.fromisoformat(today) if today else datetime.now(timezone(timedelta(hours=8))).date()
     with process_lock(store.root):
         with store.db() as db:
+            numbers = task_numbers(db)
             nodes = store.nodes(db, ("action", "context", "person", "document"))
             seq = store.seq(db)
         contexts = [{**n, "data": {**n["data"], "workspace": context_workspace(n)}}
@@ -94,7 +103,7 @@ def list_tasks(store, today=None):
         tasks = []
         for node in nodes.values():
             if node["kind"] == "action" and node["data"]["context"] in ids:
-                tasks.append({**node, "data": task_defaults(node["data"]),
+                tasks.append({**node, "short_id": numbers[node["id"]], "data": task_defaults(node["data"]),
                               "attention": attention(node["data"], today)})
         tasks.sort(key=lambda n: (not bool(n["attention"]),
                                  "已逾期" not in n["attention"],
@@ -113,6 +122,10 @@ def task_detail(store, ident):
     with process_lock(store.root):
         with store.db() as db:
             nodes, seq = store.nodes(db), store.seq(db)
+            numbers = task_numbers(db)
+            if ident not in nodes:
+                short_id = ident.removeprefix('short:').upper()
+                ident = next((key for key, number in numbers.items() if number == short_id), ident)
             task = nodes.get(ident)
             require(task and task["kind"] == "action", "Task not found")
             history = [{"at": at, "reason": reason, "before": json.loads(before),
@@ -140,7 +153,7 @@ def task_detail(store, ident):
                     "relation": "direct" if node["id"] in related_ids else "context",
                     "context_title": nodes[data["context"]]["data"]["title"],
                     "context_status": nodes[data["context"]]["data"].get("status", "active")}
-        return {"seq": seq, "task": {**task, "data": task_defaults(task["data"])}, "history": history, "links": links,
+        return {"seq": seq, "task": {**task, "short_id": numbers[ident], "data": task_defaults(task["data"])}, "history": history, "links": links,
                 "related": [nodes[i] for i in sorted(related_ids) if nodes[i]["kind"] != "note"],
                 "note_sources": note_sources,
                 "documents": documents, "document_info": document_info}

@@ -50,3 +50,25 @@ main{padding-top:18px}.intro{align-items:center;margin-bottom:24px}h1{font-size:
 #rename-error:empty {display:none}
 .rename-actions {display:flex;justify-content:flex-end;gap:8px;margin-top:24px}
 @media(max-width:580px){#rename-group {align-self:stretch}}
+
+.task-number {margin-left:.6em;font:11px Consolas,monospace;color:var(--muted);white-space:nowrap}
+.delivery-week {margin:20px 0 24px}
+.delivery-week h3 {margin:0 0 9px;font-size:15px;font-variant-numeric:tabular-nums}
+.delivery-scroll {overflow-x:auto;background:white;border:1px solid var(--line);border-radius:8px}
+.delivery-week table {width:100%;min-width:720px;table-layout:fixed;border-collapse:collapse}
+.delivery-week th,.delivery-week td {padding:8px;vertical-align:top;text-align:left;border-bottom:1px solid var(--line)}
+.delivery-week thead th {background:#edf3f4;font-size:12px;font-weight:500;color:var(--muted)}
+.delivery-week thead th:first-child {width:17%}
+.delivery-week th small {display:block;color:var(--ink);font-size:13px;font-variant-numeric:tabular-nums}
+.delivery-week tbody th {font-size:13px;font-weight:600;overflow-wrap:anywhere}
+.delivery-week td {border-left:1px solid var(--line)}
+.delivery-week tbody tr:last-child>* {border-bottom:0}
+.delivery-node {position:relative;display:block;width:max-content;max-width:100%;min-width:6ch;margin:0 0 3px;padding:4px 7px;border:0;border-left:3px solid var(--accent);border-radius:3px;background:var(--soft);color:#14555b;text-align:left;font-size:13px;line-height:1.5}
+.delivery-node .delivery-name {display:block;overflow:hidden;white-space:nowrap}
+.delivery-node .delivery-id {display:none;font:12px/1.6 Consolas,monospace}
+.delivery-node[data-compact=true] .delivery-name {visibility:hidden}
+.delivery-node[data-compact=true] .delivery-id {display:block;position:absolute;left:7px;top:4px}
+.delivery-other {margin:10px 0;color:var(--muted)}
+.delivery-other summary {cursor:pointer;font-size:14px}
+.delivery-unscheduled {margin:8px 6px 0 0;font-size:13px}
+.delivery-unscheduled .delivery-id {margin-left:6px;color:var(--muted)}

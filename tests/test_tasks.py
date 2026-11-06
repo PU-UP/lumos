@@ -39,6 +39,31 @@ class TaskTest(BaseStoreCase):
         self.assertTrue(any(n["id"] == ident for n in list_tasks(self.store)["tasks"]))
         self.assertIn("plan", task["documents"])
 
+    def test_short_ids_survive_edits_new_tasks_and_restore(self):
+        original = task_detail(self.store, "talk")["task"]
+        self.assertEqual(original["short_id"], "T-001")
+        ident = save_task(self.store, self.request())["id"]
+        update = self.request(text="改名", group="新项目")
+        save_task(self.store, {**update, "id": ident})
+        self.assertEqual(task_detail(self.store, "t-002")["task"]["id"], ident)
+        snapshot, target = self.area / "backup", self.area / "restored"
+        backup(self.store, snapshot, True)
+        restore(snapshot, target, sandbox=True)
+        numbers = {t["id"]: t["short_id"] for t in list_tasks(lumos.Store(target))["tasks"]}
+        self.assertEqual(numbers, {"talk": "T-001", ident: "T-002"})
+
+    def test_short_id_lookup_with_an_archived_task_and_colliding_internal_id(self):
+        ctx = next(n for n in self.store.context("mapping")["nodes"] if n["id"] == "mapping")
+        ctx["data"]["status"] = "archived"
+        other = {"id": "T-001", "kind": "action", "data": {
+            **task_detail(self.store, "talk")["task"]["data"], "context": "prep"}}
+        batch = self.store.begin({"reason": "synthetic archive and new task", "updates": [ctx, other]}, True)
+        self.store.commit(batch["batch"], True)
+        visible = list_tasks(self.store)["tasks"]
+        self.assertEqual([(t["id"], t["short_id"]) for t in visible], [("T-001", "T-002")])
+        self.assertEqual(task_detail(self.store, "T-001")["task"]["id"], "T-001")
+        self.assertEqual(task_detail(self.store, "short:T-001")["task"]["id"], "talk")
+
     def test_board_checks_working_drafts_and_only_reads_needed_versions(self):
         with self.store.db() as db:
             original = self.store.nodes(db)["plan"]["data"]["version"]
