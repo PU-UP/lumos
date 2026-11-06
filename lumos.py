@@ -183,9 +183,12 @@ class Store:
     def seq(self, db):
         return db.execute("SELECT coalesce(max(seq),0) FROM batches").fetchone()[0]
 
-    def nodes(self, db):
+    def nodes(self, db, kinds=()):
+        query = "SELECT id,kind,data FROM nodes"
+        if kinds:
+            query += " WHERE kind IN (" + ",".join("?" for _ in kinds) + ")"
         return {i: {"id": i, "kind": k, "data": json.loads(d)}
-                for i, k, d in db.execute("SELECT id,kind,data FROM nodes ORDER BY id")}
+                for i, k, d in db.execute(query + " ORDER BY id", kinds)}
 
     def status(self):
         with self.db() as db:
@@ -199,10 +202,10 @@ class Store:
         require(set(request) <= {"reason", "updates", "documents", "links", "unlink", "reviews"},
                 "Unknown batch fields")
         with process_lock(self.root):
+            self.writable()
             return self._begin(request)
 
     def _begin(self, request):
-        self.writable()
         self.idle()
         with self.db() as db:
             seq, nodes = self.seq(db), self.nodes(db)
@@ -343,18 +346,22 @@ class Store:
     def commit(self, ident, quiet=False, hook=None):
         require(quiet, "Pause manual editing/autosave; pass --quiet-files")
         with process_lock(self.root):
+            self.writable()
             return self._commit(ident, hook)
 
-    def _commit(self, ident, hook=None):
-        self.writable()
+    def _commit(self, ident, hook=None, *, task_request=None):
         folder = self.batch(ident)
         require(read_json(self.root / "session.json")["batch"] == ident, "Different edit session")
         with self.db() as db:
             committed = db.execute("SELECT manifest FROM batches WHERE id=?", (ident,)).fetchone()
         if committed:
-            return self._refresh(json.loads(committed[0]), hook)
+            manifest = json.loads(committed[0])
+            self.check_updates(manifest["request"].get("updates", []))
+            return self._refresh(manifest, hook)
         manifest = read_json(folder / "batch.json")
         request = manifest["request"]
+        if task_request is not None:
+            require(not manifest["documents"] and request == task_request, "Task batch changed before commit")
         with self.db() as db:
             require(self.seq(db) == manifest["base_seq"], "Stale database baseline")
             old = self.nodes(db)
@@ -417,7 +424,18 @@ class Store:
             db.executemany("INSERT OR IGNORE INTO links VALUES(?,?,?)", sorted(links))
         if hook:
             hook("transaction")
+        if task_request is not None:
+            self.check_updates(task_request["updates"])
+            (self.root / "session.json").unlink()
+            return
         return self._refresh(manifest, hook)
+
+    def check_updates(self, updates):
+        with self.db() as db:
+            for node in updates:
+                row = db.execute("SELECT kind,data FROM nodes WHERE id=?", (node["id"],)).fetchone()
+                require(row and row[0] == node["kind"] and json.loads(row[1]) == node["data"],
+                        f"Record readback failed: {node['id']}")
 
     def _refresh(self, manifest, hook=None):
         folder = self.batch(manifest["id"])
@@ -452,8 +470,17 @@ class Store:
             return {"batch": ident, "committed": committed, "candidates_retained": True,
                     "note": "Does not undo committed records; merge in a new batch"}
 
-    def verify(self):
+    def working_drafts(self, nodes):
         drafts = []
+        for node in nodes.values():
+            if node["kind"] == "document":
+                data = node["data"]
+                path = safe_path(self.root, data["path"])
+                if not path.is_file() or digest(path.read_bytes()) != data["sha256"]:
+                    drafts.append(data["path"])
+        return drafts
+
+    def verify(self):
         with self.db() as db:
             require(db.execute("PRAGMA integrity_check").fetchall() == [("ok",)], "Database integrity failure")
             require(not db.execute("PRAGMA foreign_key_check").fetchall(), "Broken database references")
@@ -473,10 +500,8 @@ class Store:
                 version = safe_path(self.root, data["version"])
                 require(version.is_file() and digest(version.read_bytes()) == data["sha256"],
                         f"Missing/damaged current version: {node['id']}")
-                path = safe_path(self.root, data["path"])
                 registered.add(data["path"])
-                if not path.is_file() or digest(path.read_bytes()) != data["sha256"]:
-                    drafts.append(data["path"])
+        drafts = self.working_drafts(nodes)
         unregistered = []
         for directory in ("work", "raw", "output"):
             for path in (self.root / directory).rglob("*"):

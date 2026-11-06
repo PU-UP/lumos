@@ -84,9 +84,9 @@ def board_key(node):
 def list_tasks(store, today=None):
     today = date.fromisoformat(today) if today else datetime.now(timezone(timedelta(hours=8))).date()
     with process_lock(store.root):
-        integrity = store.verify()
         with store.db() as db:
-            nodes, seq = store.nodes(db), store.seq(db)
+            nodes = store.nodes(db, ("action", "context", "person", "document"))
+            seq = store.seq(db)
         contexts = [{**n, "data": {**n["data"], "workspace": context_workspace(n)}}
                     for n in nodes.values() if n["kind"] == "context"
                     and n["data"].get("status", "active") in {"active", "waiting"}]
@@ -105,13 +105,12 @@ def list_tasks(store, today=None):
         return {"seq": seq, "today": today.isoformat(), "contexts": contexts, "tasks": tasks, "people": list_people(nodes, ids), "board_order": board_order,
                 "attention": [n["id"] for n in tasks if n["attention"]],
                 "writable": ctl["mode"] in {"active", "trial", "sandbox"}
-                and ctl["bound_root"] == str(store.root) and not store.status()["session"],
-                "integrity": integrity}
+                and ctl["bound_root"] == str(store.root) and not (store.root / "session.json").exists(),
+                "integrity": {"drafts_or_missing_working_copies": store.working_drafts(nodes)}}
 
 
 def task_detail(store, ident):
     with process_lock(store.root):
-        store.verify()
         with store.db() as db:
             nodes, seq = store.nodes(db), store.seq(db)
             task = nodes.get(ident)
@@ -133,7 +132,9 @@ def task_detail(store, ident):
             data = node["data"]
             if (node["kind"] == "document" and data["path"].endswith(".md")
                     and (data["context"] == task["data"]["context"] or node["id"] in related_ids)):
-                documents[node["id"]] = safe_path(store.root, data["version"]).read_text(encoding="utf-8")
+                content = safe_path(store.root, data["version"]).read_bytes()
+                require(digest(content) == data["sha256"], f"Damaged current version: {node['id']}")
+                documents[node["id"]] = content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
                 document_info[node["id"]] = {
                     "title": data["title"], "context": data["context"],
                     "relation": "direct" if node["id"] in related_ids else "context",
@@ -165,7 +166,6 @@ def save_task(store, request):
     with process_lock(store.root):
         store.writable()
         store.idle()
-        store.verify()
         with store.db() as db:
             replay = db.execute("SELECT reason FROM batches WHERE reason LIKE ?", ("task:" + key + ":%",)).fetchone()
             if replay:
@@ -239,6 +239,6 @@ def save_task(store, request):
             links = set(db.execute("SELECT src,dst,relation FROM links"))
         store.validate(nodes, {**nodes, **{n["id"]: n for n in batch_request["updates"]}}, batch_request, links, links)
         batch = store._begin(batch_request)
-        store._commit(batch["batch"])
+        store._commit(batch["batch"], task_request=batch_request)
         with store.db() as db:
             return {"id": ident, "seq": store.seq(db), "replayed": False}

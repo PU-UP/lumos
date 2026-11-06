@@ -39,6 +39,39 @@ class TaskTest(BaseStoreCase):
         self.assertTrue(any(n["id"] == ident for n in list_tasks(self.store)["tasks"]))
         self.assertIn("plan", task["documents"])
 
+    def test_board_checks_working_drafts_and_only_reads_needed_versions(self):
+        with self.store.db() as db:
+            original = self.store.nodes(db)["plan"]["data"]["version"]
+        batch = self.edit()
+        Path(batch["candidates"]["plan"]).write_text("current plan", encoding="utf-8")
+        self.store.commit(batch["batch"], True)
+        (self.root / original).unlink()
+        (self.root / "work/mapping.md").write_text("local draft", encoding="utf-8")
+        result = save_task(self.store, {**self.request(), "id": "talk", "changes": {"due": "2026-11-10"}})
+        board = list_tasks(self.store)
+        self.assertEqual(board["seq"], result["seq"])
+        self.assertEqual(board["integrity"]["drafts_or_missing_working_copies"], ["work/mapping.md"])
+        detail = task_detail(self.store, "talk")
+        self.assertEqual(detail["task"]["data"]["due"], "2026-11-10")
+        self.assertEqual(detail["documents"]["plan"], "current plan")
+        with self.assertRaisesRegex(lumos.Error, "Missing/damaged version"):
+            self.store.verify()
+        with self.store.db() as db:
+            current = self.store.nodes(db)["plan"]["data"]["version"]
+        (self.root / current).write_bytes(b"damaged")
+        with self.assertRaisesRegex(lumos.Error, "Damaged current version"):
+            task_detail(self.store, "talk")
+
+    def test_failed_task_readback_keeps_recovery_session(self):
+        with self.store.db(True) as db:
+            db.execute("CREATE TRIGGER drop_update BEFORE UPDATE ON nodes BEGIN SELECT RAISE(IGNORE); END")
+        with self.assertRaisesRegex(lumos.Error, "Record readback failed"):
+            save_task(self.store, {**self.request(), "id": "talk", "changes": {"due": "2026-11-10"}})
+        batch = self.store.status()["session"]["batch"]
+        with self.assertRaisesRegex(lumos.Error, "Record readback failed"):
+            self.store.commit(batch, True)
+        self.assertTrue(self.store.status()["session"])
+
     def test_board_moves_are_atomic_persistent_and_replayable(self):
         a = save_task(self.store, self.request(text="A"))["id"]
         b = save_task(self.store, self.request(text="B"))["id"]
