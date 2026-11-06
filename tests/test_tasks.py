@@ -151,6 +151,30 @@ class TaskTest(BaseStoreCase):
             self.store.commit(batch["batch"], True)
         self.store.abandon(batch["batch"])
 
+    def test_rename_group_is_atomic_scoped_and_replayable(self):
+        ctx = next(n for n in self.store.context("prep")["nodes"] if n["id"] == "prep")
+        ctx["data"]["workspace"] = "lumos"
+        batch = self.store.begin({"reason": "synthetic workspace", "updates": [ctx]}, True)
+        self.store.commit(batch["batch"], True)
+        other = save_task(self.store, self.request(context="prep", group="旧标签"))["id"]
+        first = save_task(self.store, self.request(group="旧标签"))["id"]
+        second = save_task(self.store, self.request(group="旧标签", status="done", owner="测试人"))["id"]
+        save_task(self.store, self.request(group="已有"))
+        before = task_detail(self.store, second)["task"]["data"]
+        request = {**self.request(), "id": first, "rename_group": "旧标签", "changes": {"group": "已有"}}
+        with self.assertRaisesRegex(lumos.Error, "已存在"):
+            save_task(self.store, request)
+        request["changes"]["group"] = "新标签"
+        saved = save_task(self.store, request)
+        self.assertEqual(saved["seq"], request["expected_seq"] + 1)
+        self.assertTrue(save_task(self.store, request)["replayed"])
+        self.assertEqual(task_detail(self.store, first)["task"]["data"]["group"], "新标签")
+        after = task_detail(self.store, second)["task"]["data"]
+        self.assertEqual(after["group"], "新标签")
+        for field in before.keys() - {"group", "updated_at", "last_source"}:
+            self.assertEqual(after[field], before[field])
+        self.assertEqual(task_detail(self.store, other)["task"]["data"]["group"], "旧标签")
+
     def test_detail_uses_exact_context_and_explicit_document_links(self):
         request = {"reason": "synthetic similar context", "updates": [
             {"id": "mapping-old", "kind": "context", "data": {

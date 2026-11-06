@@ -417,8 +417,8 @@ test('status filters default to todo and doing, compose as toggles and apply to 
   await p.world.refresh();
   assert.equal(p.get('board').hidden, true);
   assert.equal(p.get('task-list').children.length, 3);
-  assert.equal(p.get('task-list').children[1].children[2].textContent, '项目甲');
-  assert.equal(p.get('task-list').children[1].children[3].textContent, '王牧楠');
+  assert.equal(p.get('task-list').children[1].children[2].value, ':项目甲');
+  assert.equal(p.get('task-list').children[1].children[3].value, '王牧楠');
   p.get('status-todo').onclick();
   p.get('status-doing').onclick();
   p.get('status-done').onclick();
@@ -867,7 +867,10 @@ test('joint owners match individual and team filters while editing retains the f
   assert.equal(p.world.matchesOwner(task,'模拟'),false);
   assert.ok(!p.world.ownerOptions('lingguang','',true).some(o=>o.value==='@other'));
   await p.world.openTask();
-  assert.ok(p.world.ownerOptions('lingguang',task.data.owner).flatMap(o=>o.children||[]).some(o=>o.value===task.data.owner));
+  const options = p.world.ownerOptions('lingguang',task.data.owner);
+  assert.ok(options.some(o=>o.value===task.data.owner && o.disabled));
+  assert.ok(!options.flatMap(o=>o.children||[]).some(o=>o.value===task.data.owner));
+  assert.ok(!p.world.ownerOptions('lingguang').flatMap(o=>o.children||[]).some(o=>o.value===task.data.owner));
   assert.equal(p.world.matchesOwner({...task,data:{...task.data,owner:'模拟甲、名册外乙'}},'@other'),true);
 });
 
@@ -929,4 +932,54 @@ test('an intervening save or replay cannot authorize undo against a later versio
   await p.world.quickSave('a', {priority:'high'});
   assert.equal(p.get('undo-save').hidden, true);
   assert.equal(p.get('undo-save').onclick, null);
+});
+
+test('list assigns an existing owner, creates a tag and renames the selected tag', async () => {
+  const task = {id:'a',data:{text:'测试',status:'doing',context:'work-current'},attention:[]};
+  const p = await page(new Map(), {tasks:[task], people:[{data:{title:'同事',workspaces:['lingguang']}}]});
+  const row = () => p.get('task-list').children[1].children;
+  const writes = [];
+  p.world.fetch = async (_, options) => {
+    if (!options) return response(p.board);
+    const request = JSON.parse(options.body);
+    writes.push(request);
+    Object.assign(task.data, request.changes);
+    return response({seq:++p.board.seq});
+  };
+  const owner = row()[3];
+  assert.ok(owner.children.some(group => group.children?.some(option => option.value === '同事')));
+  owner.value = '同事'; await owner.onchange();
+  assert.deepEqual(writes[0].changes, {owner:'同事'});
+  const group = row()[2];
+  p.world.window.prompt = () => '甲'.repeat(81);
+  group.value = '+'; await group.onchange();
+  assert.equal(writes.length, 1);
+  assert.match(p.get('message').textContent, /80/);
+  p.world.window.prompt = () => '项目甲';
+  group.value = '+'; await group.onchange();
+  assert.deepEqual(writes[1].changes, {group:'项目甲'});
+  p.get('group-filter').value = ':项目甲'; p.get('group-filter').onchange();
+  assert.equal(p.get('rename-group').disabled, false);
+  p.world.window.prompt = () => '项目乙';
+  await p.get('rename-group').onclick();
+  assert.equal(writes[2].rename_group, '项目甲');
+  assert.deepEqual(writes[2].changes, {group:'项目乙'});
+  assert.equal(p.get('group-filter').value, ':项目乙');
+  assert.equal(p.get('undo-save').hidden, true);
+});
+
+test('renaming a tag preserves a filter changed while the save is pending', async () => {
+  const task = {id:'a',data:{text:'测试',status:'doing',context:'work-current',group:'甲'},attention:[]};
+  const p = await page(new Map(), {tasks:[task]});
+  p.get('group-filter').value = ':甲';
+  p.world.window.prompt = () => '乙';
+  const delayed = deferred();
+  p.world.fetch = async (_, options) => options ? delayed.promise : response(p.board);
+  const save = p.get('rename-group').onclick();
+  p.get('group-filter').value = '-';
+  p.get('group-filter').onchange();
+  task.data.group = '乙';
+  delayed.resolve(response({seq:++p.board.seq}));
+  await save;
+  assert.equal(p.get('group-filter').value, '-');
 });

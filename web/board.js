@@ -103,14 +103,23 @@ function ownerOptions(workspace, current = '', teams = false) {
     groups.get(label).append(new Option(data.title + (data.member_type === 'agent' ? '（Agent）' : ''), data.title));
     names.add(data.title);
   }
-  const extra = [...new Set(['王牧楠', current, ...state.tasks.filter(t => workspaceOf(t.data.context) === workspace)
-    .flatMap(t => teams ? ownerNames(t.data) : [ownerName(t.data)])])].filter(name => name && !names.has(name));
+  const individuals = state.tasks.filter(t => workspaceOf(t.data.context) === workspace).flatMap(t => ownerNames(t.data));
+  const extra = [...new Set([...current.split('、').map(name => name.trim()), ...individuals])]
+    .filter(name => name && !names.has(name));
   if (extra.length) {
     const group = element('optgroup'); group.label = '其他负责人';
     group.append(...extra.sort((a, b) => a.localeCompare(b, 'zh-CN')).map(name => new Option(name, name)));
     groups.set('other-owners', group);
   }
-  if (!teams) return [new Option('王牧楠', '王牧楠'), ...groups.values()];
+  if (!teams) {
+    const options = [new Option('王牧楠', '王牧楠'), ...groups.values()];
+    if (current.includes('、')) {
+      const existing = new Option(current, current);
+      existing.disabled = true;
+      options.unshift(existing);
+    }
+    return options;
+  }
   const options = [new Option('王牧楠', '王牧楠')];
   for (const [key, group] of groups) {
     const heading = new Option(group.label, key === 'other-owners' ? '@other' : '@team:' + group.label);
@@ -128,9 +137,13 @@ function matchesOwner(task, selection) {
     && ownerNames(task.data).includes(p.data.title));
 }
 
-function updateFilters() {
+function updateFilters(rename = null) {
   if (!state) return;
-  const workspace = $('workspace').value, selectedGroup = $('group-filter').value;
+  const workspace = $('workspace').value;
+  let selectedGroup = $('group-filter').value;
+  if (rename && workspace === rename.workspace && selectedGroup === ':' + rename.previous) {
+    selectedGroup = ':' + rename.target;
+  }
   const groups = groupNames(workspace);
   $('group-filter').replaceChildren(new Option('全部分组', ''), new Option('未分组', '-'),
     ...groups.map(name => new Option(name, ':' + name)));
@@ -252,7 +265,7 @@ function render() {
     $('status-' + status).textContent = (selected ? '✓ ' : '') + labels[status];
   }
   for (const name of ['list', 'board', 'schedule']) $('view-' + name).setAttribute('aria-pressed', String(taskView === name));
-  $('view-hint').textContent = taskView === 'list' ? '点击标题查看详情；优先级、当前状态和下次关心时间可直接修改。'
+  $('view-hint').textContent = taskView === 'list' ? '点击标题查看详情；可在列表中修改负责人、项目标签、优先级、状态和日期。'
     : taskView === 'schedule' ? '近期安排按下次关心时间分组，沿用上方全部筛选；点击任务查看详情。'
     : '看板沿用上方筛选。拖动卡片切换状态或排序；也可聚焦卡片后按 Alt + 方向键。';
   renderList(tasks);
@@ -458,6 +471,7 @@ function renderDueEditor(parent, value, disabled, onChange) {
 }
 
 function renderList(tasks) {
+  $('rename-group').disabled = !state.writable || saving || !!quickPending || !$('group-filter').value.startsWith(':');
   savePreferences();
   const list = $('task-list');
   list.hidden = taskView !== 'list';
@@ -525,14 +539,34 @@ function renderList(tasks) {
     } else renderDueEditor(dueCell, t.data.due, !state.writable || saving || !!quickPending, value => quickSave(t.id, {due: value}));
     if (deliveryHint.text) dueCell.append(element('small', '待约定交付时间'));
     dueCell.title = '原交付日期：' + dueLabel(t.data.due) + '；完成日期独立记录';
-    const owner = element('span', ownerName(t.data), 'row-owner');
-    owner.title = ownerName(t.data);
-    row.append(title, priority, element('span', t.data.group || '未分组', 'project-tag'), owner, status, dateCell, dueCell);
+    const workspace = workspaceOf(t.data.context);
+    const owner = element('select', undefined, 'row-owner');
+    owner.append(...ownerOptions(workspace, ownerName(t.data)));
+    owner.value = ownerName(t.data);
+    owner.title = owner.value;
+    owner.setAttribute('aria-label', t.data.text + ' · 负责人');
+    owner.disabled = priority.disabled;
+    owner.onchange = () => quickSave(t.id, {owner: owner.value});
+    const group = element('select', undefined, 'project-tag');
+    group.append(new Option('未分组', ''), ...groupNames(workspace).map(name => new Option(name, ':' + name)),
+      new Option('＋ 新建标签', '+'));
+    group.value = t.data.group ? ':' + t.data.group : '';
+    group.title = t.data.group || '未分组';
+    group.setAttribute('aria-label', t.data.text + ' · 项目标签');
+    group.disabled = priority.disabled;
+    group.onchange = () => {
+      const creating = group.value === '+';
+      const name = creating ? window.prompt('新项目标签名称（最多 80 字）')?.trim() : group.value.slice(1);
+      group.value = t.data.group ? ':' + t.data.group : '';
+      if ((creating && !name) || name === (t.data.group || '')) return;
+      return quickSave(t.id, {group: name});
+    };
+    row.append(title, priority, group, owner, status, dateCell, dueCell);
     list.append(row);
   }
 }
 
-const quickFields = {priority: '优先级', due: '交付时间', follow_up: '下次关心时间', completed_on: '完成日期'};
+const quickFields = {owner: '负责人', group: '项目标签', priority: '优先级', due: '交付时间', follow_up: '下次关心时间', completed_on: '完成日期'};
 let noticeTimer, quickFeedback;
 
 function hideSaveNotice() {
@@ -552,12 +586,13 @@ function showSaveNotice(text, undo = null, pendingSave = false) {
 
 function quickValue(field, value) {
   if (field === 'priority') return priorities[value || 'normal'];
+  if (field === 'group') return value || '未分组';
   if (field === 'due') return dueLabel(value);
   if (field === 'status') return labels[value];
   return value || (field === 'completed_on' ? '未记录' : '未设置');
 }
 
-async function quickSave(id, changes, undoSeq = null) {
+async function quickSave(id, changes, undoSeq = null, renameGroup = null) {
   if (saving || opening || completionChoice || !state.writable || $('editor').open) return;
   const task = state.tasks.find(t => t.id === id);
   if (!quickPending && changes.status === 'done' && task?.data.status !== 'done') {
@@ -566,13 +601,18 @@ async function quickSave(id, changes, undoSeq = null) {
     changes = {...changes, completed_on: date};
   }
   if (!quickPending) {
+    if (changes.group && ([...changes.group].length > 80 || /[\r\n\t]/.test(changes.group))) {
+      $('message').textContent = '项目标签须为单行，最多 80 个字。';
+      return;
+    }
     const field = Object.keys(changes)[0];
     const before = task?.data[field] ?? (field === 'priority' ? 'normal' : '');
-    const summary = task ? task.data.text + ' · ' + (quickFields[field] || '状态') + '：'
+    const summary = renameGroup ? '项目标签已改名：' + renameGroup + ' → ' + changes.group : task ? task.data.text + ' · ' + (quickFields[field] || '状态') + '：'
       + quickValue(field, before) + ' → ' + quickValue(field, changes[field]) : '修改已保存。';
     quickFeedback = {text: (undoSeq === null ? '' : '已撤回 · ') + summary,
-      inverse: undoSeq === null && quickFields[field] && before !== changes[field] ? {[field]: before} : null};
-    quickPending = {request_id: crypto.randomUUID().replaceAll('-', ''), expected_seq: undoSeq ?? state.seq, id, changes};
+      inverse: !renameGroup && undoSeq === null && quickFields[field] && before !== changes[field] ? {[field]: before} : null};
+    quickPending = {request_id: crypto.randomUUID().replaceAll('-', ''), expected_seq: undoSeq ?? state.seq, id, changes,
+      ...(renameGroup ? {rename_group: renameGroup} : {})};
   }
   saving = true;
   $('quick-retry').hidden = true;
@@ -580,10 +620,12 @@ async function quickSave(id, changes, undoSeq = null) {
   showSaveNotice('正在保存修改…', null, true);
   try {
     const expected = quickPending.expected_seq;
+    const rename = quickPending.rename_group ? {workspace: workspaceOf(task.data.context),
+      previous: quickPending.rename_group, target: changes.group} : null;
     const result = await api('/api/tasks', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Lumos-Token': state.token},
       body: JSON.stringify(quickPending)});
     quickPending = null;
-    const loaded = await refresh();
+    const loaded = await refresh(rename);
     if (loaded) {
       const {text, inverse} = quickFeedback;
       const canUndo = inverse && state.writable && state.seq === result.seq && result.seq === expected + 1;
@@ -599,12 +641,12 @@ async function quickSave(id, changes, undoSeq = null) {
   }
 }
 
-async function refresh() {
+async function refresh(rename = null) {
   if (!saving) hideSaveNotice();
   $('refresh').disabled = true;
   try {
     state = await api('/api/tasks');
-    updateFilters();
+    updateFilters(rename);
     $('date').textContent = state.today;
     $('sync').textContent = '已读取最新记录';
     const drafts = state.integrity.drafts_or_missing_working_copies.length;
@@ -951,6 +993,18 @@ $('workspace').onchange = () => {
   render();
 };
 $('group-filter').onchange = render;
+$('rename-group').onclick = () => {
+  const previous = $('group-filter').value.slice(1), workspace = $('workspace').value;
+  const tasks = state.tasks.filter(t => workspaceOf(t.data.context) === workspace && t.data.group === previous);
+  if (!previous || !tasks.length || saving || quickPending) return;
+  const name = window.prompt('重命名“' + previous + '”，将更新本空间使用该标签的 ' + tasks.length + ' 项任务。', previous)?.trim();
+  if (!name || name === previous) return;
+  if (groupNames(workspace).includes(name)) {
+    $('message').textContent = '该项目标签已存在，请选择其他名称。';
+    return;
+  }
+  return quickSave(tasks[0].id, {group: name}, null, previous);
+};
 form.elements.namedItem('workspace').onchange = () => {
   if (!editMode || saving) return;
   setTaskWorkspace(form.elements.namedItem('workspace').value);

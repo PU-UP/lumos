@@ -148,7 +148,7 @@ def task_detail(store, ident):
 
 def save_task(store, request):
     require(isinstance(request, dict), "Expected task request object")
-    require(set(request) <= {"request_id", "expected_seq", "id", "changes", "source", "before_id", "note_refs", "follow_up_reviewed"}, "Unknown request field")
+    require(set(request) <= {"request_id", "expected_seq", "id", "changes", "source", "before_id", "note_refs", "follow_up_reviewed", "rename_group"}, "Unknown request field")
     require(type(request.get("follow_up_reviewed", False)) is bool, "follow_up_reviewed must be boolean")
     key = request.get("request_id", "")
     require(isinstance(key, str) and bool(re.fullmatch(r"[a-f0-9]{32}", key)), "request_id must be UUID hex")
@@ -178,6 +178,29 @@ def save_task(store, request):
             require(old and old["kind"] == "action", "Task not found")
         else:
             require(old is None, "Task ID already exists")
+        if "rename_group" in request:
+            require(old and set(request) == {"id", "request_id", "expected_seq", "changes", "source", "rename_group"}
+                    and set(changes) == {"group"}, "Invalid group rename")
+            previous = old["data"].get("group", "").strip()
+            target = changes["group"].strip()
+            require(previous and previous == request["rename_group"] and target and target != previous,
+                    "请选择已有标签并填写不同的新名称。")
+            workspace = context_workspace(nodes[old["data"]["context"]])
+            updates = []
+            changed_at = now()
+            for node in nodes.values():
+                if node["kind"] != "action":
+                    continue
+                context = nodes[node["data"]["context"]]
+                if context_workspace(context) != workspace or context["data"].get("status", "active") not in {"active", "waiting"}:
+                    continue
+                group = node["data"].get("group", "").strip()
+                require(group != target, "该项目标签已存在，请选择其他名称。")
+                if group == previous:
+                    updates.append({**node, "data": {**node["data"], "group": target,
+                                                      "updated_at": changed_at, "last_source": source}})
+            require(any(n["id"] == ident for n in updates), "不能修改归档脉络中的标签。")
+            return commit_tasks(store, nodes, {"reason": reason, "updates": updates}, ident)
         data = dict(old["data"]) if old else {"status": "todo", "priority": "normal", "source": source}
         data.update(changes)
         if request.get("follow_up_reviewed"):
@@ -234,11 +257,15 @@ def save_task(store, request):
                     data["board_order"] = position
                 elif node["data"].get("board_order") != position:
                     batch_request["updates"].append({**node, "data": {**node["data"], "board_order": position}})
-        # Validate before creating a persistent session; invalid UI input must not leave it occupied.
-        with store.db() as db:
-            links = set(db.execute("SELECT src,dst,relation FROM links"))
-        store.validate(nodes, {**nodes, **{n["id"]: n for n in batch_request["updates"]}}, batch_request, links, links)
-        batch = store._begin(batch_request)
-        store._commit(batch["batch"], task_request=batch_request)
-        with store.db() as db:
-            return {"id": ident, "seq": store.seq(db), "replayed": False}
+        return commit_tasks(store, nodes, batch_request, ident)
+
+
+def commit_tasks(store, nodes, batch_request, ident):
+    # Validate before creating a persistent session; invalid UI input must not leave it occupied.
+    with store.db() as db:
+        links = set(db.execute("SELECT src,dst,relation FROM links"))
+    store.validate(nodes, {**nodes, **{n["id"]: n for n in batch_request["updates"]}}, batch_request, links, links)
+    batch = store._begin(batch_request)
+    store._commit(batch["batch"], task_request=batch_request)
+    with store.db() as db:
+        return {"id": ident, "seq": store.seq(db), "replayed": False}
