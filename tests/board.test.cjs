@@ -802,7 +802,7 @@ test('date cells show explanatory reminders only when needed, and explain closed
   const p=await page(undefined,{tasks:[
     {id:'normal',data:{text:'普通日期',context:'work-current',status:'doing',due:'2026-11-02',follow_up:'2026-11-02'},attention:[]},
     {id:'pending',data:{text:'待安排',context:'work-current',status:'doing'},attention:[]},
-    {id:'closed',data:{text:'旧报告',context:'work-current',status:'cancelled'},attention:[]}
+    {id:'closed',data:{text:'旧报告',context:'work-current',status:'cancelled',follow_up:'2026-01-01'},attention:[]}
   ]});
   p.get('status-cancelled').onclick();
   const rows=p.get('task-list').children;
@@ -816,6 +816,10 @@ test('date cells show explanatory reminders only when needed, and explain closed
   assert.equal(closed.children[5].children[0].hidden,true);
   assert.match(textOf(closed.children[5]),/已取消，不再提醒/);
   assert.doesNotMatch(textOf(closed.children[6]),/待约定/);
+  assert.equal(closed.children[5].children[0].disabled,true);
+  assert.ok(p.world.scheduleBuckets(p.board.tasks,p.board.today).every(([,items]) => items.every(t => t.id !== 'closed')));
+  p.get('window-days').value='5'; p.get('window-days').oninput();
+  assert.ok(p.world.filtered().every(t => t.id !== 'closed'));
 });
 
 test('completion picker can cancel, choose the planned date, retry without reprompt and show actual date', async () => {

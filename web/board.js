@@ -180,6 +180,14 @@ function priorityTag(data) {
   return element('span', priorities[priority] + '优先级', 'tag priority-' + priority);
 }
 
+function isClosed(data) {
+  return ['done', 'cancelled'].includes(data.status);
+}
+
+function followUpLabel(data) {
+  return isClosed(data) ? '不再提醒' : '下次关心：' + (data.follow_up || '未设置');
+}
+
 function filtered() {
   const query = $('search').value.toLowerCase();
   const group = $('group-filter').value;
@@ -188,7 +196,7 @@ function filtered() {
   const until = end.toISOString().slice(0, 10);
   return state.tasks.filter(t => workspaceOf(t.data.context) === $('workspace').value
     && selectedStatuses.has(t.data.status)
-    && (windowDays === null || (t.data.follow_up ? t.data.follow_up <= until : !['done', 'cancelled'].includes(t.data.status)))
+    && (windowDays === null || (!isClosed(t.data) && (!t.data.follow_up || t.data.follow_up <= until)))
     && (!group || (group === '-' ? !t.data.group : t.data.group === group.slice(1)))
     && matchesOwner(t, $('owner-filter').value)
     && [t.data.text, t.data.details, t.data.next_step].join(' ').toLowerCase().includes(query));
@@ -325,7 +333,7 @@ function render() {
       if (t.data.progress && t.data.progress.length <= 300) renderDocument(t.data.progress, summary);
       else summary.append(element('p', t.data.progress ? '进展待整理为简短摘要，请打开详情查看。' : '尚未记录当前进展，请打开详情查看下一步。'));
       button.append(summary);
-      button.append(element('p', '下次关心：' + (t.data.follow_up || '未设置') + '\n' + taskDate(t.data), 'card-dates'));
+      button.append(element('p', followUpLabel(t.data) + '\n' + taskDate(t.data), 'card-dates'));
       const hint = followUpHint(t.data);
       if (hint.text) button.append(element('span', hint.text, 'follow-up-label ' + hint.cls));
       if (t.data.status === 'cancelled') button.append(element('span', '已取消', 'tag'));
@@ -346,6 +354,7 @@ function sortedTasks(tasks) {
   const order = state.board_order || state.tasks.map(t => t.id);
   const value = t => sortKey === 'owner' ? ownerName(t.data)
     : sortKey === 'priority' ? ({low: 0, normal: 1, high: 2}[t.data.priority || 'normal'])
+    : sortKey === 'follow_up' && isClosed(t.data) ? ''
     : sortKey === 'due' && t.data.status === 'done' ? t.data.completed_on || ''
     : sortKey === 'status' ? Object.keys(labels).indexOf(t.data.status) : t.data[sortKey] || '';
   return [...tasks].sort((a, b) => {
@@ -362,6 +371,7 @@ function sortedTasks(tasks) {
 function scheduleBuckets(tasks, today) {
   const buckets = new Map();
   for (const task of tasks) {
+    if (isClosed(task.data)) continue;
     const date = task.data.follow_up;
     const key = !date ? '未设关心时间' : date < today ? '已过关心时间' : date;
     if (!buckets.has(key)) buckets.set(key, []);
@@ -389,7 +399,7 @@ function renderSchedule(tasks) {
     }
     list.append(section);
   }
-  if (!tasks.length) list.append(element('p', '当前筛选下暂无任务，可调整状态、负责人或时间范围。', 'empty'));
+  if (!list.children.length) list.append(element('p', '当前筛选下暂无任务，可调整状态、负责人或时间范围。', 'empty'));
 }
 
 function dueLabel(value) { return value === 'long_term' ? '长期' : value || '未约定'; }
@@ -515,7 +525,7 @@ function renderList(tasks) {
     const hint = followUpHint(t.data);
     const dateCell = element('div', undefined, 'follow-up-cell ' + hint.cls);
     dateCell.append(date);
-    if (!t.data.follow_up && ['done', 'cancelled'].includes(t.data.status)) {
+    if (isClosed(t.data)) {
       date.hidden = true;
       dateCell.append(element('span', labels[t.data.status] + '，不再提醒', 'closed-date'));
     }
@@ -523,7 +533,7 @@ function renderList(tasks) {
     for (const [control, key, label] of [[priority, 'priority', '优先级'], [status, 'status', '当前状态'], [date, 'follow_up', '下次关心时间']]) {
       control.setAttribute('aria-label', t.data.text + ' · ' + label);
       control.title = label + ' · 修改即保存';
-      control.disabled = !state.writable || saving || !!quickPending;
+      control.disabled = !state.writable || saving || !!quickPending || (control === date && isClosed(t.data));
       control.onchange = () => quickSave(t.id, {[key]: control.value});
     }
     const deliveryHint = dueHint(t.data);
@@ -770,6 +780,7 @@ function setEditMode(enabled) {
   $('task-fields').hidden = !enabled;
   $('task-fields').disabled = !enabled;
   for (const k of fields) form.elements.namedItem(k).disabled = !enabled;
+  form.elements.namedItem('follow_up').disabled = !enabled || isClosed(savedValues);
   form.elements.namedItem('workspace').disabled = !enabled;
   $('edit-actions').hidden = !enabled;
   $('edit').hidden = enabled;
@@ -781,6 +792,7 @@ function setEditMode(enabled) {
     button.disabled = !state.writable || button.value === savedValues.status;
   }
   $('editor-title').textContent = enabled ? (editing ? '编辑任务' : '新增任务') : savedValues.text;
+  $('follow-up-field').hidden = isClosed(savedValues);
   $('completed-field').hidden = savedValues.status !== 'done';
   renderDueEditor($('due-editor'), form.elements.namedItem('due').value, !enabled || !state.writable, value => {
     form.elements.namedItem('due').value = value;
@@ -801,7 +813,8 @@ function renderTask(data) {
   view.replaceChildren();
   view.append(element('p', workspaces[workspaceOf(data.context)] + ' / ' + (data.group || '未分组'), 'muted'));
   const meta = [labels[data.status], '负责人：' + ownerName(data),
-    taskDate(data), ...(data.status === 'done' ? ['原交付日期：' + dueLabel(data.due)] : []), '下次关心：' + (data.follow_up || '未设置')].filter(Boolean);
+    taskDate(data), ...(data.status === 'done' ? ['原交付日期：' + dueLabel(data.due)] : []), followUpLabel(data),
+    isClosed(data) && data.follow_up && '关闭前的关心日期：' + data.follow_up].filter(Boolean);
   const badges = tags(meta);
   badges.append(priorityTag(data));
   view.append(badges);
@@ -890,6 +903,10 @@ async function saveChanges(changes, quick = false) {
     const date = await chooseCompletionDate({...savedValues, ...changes});
     if (date === null) return;
     changes = {...changes, completed_on: date};
+  }
+  if (isClosed(savedValues)) {
+    changes = {...changes};
+    delete changes.follow_up;
   }
   if (changes.status && changes.status !== 'done' && 'completed_on' in changes) changes.completed_on = '';
   saving = true;

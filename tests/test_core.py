@@ -57,7 +57,15 @@ class LocalTest(BaseStoreCase):
     def test_context_and_reported_action_completion(self):
         self.seed()
         action = next(n for n in self.store.context("建图定位")["nodes"] if n["id"] == "talk")
-        action["data"].update(status="done", completion={"basis": "user_report", "ref": "fixture:聊完了"})
+        action["data"].update(status="done", completed_on="2026-10-22", completion={"basis": "user_report", "ref": "fixture:聊完了"})
+        date = action["data"].pop("completed_on")
+        for missing in ({}, {"completed_on": ""}):
+            action["data"].update(missing)
+            batch = self.store.begin({"reason": "completion without date", "updates": [action]}, True)
+            with self.assertRaisesRegex(lumos.Error, "完成日期"):
+                self.store.commit(batch["batch"], True)
+            self.store.abandon(batch["batch"])
+        action["data"]["completed_on"] = date
         batch = self.store.begin({"reason": "user reported conversation complete", "updates": [action]}, True)
         self.store.commit(batch["batch"], True)
         result = self.store.context("建图定位")
@@ -65,6 +73,12 @@ class LocalTest(BaseStoreCase):
         self.assertEqual(done["data"]["status"], "done")
         self.assertNotIn("technical_result", done["data"])
         self.assertIn("尚待核实", result["documents"]["plan"])
+        done["data"]["status"] = "cancelled"
+        done["data"].pop("completed_on")
+        batch = self.store.begin({"reason": "cancel with stale completion", "updates": [done]}, True)
+        with self.assertRaisesRegex(lumos.Error, "撤下完成依据"):
+            self.store.commit(batch["batch"], True)
+        self.store.abandon(batch["batch"])
 
     def test_human_edit_preserved_before_commit(self):
         self.seed()
@@ -122,7 +136,7 @@ class LocalTest(BaseStoreCase):
             lumos.Store(self.root).begin({"reason": "competing editor"}, True)
         self.store.abandon(batch["batch"])
         action = next(n for n in self.store.context()["nodes"] if n["id"] == "talk")
-        action["data"].update(status="done", technical_result="passed")
+        action["data"].update(status="done", completed_on="2026-10-22", technical_result="passed")
         invalid = self.store.begin({"reason": "invalid completion", "updates": [action]}, True)
         with self.assertRaises(lumos.Error):
             self.store.commit(invalid["batch"], True)
@@ -139,7 +153,7 @@ class LocalTest(BaseStoreCase):
             self.store.commit(batch["batch"], True)
         self.store.abandon(batch["batch"])
         action = next(n for n in self.store.context()["nodes"] if n["id"] == "talk")
-        action["data"].update(status="done", completion={"basis": "user_report", "ref": "fixture:done"},
+        action["data"].update(status="done", completed_on="2026-10-22", completion={"basis": "user_report", "ref": "fixture:done"},
                               technical_result="passed")
         batch = self.store.begin({"reason": "unsubstantiated technical pass", "updates": [action]}, True)
         with self.assertRaisesRegex(lumos.Error, "Technical pass requires"):

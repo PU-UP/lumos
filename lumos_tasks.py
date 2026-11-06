@@ -203,9 +203,12 @@ def save_task(store, request):
             return commit_tasks(store, nodes, {"reason": reason, "updates": updates}, ident)
         data = dict(old["data"]) if old else {"status": "todo", "priority": "normal", "source": source}
         data.update(changes)
+        if (old and old["data"]["status"] in {"done", "cancelled"} and data["status"] not in {"done", "cancelled"}
+                and "follow_up" not in changes):
+            data["follow_up"] = ""
         if request.get("follow_up_reviewed"):
             require(old is not None, "Follow-up review requires an existing task")
-            if "follow_up" not in changes:
+            if "follow_up" not in changes and data["status"] not in {"done", "cancelled"}:
                 data["follow_up"] = ""
             data["follow_up_pending"] = not bool(data.get("follow_up"))
         elif "follow_up" in changes and (changes["follow_up"] or (old and old["data"].get("follow_up"))):
@@ -232,8 +235,6 @@ def save_task(store, request):
         data["last_source"] = source
         if data["status"] == "done" and (not old or old["data"]["status"] != "done"):
             data["completion"] = {"basis": "user_report", "ref": source["ref"]}
-            if "completed_on" not in changes:
-                data["completed_on"] = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
         elif data["status"] != "done":
             require(not changes.get("completed_on"), "Completion date requires a completed task")
             for field in ("completion", "completed_on", "technical_result", "acceptance", "result_evidence"):

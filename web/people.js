@@ -16,7 +16,7 @@ function counts(tasks) { return Object.keys(statuses).map(status => tasks.filter
 function taskRow(task) {
   const row = element('div', undefined, 'people-task'), link = element('a', task.data.text);
   link.href = '/?task=' + encodeURIComponent(task.id);
-  row.append(link, element('span', ownerName(task) + ' · ' + statuses[task.data.status] + ' · ' + (task.data.follow_up || '未设关心时间')));
+  row.append(link, element('span', ownerName(task) + ' · ' + statuses[task.data.status] + ' · ' + (['done', 'cancelled'].includes(task.data.status) ? '不再提醒' : task.data.follow_up || '未设关心时间')));
   return row;
 }
 function workloadRow(tag, name, tasks, cls = '') {

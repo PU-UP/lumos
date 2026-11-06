@@ -31,7 +31,7 @@ def create(root):
     decision["data"]["status"] = "superseded"
     action["data"].update(status="blocked", waiting="取得同步与标定资料")
     talk = next(n for n in request["updates"] if n["id"] == "talk")
-    talk["data"].update(status="done", completion={"basis": "user_report", "ref": "ISOLATED-FIXTURE:用户明确说聊完了"})
+    talk["data"].update(status="done", completed_on="2026-10-22", completion={"basis": "user_report", "ref": "ISOLATED-FIXTURE:用户明确说聊完了"})
     correction = {"id": "D2", "kind": "decision", "data": {
         "context": "mapping", "text": "模拟：先核对同步与标定，再确定基线验证条件", "status": "current",
         "reason": "模拟用户澄清：此前只讨论准备期验证，不是无视觉生产选型", "scope": "模拟准备期",

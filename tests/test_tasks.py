@@ -76,7 +76,7 @@ class TaskTest(BaseStoreCase):
         a = save_task(self.store, self.request(text="A"))["id"]
         b = save_task(self.store, self.request(text="B"))["id"]
         def move(ident, status, before=None):
-            return {**self.request(), "id": ident, "changes": {"status": status}, "before_id": before}
+            return {**self.request(), "id": ident, "changes": {"status": status, **({"completed_on": "2026-10-22"} if status == "done" else {})}, "before_id": before}
         save_task(self.store, move(a, "todo", b))
         order = list_tasks(self.store)["board_order"]
         self.assertEqual(order.index(a) + 1, order.index(b))
@@ -158,7 +158,7 @@ class TaskTest(BaseStoreCase):
         self.store.commit(batch["batch"], True)
         other = save_task(self.store, self.request(context="prep", group="旧标签"))["id"]
         first = save_task(self.store, self.request(group="旧标签"))["id"]
-        second = save_task(self.store, self.request(group="旧标签", status="done", owner="测试人"))["id"]
+        second = save_task(self.store, self.request(group="旧标签", status="done", completed_on="2026-10-22", owner="测试人"))["id"]
         save_task(self.store, self.request(group="已有"))
         before = task_detail(self.store, second)["task"]["data"]
         request = {**self.request(), "id": first, "rename_group": "旧标签", "changes": {"group": "已有"}}
@@ -219,7 +219,7 @@ class TaskTest(BaseStoreCase):
         overdue = save_task(self.store, self.request(due="2026-10-20", follow_up="2026-10-21", priority="high", status="blocked"))["id"]
         near = save_task(self.store, self.request(due="2026-10-28"))["id"]
         later = save_task(self.store, self.request(due="2026-10-29"))["id"]
-        done = save_task(self.store, self.request(due="2026-10-20", status="done"))["id"]
+        done = save_task(self.store, self.request(due="2026-10-20", status="done", completed_on="2026-10-22"))["id"]
         tasks = list_tasks(self.store, "2026-10-21")
         self.assertEqual(set(tasks["attention"]), {overdue, near, later, "talk"})
         self.assertEqual(next(t for t in tasks["tasks"] if t["id"] == overdue)["attention"],
@@ -280,7 +280,7 @@ class TaskTest(BaseStoreCase):
         self.store.abandon(batch["batch"])
 
     def test_done_reopen_and_sources_retained(self):
-        result = save_task(self.store, self.request(status="done"))
+        result = save_task(self.store, self.request(status="done", completed_on="2026-10-22"))
         original = task_detail(self.store, result["id"])["task"]["data"]
         self.assertEqual(original["completion"]["basis"], "user_report")
         self.assertNotIn("technical_result", original)
@@ -393,9 +393,11 @@ class TaskTest(BaseStoreCase):
         self.assertEqual(data()['follow_up'], '2099-01-02')
         update({'follow_up': ''})
         self.assertTrue(data()['follow_up_pending'])
+        update({'follow_up': '2099-01-03'})
         for status in ['done', 'cancelled']:
-            update({'status': status}, follow_up_reviewed=True)
+            update({'status': status, **({'completed_on': '2026-10-22'} if status == 'done' else {})}, follow_up_reviewed=True)
             self.assertFalse(data()['follow_up_pending'])
+            self.assertEqual(data()['follow_up'], '2099-01-03')
             task = next(t for t in list_tasks(self.store)['tasks'] if t['id'] == ident)
             self.assertEqual(task['attention'], [])
         with self.assertRaises(lumos.Error):
@@ -439,14 +441,18 @@ class TaskTest(BaseStoreCase):
         save_task(self.store, reopen)
         detail = task_detail(self.store, ident)
         self.assertNotIn("completed_on", detail["task"]["data"])
+        self.assertFalse(detail["task"]["data"].get("follow_up"))
         self.assertEqual(detail["task"]["data"]["due"], "2026-10-20")
         self.assertTrue(any(h["after"]["data"].get("completed_on") == "2026-10-22" for h in detail["history"]))
         self.assertEqual(list_tasks(self.store, "2099-01-01")["tasks"][0]["data"]["status"], "doing")
 
-    def test_completion_date_default_validation_and_move(self):
-        ident = save_task(self.store, self.request(status="done", due="long_term"))["id"]
+    def test_completion_date_required_validation_and_move(self):
+        for missing in ({}, {"completed_on": ""}):
+            with self.assertRaisesRegex(lumos.Error, "完成日期"):
+                save_task(self.store, self.request(status="done", **missing))
+        ident = save_task(self.store, self.request(status="done", due="long_term", completed_on="2026-10-22"))["id"]
         data = task_detail(self.store, ident)["task"]["data"]
-        self.assertEqual(data["completed_on"], list_tasks(self.store)["today"])
+        self.assertEqual(data["completed_on"], "2026-10-22")
         for changes in ({"completed_on": "long_term", "status": "done"},
                         {"completed_on": "2026-02-30", "status": "done"},
                         {"completed_on": "2026-10-30", "status": "doing"}):

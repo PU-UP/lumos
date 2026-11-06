@@ -295,7 +295,19 @@ class Store:
                 require(data["source"]["type"] != "agent", "Suggestions are not committed actions")
                 require(data.get("condition"), "Agent must infer a minimal action completion condition")
                 require(data.get("status") in {"todo", "doing", "blocked", "done", "cancelled"}, "Invalid action status")
+                previous = old.get(ident, {}).get("data", {})
+                closed = {"done", "cancelled"}
+                if data["status"] in closed:
+                    require(data.get("follow_up", "") == previous.get("follow_up", ""),
+                            "已结束任务的关心时间仅供追溯")
+                if previous.get("status") in closed and data["status"] not in closed:
+                    require(not data.get("follow_up") or data["follow_up"] != previous.get("follow_up"),
+                            "重开任务请清空旧关心时间或重新排期")
+                if previous.get("status") == "done" and data["status"] != "done":
+                    require(not data.get("completion"), "重开或取消须撤下完成依据")
                 if data["status"] == "done":
+                    if previous.get("status") != "done":
+                        require(data.get("completed_on"), "标记完成须明确完成日期（YYYY-MM-DD）")
                     evidence = data.get("completion", {})
                     require(evidence.get("basis") in {"user_report", "observed"} and evidence.get("ref"),
                             "Completion needs explicit report/observation provenance")
