@@ -1013,15 +1013,38 @@ $('group-filter').onchange = render;
 $('rename-group').onclick = () => {
   const previous = $('group-filter').value.slice(1), workspace = $('workspace').value;
   const tasks = state.tasks.filter(t => workspaceOf(t.data.context) === workspace && t.data.group === previous);
-  if (!previous || !tasks.length || saving || quickPending) return;
-  const name = window.prompt('重命名“' + previous + '”，将更新本空间使用该标签的 ' + tasks.length + ' 项任务。', previous)?.trim();
-  if (!name || name === previous) return;
-  if (groupNames(workspace).includes(name)) {
-    $('message').textContent = '该项目标签已存在，请选择其他名称。';
-    return;
-  }
-  return quickSave(tasks[0].id, {group: name}, null, previous);
+  if (!previous || !tasks.length || opening || saving || quickPending) return;
+  const dialog = $('rename-dialog'), input = $('rename-name'), error = $('rename-error');
+  const seq = state.seq;
+  $('rename-impact').textContent = '将同步更新「' + previous + '」下的 ' + tasks.length + ' 项任务。';
+  input.value = previous;
+  error.textContent = '';
+  input.setAttribute('aria-invalid', 'false');
+  input.oninput = () => {
+    error.textContent = '';
+    input.setAttribute('aria-invalid', 'false');
+  };
+  $('rename-form').onsubmit = event => {
+    event.preventDefault();
+    const name = input.value.trim();
+    if (name === previous) { dialog.close(); return; }
+    if (!name || [...name].length > 80 || /[\r\n\t]/.test(name)) {
+      error.textContent = '请输入 1 至 80 个字的单行名称。';
+    } else if (groupNames(workspace).includes(name)) {
+      error.textContent = '此名称已被使用，请换一个名称。';
+    } else if (state.seq !== seq) {
+      error.textContent = '任务已更新，请取消后重新打开。';
+    } else {
+      dialog.close();
+      return quickSave(tasks[0].id, {group: name}, null, previous);
+    }
+    input.setAttribute('aria-invalid', 'true');
+    input.focus();
+  };
+  dialog.showModal();
+  input.select();
 };
+$('rename-cancel').onclick = () => $('rename-dialog').close();
 form.elements.namedItem('workspace').onchange = () => {
   if (!editMode || saving) return;
   setTaskWorkspace(form.elements.namedItem('workspace').value);

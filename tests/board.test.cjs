@@ -14,6 +14,7 @@ class Element {
   showModal() { this.open = true; }
   hidePopover() { this.popoverOpen = false; }
   close() { this.open = false; }
+  select() { this.selected = true; }
   focus() { this.focused = true; }
   reset() { for (const control of this.elements) control.value = ''; }
 }
@@ -964,8 +965,18 @@ test('list assigns an existing owner, creates a tag and renames the selected tag
   assert.deepEqual(writes[1].changes, {group:'项目甲'});
   p.get('group-filter').value = ':项目甲'; p.get('group-filter').onchange();
   assert.equal(p.get('rename-group').disabled, false);
-  p.world.window.prompt = () => '项目乙';
-  await p.get('rename-group').onclick();
+  p.get('rename-group').onclick();
+  assert.equal(p.get('rename-name').value, '项目甲');
+  assert.match(p.get('rename-impact').textContent, /1 项任务/);
+  p.get('rename-cancel').onclick();
+  assert.equal(writes.length, 2);
+  p.get('rename-group').onclick();
+  p.get('rename-name').value = '甲'.repeat(81);
+  await p.get('rename-form').onsubmit({preventDefault(){}});
+  assert.match(p.get('rename-error').textContent, /80/);
+  assert.equal(p.get('rename-dialog').open, true);
+  p.get('rename-name').value = '项目乙';
+  await p.get('rename-form').onsubmit({preventDefault(){}});
   assert.equal(writes[2].rename_group, '项目甲');
   assert.deepEqual(writes[2].changes, {group:'项目乙'});
   assert.equal(p.get('group-filter').value, ':项目乙');
@@ -976,14 +987,39 @@ test('renaming a tag preserves a filter changed while the save is pending', asyn
   const task = {id:'a',data:{text:'测试',status:'doing',context:'work-current',group:'甲'},attention:[]};
   const p = await page(new Map(), {tasks:[task]});
   p.get('group-filter').value = ':甲';
-  p.world.window.prompt = () => '乙';
+  p.get('rename-group').onclick();
+  p.get('rename-name').value = '乙';
   const delayed = deferred();
   p.world.fetch = async (_, options) => options ? delayed.promise : response(p.board);
-  const save = p.get('rename-group').onclick();
+  const save = p.get('rename-form').onsubmit({preventDefault(){}});
   p.get('group-filter').value = '-';
   p.get('group-filter').onchange();
   task.data.group = '乙';
   delayed.resolve(response({seq:++p.board.seq}));
   await save;
   assert.equal(p.get('group-filter').value, '-');
+});
+
+test('rename dialog rejects an existing name and a changed task list before writing', async () => {
+  const tasks = ['甲', '乙'].map(group => ({
+    id: group, data: {text: group, group, context: 'work-current', status: 'doing'}, attention: []
+  }));
+  const p = await page(new Map(), {tasks});
+  p.get('group-filter').value = ':甲';
+  p.get('rename-group').onclick();
+  let writes = 0;
+  p.world.fetch = async (_, options) => {
+    if (options) writes++;
+    return response(p.board);
+  };
+  p.get('rename-name').value = '乙';
+  await p.get('rename-form').onsubmit({preventDefault(){}});
+  assert.match(p.get('rename-error').textContent, /已被使用/);
+  p.board.seq++;
+  await p.world.refresh();
+  p.get('rename-name').value = '丙';
+  await p.get('rename-form').onsubmit({preventDefault(){}});
+  assert.match(p.get('rename-error').textContent, /任务已更新/);
+  assert.equal(p.get('rename-dialog').open, true);
+  assert.equal(writes, 0);
 });

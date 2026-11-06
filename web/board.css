@@ -37,3 +37,16 @@ main{padding-top:18px}.intro{align-items:center;margin-bottom:24px}h1{font-size:
 #completion-picker{width:min(460px,95vw)}#completion-picker h2{margin-bottom:12px}.completion-options{display:grid;gap:10px;margin:18px 0}#completion-picker>.muted{font-size:13px;margin-bottom:16px}
 
 #save-notice{position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);z-index:5;display:flex;align-items:center;gap:1rem;width:max-content;max-width:calc(100% - 2rem);padding:.65rem 1rem;border:1px solid var(--line);border-radius:8px;background:var(--white);color:var(--ink);box-shadow:0 3px 16px #19363c22;overflow-wrap:anywhere}#undo-save{flex:none;color:var(--accent)}
+
+.workspace-filters select, #rename-group {height:40px;border-radius:6px;font-size:14px}
+#rename-group {align-self:flex-end;white-space:nowrap;color:var(--accent);font-weight:600}
+#rename-group:disabled {color:var(--muted);background:transparent;opacity:.75}
+#rename-dialog {width:min(400px,calc(100vw - 32px));padding:24px;margin:auto}
+#rename-title {font-size:20px;line-height:1.4}
+#rename-impact {margin:8px 0 22px;color:var(--muted);font-size:14px;line-height:1.6;overflow-wrap:anywhere}
+#rename-form label {margin:0 0 7px;color:var(--ink);font-weight:600}
+#rename-name[aria-invalid="true"] {border-color:var(--alert)}
+#rename-error {margin:7px 0 0;font-size:13px;color:var(--alert)}
+#rename-error:empty {display:none}
+.rename-actions {display:flex;justify-content:flex-end;gap:8px;margin-top:24px}
+@media(max-width:580px){#rename-group {align-self:stretch}}
