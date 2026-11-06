@@ -35,3 +35,5 @@ main{padding-top:18px}.intro{align-items:center;margin-bottom:24px}h1{font-size:
 .row-date::-webkit-calendar-picker-indicator{opacity:1;cursor:pointer}
 
 #completion-picker{width:min(460px,95vw)}#completion-picker h2{margin-bottom:12px}.completion-options{display:grid;gap:10px;margin:18px 0}#completion-picker>.muted{font-size:13px;margin-bottom:16px}
+
+#save-notice{position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);z-index:5;display:flex;align-items:center;gap:1rem;width:max-content;max-width:calc(100% - 2rem);padding:.65rem 1rem;border:1px solid var(--line);border-radius:8px;background:var(--white);color:var(--ink);box-shadow:0 3px 16px #19363c22;overflow-wrap:anywhere}#undo-save{flex:none;color:var(--accent)}

@@ -6,6 +6,7 @@
 <nav aria-label="工作视图" class="view-nav"><a href="/" aria-current="page">任务</a> · <a href="/people">人员</a> · <a href="/notes">笔记</a></nav>
 <main>
 <div class="intro"><div><p class="eyebrow">当前工作</p><h1>把注意力留给要紧的事。</h1><p class="muted">记录下一步，跟进变化。也可以直接在对话中告诉我。</p></div><div class="workspace-filters"><label>工作空间<select id="workspace"><option value="lingguang">灵光</option><option value="lumos">Lumos 仓库维护</option></select></label><label>项目标签<select id="group-filter"><option value="">全部分组</option></select></label></div></div>
+<div id="save-notice" hidden><span id="save-summary" role="status"></span> <button id="undo-save" type="button" hidden>撤回</button></div>
 <p id="message" role="status" aria-live="polite"></p>
 <p id="preferences-message" role="status" aria-live="polite"></p>
 <div class="task-toolbar"><div class="scope-tabs" role="group" aria-label="当前状态筛选（可多选）"><span class="filter-label">当前状态</span><button id="status-todo" aria-pressed="true">待处理</button><button id="status-doing" aria-pressed="true">进行中</button><button id="status-blocked" aria-pressed="false">受阻</button><button id="status-done" aria-pressed="false">已完成</button><button id="status-cancelled" aria-pressed="false">已取消</button></div><div role="group" aria-label="展示方式"><button id="view-list" aria-pressed="true">列表</button><button id="view-board" aria-pressed="false">看板</button><button id="view-schedule" aria-pressed="false">近期安排</button></div></div>

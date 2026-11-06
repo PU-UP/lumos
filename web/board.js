@@ -216,14 +216,16 @@ async function moveTask(id, status, beforeId = null) {
       expected_seq: state.seq, id, changes, before_id: beforeId}};
   }
   saving = true;
-  $('message').textContent = '正在保存位置…';
+  showSaveNotice('正在保存位置…', null, true);
   try {
     await api('/api/tasks', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Lumos-Token': state.token},
       body: JSON.stringify(movePending.request)});
     movePending = null;
     const loaded = await refresh();
-    $('message').textContent = loaded ? '卡片位置和状态已保存。' : '已保存，但看板刷新失败。请点击刷新。';
+    if (loaded) showSaveNotice('卡片位置和状态已保存。');
+    else $('message').textContent = '已保存，但看板刷新失败。请点击刷新。';
   } catch (e) {
+    hideSaveNotice();
     $('message').textContent = e.message + '\n尚未确认保存成功。网络失败可重复同一拖动重试；记录发生变化时请刷新后核对。';
   } finally {
     saving = false;
@@ -530,7 +532,32 @@ function renderList(tasks) {
   }
 }
 
-async function quickSave(id, changes) {
+const quickFields = {priority: '优先级', due: '交付时间', follow_up: '下次关心时间', completed_on: '完成日期'};
+let noticeTimer, quickFeedback;
+
+function hideSaveNotice() {
+  clearTimeout(noticeTimer);
+  $('save-notice').hidden = true;
+  $('undo-save').onclick = null;
+}
+
+function showSaveNotice(text, undo = null, pendingSave = false) {
+  clearTimeout(noticeTimer);
+  $('save-summary').textContent = text;
+  $('undo-save').hidden = !undo;
+  $('undo-save').onclick = undo;
+  $('save-notice').hidden = false;
+  if (!pendingSave) noticeTimer = setTimeout(hideSaveNotice, 7000);
+}
+
+function quickValue(field, value) {
+  if (field === 'priority') return priorities[value || 'normal'];
+  if (field === 'due') return dueLabel(value);
+  if (field === 'status') return labels[value];
+  return value || (field === 'completed_on' ? '未记录' : '未设置');
+}
+
+async function quickSave(id, changes, undoSeq = null) {
   if (saving || opening || completionChoice || !state.writable || $('editor').open) return;
   const task = state.tasks.find(t => t.id === id);
   if (!quickPending && changes.status === 'done' && task?.data.status !== 'done') {
@@ -538,18 +565,32 @@ async function quickSave(id, changes) {
     if (date === null) {renderList(filtered()); return;}
     changes = {...changes, completed_on: date};
   }
-  quickPending ||= {request_id: crypto.randomUUID().replaceAll('-', ''), expected_seq: state.seq, id, changes};
+  if (!quickPending) {
+    const field = Object.keys(changes)[0];
+    const before = task?.data[field] ?? (field === 'priority' ? 'normal' : '');
+    const summary = task ? task.data.text + ' · ' + (quickFields[field] || '状态') + '：'
+      + quickValue(field, before) + ' → ' + quickValue(field, changes[field]) : '修改已保存。';
+    quickFeedback = {text: (undoSeq === null ? '' : '已撤回 · ') + summary,
+      inverse: undoSeq === null && quickFields[field] && before !== changes[field] ? {[field]: before} : null};
+    quickPending = {request_id: crypto.randomUUID().replaceAll('-', ''), expected_seq: undoSeq ?? state.seq, id, changes};
+  }
   saving = true;
   $('quick-retry').hidden = true;
   renderList(filtered());
-  $('message').textContent = '正在保存…';
+  showSaveNotice('正在保存修改…', null, true);
   try {
-    await api('/api/tasks', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Lumos-Token': state.token},
+    const expected = quickPending.expected_seq;
+    const result = await api('/api/tasks', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Lumos-Token': state.token},
       body: JSON.stringify(quickPending)});
     quickPending = null;
     const loaded = await refresh();
-    $('message').textContent = loaded ? '修改已保存。' : '修改已保存，但列表刷新失败。请点击刷新。';
+    if (loaded) {
+      const {text, inverse} = quickFeedback;
+      const canUndo = inverse && state.writable && state.seq === result.seq && result.seq === expected + 1;
+      showSaveNotice(text, canUndo ? () => quickSave(id, inverse, result.seq) : null);
+    } else $('message').textContent = '修改已保存，但列表刷新失败。请点击刷新。';
   } catch (e) {
+    hideSaveNotice();
     $('message').textContent = e.message + '\n尚未确认保存成功。可重试上次修改；若版本冲突，请刷新后核对再修改。';
     $('quick-retry').hidden = false;
   } finally {
@@ -559,6 +600,7 @@ async function quickSave(id, changes) {
 }
 
 async function refresh() {
+  if (!saving) hideSaveNotice();
   $('refresh').disabled = true;
   try {
     state = await api('/api/tasks');
@@ -571,6 +613,7 @@ async function refresh() {
     render();
     return true;
   } catch (e) {
+    hideSaveNotice();
     $('message').textContent = '读取失败：' + e.message;
     $('sync').textContent = '最新记录未能读取';
     return false;
@@ -818,8 +861,8 @@ async function saveChanges(changes, quick = false) {
     dirty = false;
     $('editor').close();
     const loaded = await refresh();
-    if (loaded) $('message').textContent = result.replayed ? '已确认上次保存成功。'
-      : quick ? '状态已更新为“' + labels[changes.status] + '”。' : '任务已保存。';
+    if (loaded) showSaveNotice(result.replayed ? '已确认上次保存成功。'
+      : quick ? '状态已更新为“' + labels[changes.status] + '”。' : '任务已保存。');
     else $('message').textContent = '任务已保存，但看板刷新失败。请点击刷新读取最新记录。';
   } catch (e) {
     $('form-message').textContent = e.message + (quick

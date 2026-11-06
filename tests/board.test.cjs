@@ -38,7 +38,10 @@ async function page(storage = new Map(), initialBoard = {}) {
   const board = {seq: 3, today: '2026-10-21', writable: true, tasks: [], token: 'test-token',
     contexts: [{id: 'work-current', data: {title: '模拟工作'}}], integrity: {drafts_or_missing_working_copies: []}};
   Object.assign(board, initialBoard);
-  const world = {document: {getElementById: get, createElement: () => new Element()},
+  const timers = new Map();
+  let nextTimer = 0;
+  const world = {setTimeout(fn, ms) {timers.set(++nextTimer, {fn, ms}); return nextTimer;},
+    clearTimeout(id) {timers.delete(id);}, document: {getElementById: get, createElement: () => new Element()},
     localStorage: {getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value)},
     window: {addEventListener() {}}, URLSearchParams, Option: function(text, value) { this.text = text; this.value = value; },
     crypto: {randomUUID: () => '11111111-1111-1111-1111-111111111111'},
@@ -46,7 +49,7 @@ async function page(storage = new Map(), initialBoard = {}) {
   vm.createContext(world);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../web/board.js'), 'utf8'), world);
   await tick();
-  return {world, get, controls, form, board};
+  return {world, get, controls, form, board, timers};
 }
 
 test('saving locks fields, close and duplicate submission until the request settles', async () => {
@@ -70,7 +73,7 @@ test('saving locks fields, close and duplicate submission until the request sett
   await saving;
   assert.equal(p.get('editor').open, false);
   assert.ok(p.form.elements.every(c => !c.disabled));
-  assert.equal(p.get('message').textContent, '任务已保存。');
+  assert.equal(p.get('save-summary').textContent, '任务已保存。');
 });
 
 test('failed save retains input and retry uses the identical request id', async () => {
@@ -91,7 +94,7 @@ test('failed save retains input and retry uses the identical request id', async 
   assert.ok(p.form.elements.every(c => !c.disabled));
   await p.form.onsubmit({preventDefault() {}});
   assert.equal(bodies[0], bodies[1]);
-  assert.equal(p.get('message').textContent, '已确认上次保存成功。');
+  assert.equal(p.get('save-summary').textContent, '已确认上次保存成功。');
 });
 
 test('successful save followed by failed refresh reports both states', async () => {
@@ -237,7 +240,7 @@ test('quick status saves only status, prevents duplicate writes and refreshes th
   delayed.resolve(response({seq: 4}));
   await saving;
   assert.equal(p.get('editor').open, false);
-  assert.equal(p.get('message').textContent, '状态已更新为“已完成”。');
+  assert.equal(p.get('save-summary').textContent, '状态已更新为“已完成”。');
 });
 
 test('quick status failure preserves original status and retries the identical request', async () => {
@@ -446,6 +449,11 @@ test('inline updates send one field, lock during save, retry identically and ref
     return response({});
   };
   const operation = p.world.quickSave('a', {priority:'high'});
+  assert.equal(p.get('save-notice').hidden, false);
+  assert.equal(p.get('save-summary').textContent, '正在保存修改…');
+  assert.equal(p.get('undo-save').hidden, true);
+  assert.equal(p.timers.size, 0);
+  assert.equal(p.get('message').textContent, '');
   assert.equal(p.get('task-list').children[1].children[1].disabled, true);
   await p.world.quickSave('a', {follow_up:'2026-11-01'});
   assert.equal(writes.length, 1);
@@ -881,4 +889,44 @@ test('personnel assigns joint tasks to both members but counts each team task on
   const outside=get('people-list').children[1];
   assert.equal(outside.children[0].textContent,'名册外负责人');
   assert.equal(outside.children[3].children[0].children[0].textContent,'外部同事');
+});
+
+test('inline notice describes the edit, restores the old value once and expires in seven seconds', async () => {
+  const p = await page();
+  const task = {id:'a',data:{text:'准备方案',status:'doing',context:'work-current',due:'long_term'},attention:[]};
+  p.board.tasks = [task];
+  const writes = [];
+  p.world.fetch = async (_, options) => {
+    if (!options) return response(p.board);
+    const request = JSON.parse(options.body);
+    writes.push(request);
+    assert.equal(request.expected_seq, p.board.seq);
+    Object.assign(task.data, request.changes);
+    return response({seq:++p.board.seq});
+  };
+  await p.world.quickSave('a', {due:'2026-11-12'});
+  assert.equal(p.get('save-summary').textContent, '准备方案 · 交付时间：长期 → 2026-11-12');
+  assert.equal(p.get('undo-save').hidden, false);
+  await p.get('undo-save').onclick();
+  assert.deepEqual(writes[1].changes, {due:'long_term'});
+  assert.equal(p.get('undo-save').hidden, true);
+  assert.match(p.get('save-summary').textContent, /已撤回/);
+  assert.equal(p.timers.size, 1);
+  const [timer] = p.timers.values();
+  assert.equal(timer.ms, 7000);
+  timer.fn();
+  assert.equal(p.get('save-notice').hidden, true);
+});
+
+test('an intervening save or replay cannot authorize undo against a later version', async () => {
+  const p = await page();
+  p.board.tasks = [{id:'a', data:{text:'测试',status:'doing',context:'work-current'},attention:[]}];
+  p.world.fetch = async (_, options) => {
+    if (!options) return response(p.board);
+    p.board.seq += 2;
+    return response({seq:p.board.seq,replayed:true});
+  };
+  await p.world.quickSave('a', {priority:'high'});
+  assert.equal(p.get('undo-save').hidden, true);
+  assert.equal(p.get('undo-save').onclick, null);
 });
