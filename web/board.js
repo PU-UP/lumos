@@ -112,13 +112,7 @@ function ownerOptions(workspace, current = '', teams = false) {
     groups.set('other-owners', group);
   }
   if (!teams) {
-    const options = [new Option('王牧楠', '王牧楠'), ...groups.values()];
-    if (current.includes('、')) {
-      const existing = new Option(current, current);
-      existing.disabled = true;
-      options.unshift(existing);
-    }
-    return options;
+    return [new Option('王牧楠', '王牧楠'), ...groups.values()];
   }
   const options = [new Option('王牧楠', '王牧楠')];
   for (const [key, group] of groups) {
@@ -165,8 +159,70 @@ function setTaskWorkspace(workspace, context = null) {
     : contexts.find(c => c.id === preferred)?.id || contexts[0]?.id || '';
   $('group-options').replaceChildren(...groupNames(workspace).map(name => new Option(name, name)));
   const owner = form.elements.namedItem('owner'), selectedOwner = owner.value || '王牧楠';
-  owner.replaceChildren(...ownerOptions(workspace, selectedOwner));
   owner.value = selectedOwner;
+  renderFormOwner();
+}
+
+function renderOwnerEditor(parent, value, workspace, disabled, onChange, label = '任务负责人', inForm = false) {
+  parent.replaceChildren();
+  const trigger = element('button', value, 'owner-trigger');
+  trigger.type = 'button'; trigger.disabled = disabled; trigger.title = value;
+  trigger.setAttribute('aria-label', label);
+  trigger.setAttribute('aria-expanded', 'false');
+  const panel = element('div', undefined, 'owner-popover');
+  panel.setAttribute('popover', 'auto'); panel.setAttribute('aria-label', '选择负责人');
+  for (const event of ['input', 'change']) panel.addEventListener(event, e => e.stopPropagation());
+  const selected = element('p', undefined, 'owner-selected'), list = element('div', undefined, 'owner-choices');
+  const error = element('p', '', 'owner-error'); error.setAttribute('role', 'alert');
+  const checks = [];
+  let names;
+  const summary = () => {selected.textContent = '已选：' + ([...names].join('、') || '请选择至少一名负责人'); error.textContent = '';};
+  for (const option of ownerOptions(workspace, value)) {
+    const group = option.tagName === 'OPTGROUP';
+    if (group) list.append(element('h3', option.label));
+    for (const member of group ? option.children : [option]) {
+      const row = element('label'), check = element('input');
+      check.type = 'checkbox'; check.value = member.value;
+      check.onchange = () => {if (check.checked) names.add(check.value); else names.delete(check.value); summary();};
+      row.append(check, element('span', member.text)); list.append(row); checks.push(check);
+    }
+  }
+  const actions = element('div', undefined, 'owner-actions');
+  const cancel = element('button', '取消'), apply = element('button', inForm ? '确定' : '保存', 'primary');
+  cancel.type = apply.type = 'button';
+  cancel.onclick = () => {panel.hidePopover(); trigger.focus();};
+  apply.onclick = () => {
+    if (!names.size) {error.textContent = '请至少选择一名负责人。'; return;}
+    const next = [...names].join('、');
+    if (next.length > 300) {error.textContent = '负责人姓名合计不能超过300个字符。'; return;}
+    panel.hidePopover(); trigger.focus();
+    if (next === value) return;
+    value = next; trigger.textContent = value; trigger.title = value;
+    return onChange(value);
+  };
+  actions.append(cancel, apply);
+  panel.append(selected, list, error);
+  if (inForm) panel.append(element('p', '确定后，随“保存任务”一起保存。', 'muted'));
+  panel.append(actions);
+  panel.addEventListener('toggle', event => trigger.setAttribute('aria-expanded', String(event.newState === 'open')));
+  trigger.onclick = () => {
+    if (panel.matches(':popover-open')) {panel.hidePopover(); return;}
+    names = new Set(value.split('、').map(n => n.trim()).filter(Boolean));
+    for (const check of checks) check.checked = names.has(check.value);
+    summary(); panel.showPopover();
+    const rect = trigger.getBoundingClientRect();
+    panel.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - panel.offsetWidth - 8)) + 'px';
+    panel.style.top = Math.max(8, rect.bottom + panel.offsetHeight + 8 <= window.innerHeight
+      ? rect.bottom + 4 : rect.top - panel.offsetHeight - 4) + 'px';
+    (checks.find(c => c.checked) || checks[0]).focus();
+  };
+  parent.append(trigger, panel);
+}
+
+function renderFormOwner() {
+  const owner = form.elements.namedItem('owner');
+  renderOwnerEditor($('owner-editor'), owner.value || '王牧楠', form.elements.namedItem('workspace').value,
+    !editMode || !state.writable, value => {owner.value = value; markDirty();}, '任务负责人', true);
 }
 
 function tags(reasons) {
@@ -645,13 +701,9 @@ function renderList(tasks) {
     if (deliveryHint.text) dueCell.append(element('small', '待约定交付时间'));
     dueCell.title = '原交付日期：' + dueLabel(t.data.due) + '；完成日期独立记录';
     const workspace = workspaceOf(t.data.context);
-    const owner = element('select', undefined, 'row-owner');
-    owner.append(...ownerOptions(workspace, ownerName(t.data)));
-    owner.value = ownerName(t.data);
-    owner.title = owner.value;
-    owner.setAttribute('aria-label', t.data.text + ' · 负责人');
-    owner.disabled = priority.disabled;
-    owner.onchange = () => quickSave(t.id, {owner: owner.value});
+    const owner = element('div', undefined, 'row-owner');
+    renderOwnerEditor(owner, ownerName(t.data), workspace, priority.disabled,
+      value => quickSave(t.id, {owner: value}), t.data.text + ' · 负责人');
     const group = element('select', undefined, 'project-tag');
     group.append(new Option('未分组', ''), ...groupNames(workspace).map(name => new Option(name, ':' + name)),
       new Option('＋ 新建标签', '+'));
@@ -889,6 +941,7 @@ function setEditMode(enabled) {
   $('editor-title').textContent = enabled ? (editing ? '编辑任务' : '新增任务') : savedValues.text;
   $('follow-up-field').hidden = isClosed(savedValues);
   $('completed-field').hidden = savedValues.status !== 'done';
+  renderFormOwner();
   renderDueEditor($('due-editor'), form.elements.namedItem('due').value, !enabled || !state.writable, value => {
     form.elements.namedItem('due').value = value;
     markDirty();
@@ -947,7 +1000,6 @@ async function openTask(id = null) {
       group: $('group-filter').value.startsWith(':') ? $('group-filter').value.slice(1) : '',
       status: 'todo', priority: 'normal'};
     for (const k of fields) form.elements.namedItem(k).value = data[k] || (k === 'priority' ? 'normal' : '');
-    form.elements.namedItem('owner').replaceChildren(...ownerOptions(workspace, ownerName(data)));
     form.elements.namedItem('owner').value = ownerName(data);
     savedValues = values();
     renderTask({...savedValues, follow_up_pending: data.follow_up_pending});
@@ -1056,7 +1108,6 @@ $('edit').onclick = () => {
 $('cancel-edit').onclick = () => {
   if (saving) return;
   setTaskWorkspace(workspaceOf(savedValues.context), savedValues.context);
-  form.elements.namedItem('owner').replaceChildren(...ownerOptions(workspaceOf(savedValues.context), savedValues.owner));
   for (const k of fields) form.elements.namedItem(k).value = savedValues[k];
   dirty = false;
   discardArmed = false;

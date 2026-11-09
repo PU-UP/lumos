@@ -27,7 +27,7 @@
 <div id="task-view"></div>
 <fieldset id="task-fields" hidden disabled aria-label="编辑任务">
 <label>任务标题<input name="text" required maxlength="300" placeholder="这件事要做什么？"></label>
-<label>负责人<select name="owner" aria-label="任务负责人"></select></label>
+<div class="owner-field"><span>负责人</span><input name="owner" type="hidden"><div id="owner-editor"></div></div>
 <div class="form-grid"><label>工作空间<select name="workspace" required><option value="lingguang">灵光</option><option value="lumos">Lumos 仓库维护</option></select></label><label>当前状态<select name="status"><option value="todo">待处理</option><option value="doing">进行中</option><option value="blocked">受阻</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></label></div>
 <label>分组<input name="group" list="group-options" maxlength="80" placeholder="选择已有分组，或输入新名称；留空为未分组"></label><datalist id="group-options"></datalist>
 <details id="context-details"><summary>关联背景</summary><label>背景脉络<select name="context" required></select></label><p>保留任务的来源、背景和历史；分组只影响分类与筛选。</p></details>

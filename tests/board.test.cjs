@@ -6,12 +6,15 @@ const path = require('node:path');
 
 // Minimal DOM for the editor lifecycle; actual layout is checked in the browser.
 class Element {
-  constructor() { this.value = ''; this.disabled = false; this.open = false; this.children = []; this.events = {}; this.dataset = {}; }
+  constructor() { this.value = ''; this.disabled = false; this.open = false; this.children = []; this.events = {}; this.dataset = {}; this.style = {}; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
   addEventListener(name, fn) { this.events[name] = fn; }
   setAttribute(name, value) { this[name] = value; }
   showModal() { this.open = true; }
+  showPopover() { this.popoverOpen = true; }
+  matches() { return !!this.popoverOpen; }
+  getBoundingClientRect() { return {left:10,right:100,top:10,bottom:40}; }
   hidePopover() { this.popoverOpen = false; }
   close() { this.open = false; }
   select() { this.selected = true; }
@@ -21,6 +24,7 @@ class Element {
 const textOf = node => [node.textContent || '', ...(node.children || []).map(textOf)].join('\n');
 const response = data => ({ok: true, json: async () => data});
 const tick = () => new Promise(resolve => setImmediate(resolve));
+const ownerChecks = panel => panel.children[1].children.flatMap(n=>n.children).filter(n=>n.type==='checkbox');
 function deferred() {
   let resolve;
   const promise = new Promise(r => { resolve = r; });
@@ -42,9 +46,9 @@ async function page(storage = new Map(), initialBoard = {}) {
   const timers = new Map();
   let nextTimer = 0;
   const world = {ResizeObserver: class { observe() {} disconnect() {} }, setTimeout(fn, ms) {timers.set(++nextTimer, {fn, ms}); return nextTimer;},
-    clearTimeout(id) {timers.delete(id);}, document: {getElementById: get, createElement: () => new Element()},
+    clearTimeout(id) {timers.delete(id);}, document: {getElementById: get, createElement: tag => Object.assign(new Element(), {tagName:tag.toUpperCase()})},
     localStorage: {getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value)},
-    window: {addEventListener() {}}, URLSearchParams, Option: function(text, value) { this.text = text; this.value = value; },
+    window: {addEventListener() {}}, URLSearchParams, Option: function(text, value) { this.text = text; this.label = text; this.value = value; this.tagName = 'OPTION'; },
     crypto: {randomUUID: () => '11111111-1111-1111-1111-111111111111'},
     fetch: async () => response(board)};
   vm.createContext(world);
@@ -419,7 +423,7 @@ test('status filters default to todo and doing, compose as toggles and apply to 
   assert.equal(p.get('board').hidden, true);
   assert.equal(p.get('task-list').children.length, 3);
   assert.equal(p.get('task-list').children[1].children[2].value, ':项目甲');
-  assert.equal(p.get('task-list').children[1].children[3].value, '王牧楠');
+  assert.equal(p.get('task-list').children[1].children[3].children[0].textContent, '王牧楠');
   p.get('status-todo').onclick();
   p.get('status-doing').onclick();
   p.get('status-done').onclick();
@@ -635,7 +639,7 @@ test('roster includes people without tasks, grouped owners and workspace isolati
   assert.ok(!p.world.ownerOptions('lingguang').flatMap(g=>g.children || []).some(o=>o.value.startsWith('@team:')));
   await p.world.openTask();
   assert.equal(p.controls.owner.value, '王牧楠');
-  assert.ok(p.controls.owner.children.flatMap(g=>g.children || []).some(o=>o.value==='模拟甲'));
+  assert.match(textOf(p.get('owner-editor')), /模拟甲/);
   p.world.closeEditor();
   p.get('workspace').value='lumos'; p.get('workspace').onchange();
   assert.ok(p.world.ownerOptions('lumos').flatMap(g=>g.children || []).some(o=>o.value==='模拟维护者'));
@@ -647,10 +651,10 @@ test('editing an owner absent from roster preserves it when cancelling', async (
   const p = await page();
   p.world.fetch=async()=>response({seq:3,task:{data:{text:'旧任务',context:'work-current',status:'doing',owner:'旧负责人',group:'原标签',source:{ref:'fixture'}}},related:[],documents:{},history:[]});
   await p.world.openTask('old');
-  assert.ok(p.controls.owner.children.flatMap(g=>g.children || []).some(o=>o.value==='旧负责人'));
+  assert.match(textOf(p.get('owner-editor')), /旧负责人/);
   p.get('edit').onclick(); p.controls.owner.value='王牧楠'; p.form.events.input();
   p.get('cancel-edit').onclick();
-  assert.ok(p.controls.owner.children.flatMap(g=>g.children || []).some(o=>o.value==='旧负责人'));
+  assert.match(textOf(p.get('owner-editor')), /旧负责人/);
   assert.equal(p.controls.owner.value, '旧负责人');
   assert.equal(p.controls.group.value, '原标签');
 });
@@ -873,7 +877,7 @@ test('joint owners match individual and team filters while editing retains the f
   assert.ok(!p.world.ownerOptions('lingguang','',true).some(o=>o.value==='@other'));
   await p.world.openTask();
   const options = p.world.ownerOptions('lingguang',task.data.owner);
-  assert.ok(options.some(o=>o.value===task.data.owner && o.disabled));
+  assert.ok(!options.some(o=>o.value===task.data.owner));
   assert.ok(!options.flatMap(o=>o.children||[]).some(o=>o.value===task.data.owner));
   assert.ok(!p.world.ownerOptions('lingguang').flatMap(o=>o.children||[]).some(o=>o.value===task.data.owner));
   assert.equal(p.world.matchesOwner({...task,data:{...task.data,owner:'模拟甲、名册外乙'}},'@other'),true);
@@ -952,8 +956,10 @@ test('list assigns an existing owner, creates a tag and renames the selected tag
     return response({seq:++p.board.seq});
   };
   const owner = row()[3];
-  assert.ok(owner.children.some(group => group.children?.some(option => option.value === '同事')));
-  owner.value = '同事'; await owner.onchange();
+  owner.children[0].onclick();
+  const ownerPanel = owner.children[1], ownerChecks = ownerPanel.children[1].children.flatMap(n=>n.children).filter(n=>n.type==='checkbox');
+  for(const c of ownerChecks) {c.checked=c.value==='同事'; c.onchange();}
+  await ownerPanel.children.at(-1).children[1].onclick();
   assert.deepEqual(writes[0].changes, {owner:'同事'});
   const group = row()[2];
   p.world.window.prompt = () => '甲'.repeat(81);
@@ -1046,4 +1052,41 @@ test('delivery timeline groups by due date and project, keeps undated tasks and 
   await monday.children[1].onclick();
   assert.equal(requested,'/api/task?id=fixture-1');
   assert.match(p.get('task-detail-label').textContent,/T-002/);
+});
+const ownerPeople = ['甲','乙'].map(title=>({data:{title,team:'同组',workspaces:['lingguang']}}));
+test('multi-owner picker preserves legacy names, rejects empty selection and discards unapplied choices',async()=>{
+ const p=await page(new Map(),{people:ownerPeople}), parent=new Element(), writes=[];
+ p.world.renderOwnerEditor(parent,'甲、旧成员','lingguang',false,v=>writes.push(v));
+ const [button,panel]=parent.children, checks=ownerChecks(panel), actions=panel.children.at(-1).children;
+ button.onclick();
+ assert.deepEqual(checks.filter(c=>c.checked).map(c=>c.value),['甲','旧成员']);
+ const change=(name,checked)=>{const c=checks.find(c=>c.value===name);c.checked=checked;c.onchange();};
+ change('乙',true);actions[0].onclick();button.onclick();
+ assert.equal(checks.find(c=>c.value==='乙').checked,false);assert.equal(writes.length,0);
+ for(const c of checks) {c.checked=false;c.onchange();}
+ actions[1].onclick();assert.match(textOf(panel),/请至少选择/);assert.equal(writes.length,0);
+ change('甲',true);change('乙',true);await actions[1].onclick();
+ assert.deepEqual(writes,['甲、乙']);assert.equal(button.textContent,'甲、乙');
+ button.onclick();change('乙',false);panel.hidePopover();button.onclick();
+ assert.equal(checks.find(c=>c.value==='乙').checked,true);
+ let stopped=false;panel.events.change({stopPropagation(){stopped=true;}});assert.equal(stopped,true);
+});
+
+test('new and existing task forms stage joint owners until save and preserve owners when cancelling',async()=>{
+ const p=await page(new Map(),{people:ownerPeople});let writes=[];
+ p.world.fetch=async(url,opt)=>{
+  if(opt){writes.push(JSON.parse(opt.body));return response({});}
+  return response(url.startsWith('/api/task?')?{seq:3,task:{data:{text:'旧任务',context:'work-current',status:'todo',owner:'甲、旧成员'}},history:[],related:[],documents:{}}:p.board);
+ };
+ await p.world.openTask();assert.equal(p.controls.owner.value,'王牧楠');
+ let [trigger,panel]=p.get('owner-editor').children;trigger.onclick();
+ for(const c of ownerChecks(panel)){c.checked=['甲','乙'].includes(c.value);c.onchange();}
+ panel.children.at(-1).children[1].onclick();assert.equal(writes.length,0);
+ assert.equal(p.controls.owner.value,'甲、乙');p.controls.text.value='新任务';
+ await p.form.onsubmit({preventDefault(){}});assert.equal(writes[0].changes.owner,'甲、乙');
+ await p.world.openTask('old');p.get('edit').onclick();
+ [trigger,panel]=p.get('owner-editor').children;trigger.onclick();
+ const added=ownerChecks(panel).find(c=>c.value==='乙');added.checked=true;added.onchange();
+ panel.children.at(-1).children[1].onclick();assert.equal(p.controls.owner.value,'甲、旧成员、乙');
+ p.get('cancel-edit').onclick();assert.equal(p.controls.owner.value,'甲、旧成员');assert.equal(writes.length,1);
 });
