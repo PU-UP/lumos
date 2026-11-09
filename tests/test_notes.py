@@ -73,6 +73,20 @@ class NoteTest(BaseStoreCase):
         self.assertEqual(note_detail(self.store, first['id'])['note'], first)
         self.assertIsNone(self.store.status()['session'])
 
+    def test_initial_archive_requires_finished_recording_in_all_write_paths(self):
+        with self.assertRaisesRegex(lumos.Error, '结束记录'):
+            save_note(self.store, self.request(status='archived', archive_reason='已处理'))
+        self.assertEqual(self.store.status()['seq'], 0)
+        first = save_note(self.store, self.request(body='尚在记录'))['note']
+        archived = copy.deepcopy(first)
+        archived['data'].update(status='archived', archive_reason='已处理', revision=2)
+        batch = self.store.begin({'reason':'fixture premature archive', 'updates':[archived]}, True)
+        with self.assertRaisesRegex(lumos.Error, '结束记录'):
+            self.store.commit(batch['batch'], True)
+        self.store.abandon(batch['batch'])
+        self.assertEqual(note_detail(self.store, first['id'])['note'], first)
+        self.assertIsNone(self.store.status()['session'])
+
     def test_dates_spaces_search_archive_restore_and_context_exclusion(self):
         self.seed()
         first = save_note(self.store, self.request(title='模拟早会', body='同步问题', date='2026-10-25'))['note']
@@ -90,6 +104,32 @@ class NoteTest(BaseStoreCase):
         self.assertNotIn(first['id'], [n['id'] for n in self.store.context('mapping')['nodes']])
         save_note(self.store, self.request(first['id'], 3, status='active', archive_reason=''))
         self.assertEqual(len(list_notes(self.store)['notes']), 2)
+
+    def test_archived_correction_preserves_archive_history_and_pinned_source(self):
+        self.seed()
+        first = save_note(self.store, {**self.request(body='模拟错名'), 'operation':'finish'})['note']
+        ident = first['id']
+        save_task(self.store, {'request_id':uuid.uuid4().hex, 'expected_seq':self.store.status()['seq'],
+                  'id':'talk', 'changes':{}, 'source':first['data']['source'],
+                  'note_refs':[{'id':ident, 'revision':1, 'excerpt':'模拟错名'}]})
+        save_note(self.store, self.request(ident, 1, status='archived', archive_reason='已整理到任务'))
+        edit = {**self.request(ident, 2, status='archived', body='模拟正名'), 'operation':'edit'}
+        save_note(self.store, edit)
+        self.assertTrue(save_note(self.store, edit)['replayed'])
+        save_note(self.store, self.request(ident, 3, status='archived', body='模拟正名。'))
+        save_note(self.store, {**self.request(ident, 4, status='archived'), 'operation':'finish'})
+        detail = note_detail(self.store, ident)
+        self.assertEqual(detail['note']['data']['status'], 'archived')
+        self.assertEqual(detail['note']['data']['recording'], 'finished')
+        self.assertEqual(detail['note']['data']['archive_reason'], '已整理到任务')
+        self.assertEqual(detail['note']['data']['body'], '模拟正名。')
+        self.assertEqual(len(detail['history']), 2)
+        self.assertEqual(note_detail(self.store, ident, 1)['note'], first)
+        self.assertEqual(task_detail(self.store, 'talk')['note_sources'][0]['note'], first)
+        self.assertEqual(list_notes(self.store)['notes'], [])
+        self.assertEqual(list_notes(self.store, archived=True)['notes'][0]['id'], ident)
+        with self.assertRaisesRegex(lumos.Error, '修改'):
+            save_note(self.store, edit | {'request_id':uuid.uuid4().hex})
 
     def test_pinned_task_excerpt_survives_edit_archive_and_backup(self):
         self.seed()

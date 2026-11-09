@@ -25,8 +25,6 @@ def validate_note(data):
     require(type(data.get('revision')) is int and data['revision'] > 0, 'Invalid note revision')
     require(data.get('recording', 'finished') in {'editing', 'finished'}, 'Invalid recording state')
     require(type(data.get('checkpoint', True)) is bool, 'Invalid checkpoint')
-    require(data['status'] != 'archived' or data.get('recording', 'finished') == 'finished',
-            '归档笔记不能处于编辑中。')
     source = data.get('source', {})
     require(isinstance(source, dict) and source.get('type') in {'user', 'agent', 'source', 'user_report'}
             and isinstance(source.get('ref'), str) and 0 < len(source['ref']) <= 2000, 'Note needs provenance')
@@ -124,8 +122,8 @@ def save_note(store, request):
         require(operation == 'edit' or recording == 'editing' or not content_changed,
                 '请先点击编辑，再修改已结束的笔记。')
         require(operation != 'finish' or recording == 'editing', '记录已经结束。')
-        require(operation != 'edit' or data['status'] != 'archived', '请先恢复已归档笔记。')
-        require(changes.get('status') != 'archived' or 'recording' not in data or recording == 'finished',
+        require(changes.get('status') != 'archived' or data['status'] == 'archived'
+                or (operation != 'edit' and ('recording' not in data or recording == 'finished')),
                 '请先结束记录，再归档已处理的笔记。')
         data.update(changes)
         if isinstance(data['title'], str):

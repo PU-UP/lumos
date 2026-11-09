@@ -2,6 +2,7 @@ const $ = id => document.getElementById(id);
 const uid = () => crypto.randomUUID().replaceAll('-', '');
 let state, current = null, dirty = false, pending = null, saving = null, timer, remote = null;
 let paused = false, historical = false, navigating = false, listRequest = 0, transitioning = false;
+let rejectedRequest = null;
 // A duplicated tab can inherit sessionStorage; each page needs its own draft key.
 const tabId = uid();
 const fieldIds = {title:'note-title', body:'note-body', date:'note-date'};
@@ -18,7 +19,7 @@ function values() {
 function draftKey() {return 'lumos-note:' + state.store_id + ':' + tabId + ':' + current.id;}
 function stash() {
   if (!current || !dirty) return;
-  try {localStorage.setItem(draftKey(), JSON.stringify({current, values:values(), pending}));}
+  try {localStorage.setItem(draftKey(), JSON.stringify({current, values:values(), pending, rejectedRequest}));}
   catch {message('浏览器无法保存恢复草稿。请保持页面打开，及时保存，或复制正文备份。');}
 }
 function showDrafts() {
@@ -30,6 +31,7 @@ function showDrafts() {
       const button = node('button', '恢复草稿 · ' + (draft.values.title || '未命名笔记'));
       button.onclick = () => navigate(async () => {
         current = draft.current; pending = draft.pending; dirty = true; paused = true; historical = false;
+        rejectedRequest = draft.rejectedRequest || null;
         fill(draft.values); message('已恢复本地草稿，请核对后点击保存当前内容。');
         // Keep the original recovery copy until a confirmed save.
         current.recoveryKey = key;
@@ -52,7 +54,7 @@ async function refreshList() {
   for (const n of state.notes) {
     if (day !== n.data.date) {$('note-list').append(node('h2', n.data.date)); $('note-list').lastChild.className='note-day'; day=n.data.date;}
     const button = node('button', n.data.title); button.className='note-item' + (current?.id === n.id ? ' selected' : '');
-    button.append(node('small', (n.data.status === 'archived' ? '已处理' : n.data.recording === 'editing' ? '记录中' : '待处理') + ' · 修改于 ' + new Date(n.data.updated_at).toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:'Asia/Shanghai'})));
+    button.append(node('small', (n.data.status === 'archived' ? '已归档' + (n.data.recording === 'editing' ? ' · 编辑中' : '') : n.data.recording === 'editing' ? '记录中' : '待处理') + ' · 修改于 ' + new Date(n.data.updated_at).toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:'Asia/Shanghai'})));
     button.onclick = () => navigate(() => openNote(n.id)); $('note-list').append(button);
   }
   if (!state.notes.length) $('note-list').append(node('p', '这里还没有笔记。'));
@@ -65,7 +67,7 @@ function controls() {
   $('archive-note').disabled = historical || !state.writable || !!remote;
   $('archive-note').textContent = current?.data.status === 'archived' ? '恢复至未处理' : '归档';
   $('archive-note').disabled ||= transitioning || (!isReading() && current?.data.status !== 'archived');
-  $('preview-note').disabled = historical || !state.writable || transitioning || !!remote || current?.data.status === 'archived';
+  $('preview-note').disabled = historical || !state.writable || transitioning || !!remote;
   $('preview-note').textContent = paused && pending?.operation === 'edit' ? '重试进入编辑' : paused && pending?.operation === 'finish' ? '重试结束记录' : isReading() ? '编辑' : '结束记录';
   $('save-note').hidden = isReading();
   $('save-note').disabled ||= transitioning;
@@ -77,9 +79,13 @@ function fill(data) {
   const reading = historical || isReading();
   $('body-label').hidden=reading; $('note-preview').hidden=!reading;
   if(reading) renderMarkdown(data.body || '', $('note-preview'));
-  $('save-state').textContent = historical ? '历史版本 · 只读' : dirty ? '未保存草稿' : isReading() ? (current.data.status === 'archived' ? '已归档 · 已处理 · 只读' : '已结束记录 · 待处理 · 阅读模式') : '记录中 · 自动保存当前内容';
+  $('save-state').textContent = historical ? '历史版本 · 只读' : dirty ? '未保存草稿' : savedState();
   $('note-id').textContent = '笔记：' + current.id;
   $('history-content').replaceChildren(); controls();
+}
+function savedState() {
+  if (current.data.status === 'archived') return isReading() ? '已归档 · 阅读模式' : '已归档 · 编辑中 · 自动保存当前内容';
+  return isReading() ? '已结束记录 · 待处理 · 阅读模式' : '记录中 · 已自动保存';
 }
 function renderHistory(detail) {
   $('history-content').replaceChildren();
@@ -112,6 +118,10 @@ async function save(operation = 'save') {
   if (remote || historical || !state.writable) return false;
   paused=false;
   const snapshot=values();
+  // Only replace requests whose rejection was confirmed against the unchanged server revision.
+  if (pending && rejectedRequest === pending.request_id) {operation=pending.operation; pending=null; rejectedRequest=null;}
+  if (!pending && operation === 'save' && current.data.revision > 0 && current.data.recording !== 'editing'
+      && Object.entries(fieldIds).some(([k,id])=>$(id).value !== current.data[k])) operation='edit';
   if (!pending) pending={operation, id:current.id, request_id:uid(), expected_revision:current.data.revision,
     changes:Object.fromEntries(['title','body','date','workspace','status','archive_reason'].map(k=>[k,snapshot[k]]))};
   stash(); $('save-state').textContent='保存中…';
@@ -126,7 +136,7 @@ async function save(operation = 'save') {
         for (const [k,id] of Object.entries(fieldIds)) $(id).value=current.data[k];
         try {localStorage.removeItem(draftKey()); if(recoveryKey) localStorage.removeItem(recoveryKey);} catch {}
       }
-      $('save-state').textContent=dirty?'尚有新内容待保存':current.data.recording === 'finished'?'已结束记录 · 待处理 · 阅读模式':'记录中 · 已自动保存';
+      $('save-state').textContent=dirty?'尚有新内容待保存':savedState();
       $('note-id').textContent='笔记：'+current.id;
       if(!dirty && ['edit','finish'].includes(savedOperation)) fill(current.data);
       controls(); message();
@@ -135,15 +145,21 @@ async function save(operation = 'save') {
       return true;
     } catch(e) {
       paused=true; stash(); controls(); $('save-state').textContent='保存失败 · 草稿保留'; message(e.message);
-      if (e.status===409) {
+      if ([400,409].includes(e.status)) {
         try {
           const detail=await api('/api/note?id='+encodeURIComponent(current.id));
           if (detail.note.data.revision !== current.data.revision) {
             remote=detail.note; $('conflict').hidden=false;
             $('remote-note').textContent=remote.data.date+' · '+remote.data.title+'\n'+remote.data.body+'\n状态：'+remote.data.status;
             controls();
+          } else {
+            rejectedRequest=pending.request_id; stash();
           }
-        } catch {}
+        } catch(readError) {
+          if (current.data.revision === 0 && readError.status === 409 && readError.message === 'Note not found') {
+            rejectedRequest=pending.request_id; stash();
+          }
+        }
       }
       return false;
     }

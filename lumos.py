@@ -320,6 +320,9 @@ class Store:
                 from lumos_notes import validate_note
                 validate_note(data)
                 previous = old.get(ident)
+                if data['status'] == 'archived' and (not previous or previous['data']['status'] != 'archived'):
+                    require(data.get('recording', 'finished') == 'finished',
+                            '请先结束记录，再归档已处理的笔记。')
                 if previous != node:
                     require(data["revision"] == (previous["data"]["revision"] + 1 if previous else 1),
                             "Note revision must advance once")

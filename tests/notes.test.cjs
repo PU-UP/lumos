@@ -28,6 +28,82 @@ async function page(){
 }
 function edit(p,text){p.get('note-body').value=text;p.get('note-body').events.input();}
 function saved(req){return {note:{id:req.id,kind:'note',data:{...req.changes,recording:req.operation==='finish'?'finished':req.operation==='edit'?'editing':req.recording || 'editing',revision:req.expected_revision+1}}};}
+
+test('archived note edits, autosaves and finishes without restoring or losing its reason',async()=>{
+ const p=await page();let latest={id:'note-archived',data:{title:'归档笔记',body:'错名',date:'2026-11-09',workspace:'lingguang',status:'archived',archive_reason:'已整理',recording:'finished',revision:3}};
+ const requests=[];
+ p.world.fetch=async(url,opt)=>{
+  if(!opt)return response(url.startsWith('/api/note?')?{note:latest,history:[],tasks:[]}:p.listing);
+  const req=JSON.parse(opt.body);requests.push(req);latest=saved(req).note;return response({note:latest});
+ };
+ await p.world.openNote(latest.id);
+ assert.equal(p.get('preview-note').disabled,false);
+ await p.get('preview-note').onclick();edit(p,'正名');await p.world.save();
+ assert.match(p.get('save-state').textContent,/已归档.*编辑中/);
+ await p.get('preview-note').onclick();
+ assert.deepEqual(requests.map(r=>r.operation),['edit','save','finish']);
+ assert.ok(requests.every(r=>r.changes.status==='archived' && r.changes.archive_reason==='已整理'));
+ assert.equal(latest.data.body,'正名');assert.equal(p.get('note-body').disabled,true);
+ assert.equal(p.get('save-state').textContent,'已归档 · 阅读模式');
+});
+
+test('confirmed validation rejection retries corrected content, including after draft recovery',async()=>{
+ const p=await page();let latest={id:'note-validation',data:{title:'原题',body:'正文',date:'2026-11-09',workspace:'lingguang',status:'archived',archive_reason:'已整理',recording:'finished',revision:3}};
+ const requests=[];
+ p.world.fetch=async(url,opt)=>{
+  if(!opt)return response(url.startsWith('/api/note?')?{note:latest,history:[],tasks:[]}:p.listing);
+  const req=JSON.parse(opt.body);requests.push(req);
+  if(req.changes.title.length>300)return response({error:'Invalid note title'},409);
+  latest=saved(req).note;return response({note:latest});
+ };
+ await p.world.openNote(latest.id);
+ p.get('note-title').value='x'.repeat(301);p.get('note-title').events.input();
+ assert.equal(await p.world.save('edit'),false);
+ p.world.showDrafts();
+ // Restore the saved rejection marker in a fresh page, as after a reload.
+ const q=await page();Object.assign(q.world.localStorage,p.world.localStorage);q.world.fetch=p.world.fetch;
+ q.world.showDrafts();await q.get('drafts').children[0].onclick();
+ q.get('note-title').value='更正';q.get('note-title').events.input();
+ assert.equal(await q.world.save(),true);
+ assert.notEqual(requests[0].request_id,requests[1].request_id);
+ assert.equal(requests[1].operation,'edit');assert.equal(requests[1].changes.title,'更正');
+ assert.equal(latest.data.status,'archived');
+});
+
+test('stale recovered draft merges into archived latest version and can finish',async()=>{
+ const p=await page();
+ const draft={current:{id:'note-stale',data:{revision:2,title:'笔记',body:'原文',date:'2026-11-09',workspace:'lingguang',status:'active',archive_reason:'',recording:'finished'}},values:{title:'笔记',body:'改正姓名',date:'2026-11-09'},pending:null};
+ p.world.localStorage.setItem('lumos-note:fixture:old:note-stale',JSON.stringify(draft));
+ p.world.showDrafts();await p.get('drafts').children[0].onclick();
+ let latest={id:'note-stale',data:{...draft.current.data,revision:3,status:'archived',archive_reason:'已整理'}};
+ p.world.fetch=async(url,opt)=>{
+  if(!opt)return response(url.startsWith('/api/note?')?{note:latest,history:[],tasks:[]}:p.listing);
+  const req=JSON.parse(opt.body);
+  if(req.expected_revision!==latest.data.revision)return response({error:'conflict'},409);
+  latest=saved(req).note;return response({note:latest});
+ };
+ assert.equal(await p.world.save(),false);assert.equal(p.get('conflict').hidden,false);
+ await p.get('merge-note').onclick();await p.get('preview-note').onclick();
+ assert.equal(latest.data.body,'改正姓名');assert.equal(latest.data.status,'archived');
+ assert.equal(latest.data.archive_reason,'已整理');assert.equal(latest.data.recording,'finished');
+ assert.equal(Object.keys(p.world.localStorage).length,0);
+});
+
+test('new note can correct a rejected request before its first successful save',async()=>{
+ const p=await page();const requests=[];
+ p.world.fetch=async(url,opt)=>{
+  if(!opt)return url.startsWith('/api/note?')?response({error:'Note not found'},409):response(p.listing);
+  const req=JSON.parse(opt.body);requests.push(req);
+  if(req.changes.title.length>300)return response({error:'Invalid note title'},409);
+  return response(saved(req));
+ };
+ p.get('note-title').value='x'.repeat(301);edit(p,'保留正文');
+ assert.equal(await p.world.save(),false);
+ p.get('note-title').value='正确标题';p.get('note-title').events.input();
+ assert.equal(await p.world.save(),true);
+ assert.notEqual(requests[0].request_id,requests[1].request_id);
+ assert.equal(requests[1].changes.body,'保留正文');
+});
 test('in-flight input is saved separately without loss or duplicate concurrent writes',async()=>{
  const p=await page();edit(p,'first');let release;const requests=[];
  p.world.fetch=async(url,options)=>{
