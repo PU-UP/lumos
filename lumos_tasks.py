@@ -111,7 +111,9 @@ def list_tasks(store, today=None):
         board_order = [n["id"] for n in sorted(tasks, key=board_key)]
         ctl = store.control()
         from lumos_people import list_people
-        return {"seq": seq, "today": today.isoformat(), "contexts": contexts, "tasks": tasks, "people": list_people(nodes, ids), "board_order": board_order,
+        archived_people = [n for n in nodes.values() if n["kind"] == "person"
+                           and n["data"].get("status") == "archived" and n["data"]["context"] in ids]
+        return {"seq": seq, "today": today.isoformat(), "contexts": contexts, "tasks": tasks, "people": list_people(nodes, ids), "archived_people": archived_people, "board_order": board_order,
                 "attention": [n["id"] for n in tasks if n["attention"]],
                 "writable": ctl["mode"] in {"active", "trial", "sandbox"}
                 and ctl["bound_root"] == str(store.root) and not (store.root / "session.json").exists(),

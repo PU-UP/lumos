@@ -40,6 +40,7 @@ class PeopleTest(BaseStoreCase):
         self.person['data']['status'] = 'archived'
         self.save([self.person])
         self.assertEqual(list_tasks(self.store)['people'], [])
+        self.assertEqual(list_tasks(self.store)['archived_people'], [self.person])
         with self.store.db() as db:
             self.assertEqual(db.execute('SELECT count(*) FROM history WHERE node=?', ('person-test',)).fetchone()[0], 3)
 

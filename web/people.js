@@ -127,7 +127,8 @@ function render() {
   const people = (state.people || []).filter(p => p.data.workspaces.includes(workspace)).map(p => p.data);
   renderOrganization(workspace, people);
   const known = new Set(people.map(p => p.title));
-  for (const task of allTasks) for (const name of ownerNames(task)) if (!known.has(name)) {
+  const archived = new Set((state.archived_people || []).filter(p => p.data.workspaces.includes(workspace)).map(p => p.data.title));
+  for (const task of allTasks) for (const name of ownerNames(task)) if (!known.has(name) && !archived.has(name)) {
     known.add(name); people.push({title:name, team:'名册外负责人'});
   }
   const groups = new Map();

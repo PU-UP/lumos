@@ -93,6 +93,8 @@ function personTeam(data) {
 
 function ownerOptions(workspace, current = '', teams = false) {
   const groups = new Map(), names = new Set(['王牧楠']);
+  const archived = new Set((state.archived_people || []).filter(p => p.data.workspaces.includes(workspace)).map(p => p.data.title));
+  const selected = current.split('、').map(name => name.trim());
   for (const {data} of workspacePeople(workspace)) {
     if (data.title === '王牧楠') continue;
     const label = personTeam(data);
@@ -104,8 +106,8 @@ function ownerOptions(workspace, current = '', teams = false) {
     names.add(data.title);
   }
   const individuals = state.tasks.filter(t => workspaceOf(t.data.context) === workspace).flatMap(t => ownerNames(t.data));
-  const extra = [...new Set([...current.split('、').map(name => name.trim()), ...individuals])]
-    .filter(name => name && !names.has(name));
+  const extra = [...new Set([...selected, ...individuals])]
+    .filter(name => name && !names.has(name) && (!archived.has(name) || selected.includes(name)));
   if (extra.length) {
     const group = element('optgroup'); group.label = '其他负责人';
     group.append(...extra.sort((a, b) => a.localeCompare(b, 'zh-CN')).map(name => new Option(name, name)));
@@ -143,9 +145,9 @@ function updateFilters(rename = null) {
     ...groups.map(name => new Option(name, ':' + name)));
   $('group-filter').value = selectedGroup === '-' || groups.includes(selectedGroup.slice(1)) ? selectedGroup : '';
   const selectedOwner = $('owner-filter').value;
-  const owners = [...workspacePeople(workspace).map(p => p.data.title), '王牧楠', ...state.tasks.filter(t => workspaceOf(t.data.context) === workspace).flatMap(t => ownerNames(t.data))];
-  $('owner-filter').replaceChildren(new Option('全部负责人', ''), ...ownerOptions(workspace, '', true));
-  $('owner-filter').value = (selectedOwner === '@other' || owners.includes(selectedOwner) || workspacePeople(workspace).some(p => '@team:' + personTeam(p.data) === selectedOwner)) ? selectedOwner : '';
+  const options = ownerOptions(workspace, '', true);
+  $('owner-filter').replaceChildren(new Option('全部负责人', ''), ...options);
+  $('owner-filter').value = options.some(option => option.value === selectedOwner) ? selectedOwner : '';
   $('new').disabled = !state.writable || !workspaceContexts(workspace).length;
 }
 

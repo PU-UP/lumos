@@ -901,7 +901,22 @@ test('personnel assigns joint tasks to both members but counts each team task on
   const outside=get('people-list').children[1];
   assert.equal(outside.children[0].textContent,'名册外负责人');
   assert.equal(outside.children[3].children[0].children[0].textContent,'外部同事');
+  data.archived_people=[{data:{title:'外部同事',workspaces:['lingguang']}}];
+  await world.refresh();assert.equal(get('people-list').children.length,1);
+  assert(textOf(get('people-list')).includes('模拟甲、外部同事'));
+});
 
+test('archived people are not suggested by historical ownership, but the current task keeps its owner', async () => {
+  const archived={data:{title:'模拟归档成员',workspaces:['lingguang']}};
+  const task={id:'old',data:{owner:'模拟归档成员',context:'work-current',status:'cancelled'}};
+  const p=await page(new Map(),{archived_people:[archived],tasks:[task]});
+  const names=()=>p.world.ownerOptions('lingguang').flatMap(g=>g.children||[g]).map(o=>o.value);
+  assert(!names().includes('模拟归档成员'));
+  assert(!p.world.ownerOptions('lingguang','',true).some(o=>o.value==='模拟归档成员'));
+  assert(p.world.ownerOptions('lingguang','模拟归档成员').flatMap(g=>g.children||[g]).some(o=>o.value==='模拟归档成员'));
+  p.get('owner-filter').value='模拟归档成员';p.world.updateFilters();assert.equal(p.get('owner-filter').value,'');
+  p.board.people=[archived];assert(names().includes('模拟归档成员'));
+  assert.equal(task.data.owner,'模拟归档成员');
 });
 
 test('organization uses saved hierarchy, preserves empty teams and marks candidates without task filters', async () => {
