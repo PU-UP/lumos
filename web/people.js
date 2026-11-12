@@ -46,6 +46,75 @@ function periodTasks(tasks, today, days, mode) {
     return planned || (updated >= from && updated <= today) || (open && !date);
   });
 }
+function personLabel(person) {
+  return person.title + (person.membership_status === 'candidate' ? '（候选 · 未入职）' : person.member_type === 'agent' ? '（Agent）' : '');
+}
+function chartMembers(members) {
+  const list = element('ul', undefined, 'org-members');
+  for (const person of members) {
+    const item = element('li', undefined, person.membership_status === 'candidate' ? 'org-candidate' : '');
+    const name = element('div', undefined, 'org-person-line');
+    name.append(element('span', person.title, 'org-person'));
+    if (person.org_role) name.append(element('span', person.org_role, 'org-role'));
+    item.append(name);
+    if (person.membership_status === 'candidate') item.append(element('small', '尚未入职', 'candidate-note'));
+    if (person.team_status === 'proposed') item.append(element('small', '构思中 · 分组未定'));
+    if (person.org_note) item.append(element('small', person.org_note, 'org-person-note'));
+    if (person.arrival_note) item.append(element('small', person.arrival_note, 'candidate-note'));
+    list.append(item);
+  }
+  if (!members.length) list.append(element('li', '人员待定', 'muted'));
+  return list;
+}
+function renderOrganization(workspace, people) {
+  const chart = state.contexts.find(c => workspaceOf(c.id) === workspace && c.data.org_chart)?.data.org_chart;
+  const host = $('organization'); host.replaceChildren(); host.hidden = !chart;
+  $('print-chart').hidden = !chart;
+  if (!chart) return;
+  people = people.filter(p => !(chart.hidden_people || []).includes(p.title));
+  const heading = element('div', undefined, 'org-heading');
+  heading.append(element('h2', chart.title + ' · 组织架构'), element('span', chart.caption || '组织架构', 'org-caption'));
+  const root = element('div', undefined, 'org-root');
+  root.append(element('h3', chart.title));
+  if (chart.lead_team) root.append(chartMembers(people.filter(p => p.team === chart.lead_team)));
+  const branches = element('div', undefined, 'org-branches');
+  const assigned = new Set(chart.lead_team ? [chart.lead_team] : []);
+  for (const branch of chart.branches) {
+    const column = element('section', undefined, 'org-branch' + (branch.direct ? ' org-direct' : ''));
+    const title = element('div', undefined, 'org-branch-title');
+    if (branch.direct) title.setAttribute('aria-hidden', 'true');
+    else title.append(element('h3', branch.title), element('p', branch.lead_label));
+    column.append(title);
+    const teams = element('div', undefined, 'org-teams');
+    for (const team of branch.teams) {
+      assigned.add(team);
+      const group = element('section', undefined, 'org-team');
+      const detail = chart.team_details?.[team];
+      if (branch.direct || branch.teams.length !== 1 || team !== branch.title) {
+        group.append(element('h4', team));
+        const lead = detail?.lead_label || '';
+        if (lead) group.append(element('p', lead, 'org-vacancy'));
+      }
+      group.append(chartMembers(people.filter(p => p.team === team)));
+      if (detail) group.append(element('p', detail.plan, 'org-plan'));
+      teams.append(group);
+    }
+    column.append(teams); branches.append(column);
+  }
+  const notes = element('ul', undefined, 'org-notes');
+  for (const note of chart.notes) notes.append(element('li', note));
+  host.append(heading, root, branches, notes);
+  const other = people.filter(p => !assigned.has(p.team));
+  if (other.length) {
+    const aside = element('div', undefined, 'org-other');
+    aside.append(element('h3', '部门直属角色'));
+    for (const team of new Set(other.map(p => p.team || '其他人员'))) {
+      const row = element('div'); row.append(element('h4', team), chartMembers(other.filter(p => (p.team || '其他人员') === team)));
+      aside.append(row);
+    }
+    host.append(aside);
+  }
+}
 function render() {
   if (!state) return;
   const workspace = $('workspace').value;
@@ -56,6 +125,7 @@ function render() {
     + (mode === 'future' ? '今天为第1天，按下次关心时间统计未结束任务。' : '今天居中：统计前半段更新过的任务及今天起的关心安排，按当前状态计数；已完成不等于期间完成量。')
     + '未设关心时间的未结束任务也保留，避免遗漏。已取消不计，数量不代表工时。';
   const people = (state.people || []).filter(p => p.data.workspaces.includes(workspace)).map(p => p.data);
+  renderOrganization(workspace, people);
   const known = new Set(people.map(p => p.title));
   for (const task of allTasks) for (const name of ownerNames(task)) if (!known.has(name)) {
     known.add(name); people.push({title:name, team:'名册外负责人'});
@@ -72,12 +142,15 @@ function render() {
     section.append(element('h3', team));
     const head = element('div', undefined, 'workload-row workload-head');
     head.append(element('span', '成员'), ...Object.values(statuses).map(s => element('span', s))); section.append(head);
-    section.append(workloadRow('div', '全组 · ' + members.length + ' 位', tasks.filter(t => members.some(p => ownerNames(t).includes(p.title)))));
+    const candidates = members.filter(p => p.membership_status === 'candidate').length;
+    const total = candidates ? (members.length - candidates) + ' 位成员 + ' + candidates + ' 位候选' : members.length + ' 位';
+    section.append(workloadRow('div', '全组 · ' + total, tasks.filter(t => members.some(p => ownerNames(t).includes(p.title)))));
     for (const person of members) {
-      const owned = tasks.filter(t => ownerNames(t).includes(person.title)), details = element('details', undefined, 'member');
-      details.append(workloadRow('summary', person.title + (person.member_type === 'agent' ? '（Agent）' : ''), owned));
+      const owned = tasks.filter(t => ownerNames(t).includes(person.title)), details = element('details', undefined, 'member' + (person.membership_status === 'candidate' ? ' member-candidate' : ''));
+      details.append(workloadRow('summary', personLabel(person), owned));
       const body = element('div', undefined, 'member-body');
       if (person.role) body.append(element('p', person.role, 'muted'));
+      if (person.arrival_note) body.append(element('p', person.arrival_note, 'muted'));
       body.append(...owned.map(taskRow));
       if (!owned.length) body.append(element('p', '暂无任务', 'muted'));
       details.append(body); section.append(details);
@@ -99,4 +172,5 @@ $('workspace').onchange = render;
 $('days').onchange = render;
 $('period-mode').onchange = render;
 $('refresh').onclick = refresh;
+$('print-chart').onclick = () => window.print();
 refresh();

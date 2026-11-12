@@ -901,6 +901,48 @@ test('personnel assigns joint tasks to both members but counts each team task on
   const outside=get('people-list').children[1];
   assert.equal(outside.children[0].textContent,'名册外负责人');
   assert.equal(outside.children[3].children[0].children[0].textContent,'外部同事');
+
+});
+
+test('organization uses saved hierarchy, preserves empty teams and marks candidates without task filters', async () => {
+  const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id)};
+  get('workspace').value='lingguang';get('days').value='7';get('period-mode').value='future';
+  const chart={title:'模拟部门',lead_team:'负责人',branches:[
+    {title:'模拟方向',teams:['模拟甲组','空组'],lead_label:'方向组长：空缺 · 非管理岗'},
+    {title:'独立组',teams:['独立组'],lead_label:'组长：空缺 · 非管理岗'}],notes:['未来晋升空间，短期不扩招']};
+  const data={today:'2026-11-11',tasks:[],contexts:[{id:'org',data:{workspace:'lingguang',org_chart:chart}}],people:[
+    {data:{title:'模拟候选',team:'独立组',workspaces:['lingguang'],membership_status:'candidate',arrival_note:'谈薪中，约一个月后入职，尚未确认'}},
+    {data:{title:'模拟成员',team:'模拟甲组',workspaces:['lingguang']}},
+    {data:{title:'模拟协作',team:'协作方',team_status:'proposed',workspaces:['lingguang']}}]};
+  let printed=false;
+  const world={document:{getElementById:get,createElement:()=>new Element()},fetch:async()=>response(data),window:{print(){printed=true}}};
+  vm.createContext(world);vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/people.js'),'utf8'),world);await tick();
+  const content=textOf(get('organization'));
+  for(const text of ['模拟方向','空组','人员待定','尚未入职','谈薪中','非管理岗','部门直属角色','构思中 · 分组未定']) assert.ok(content.includes(text),text);
+  assert.equal(get('organization').hidden,false);
+  assert.equal(get('organization').children[2].children[1].children[1].children[0].children[0].children[0].className,'org-candidate');
+  assert.notEqual(get('organization').children[2].children[0].children[1].children[0].children[1].children[0].className,'org-candidate');
+  assert.equal((content.match(/模拟候选/g)||[]).length,1);
+  get('print-chart').onclick();assert.equal(printed,true);
+  get('days').value='3';get('period-mode').value='recent';world.render();assert.equal(textOf(get('organization')),content);
+  chart.lead_team='';chart.hidden_people=['模拟协作'];chart.caption='科与专业组';
+  data.people.push({data:{title:'模拟未分组',team:'',workspaces:['lingguang']}});
+  chart.branches[1].direct=true;chart.team_details={'独立组':{lead_label:'',plan:'短期不招人；长期可能2人'}};
+  data.people[0].data.org_role='组长';data.people[0].data.org_note='角色已明确，尚待到岗';
+  world.render();const revised=textOf(get('organization'));
+  assert(!revised.includes('模拟协作'));assert(!revised.includes('人员待定\n负责人'));
+  assert(revised.includes('短期不招人；长期可能2人'));assert(revised.includes('角色已明确'));
+  assert.equal((revised.match(/模拟未分组/g)||[]).length,1);
+  assert.equal(get('organization').children[2].children[1].className,'org-branch org-direct');
+  assert.equal(get('organization').children[2].children[1].children[1].children[0].children[0].textContent,'独立组');
+  assert.equal(get('organization').children[1].children.length,1);
+  assert(textOf(get('people-list')).includes('模拟协作'));
+  delete chart.caption; chart.branches[0].lead_label='负责人已明确';
+  world.render();const explicit=textOf(get('organization'));
+  assert(!explicit.includes('组长暂空'));assert(!explicit.includes('小组长：空缺'));
+  assert(!explicit.includes('非管理岗'));assert(explicit.includes('负责人已明确'));
+  get('workspace').value='lumos';world.render();assert.equal(get('organization').hidden,true);assert.equal(get('print-chart').hidden,true);
+  assert.equal(textOf(get('organization')),'');
 });
 
 test('inline notice describes the edit, restores the old value once and expires in seven seconds', async () => {
@@ -1054,6 +1096,11 @@ test('delivery timeline groups by due date and project, keeps undated tasks and 
   assert.match(p.get('task-detail-label').textContent,/T-002/);
 });
 const ownerPeople = ['甲','乙'].map(title=>({data:{title,team:'同组',workspaces:['lingguang']}}));
+test('candidate owner labels preserve the actual name and disclose unconfirmed arrival', async () => {
+ const p=await page(new Map(),{people:[{data:{title:'模拟候选',team:'模拟组',workspaces:['lingguang'],membership_status:'candidate'}}]});
+ const option=p.world.ownerOptions('lingguang')[1].children[0];
+ assert.equal(option.value,'模拟候选');assert.equal(option.text,'模拟候选（候选 · 未入职）');
+});
 test('multi-owner picker preserves legacy names, rejects empty selection and discards unapplied choices',async()=>{
  const p=await page(new Map(),{people:ownerPeople}), parent=new Element(), writes=[];
  p.world.renderOwnerEditor(parent,'甲、旧成员','lingguang',false,v=>writes.push(v));

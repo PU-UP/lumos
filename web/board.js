@@ -100,7 +100,7 @@ function ownerOptions(workspace, current = '', teams = false) {
       const group = element('optgroup'); group.label = label;
       groups.set(label, group);
     }
-    groups.get(label).append(new Option(data.title + (data.member_type === 'agent' ? '（Agent）' : ''), data.title));
+    groups.get(label).append(new Option(data.title + (data.membership_status === 'candidate' ? '（候选 · 未入职）' : data.member_type === 'agent' ? '（Agent）' : ''), data.title));
     names.add(data.title);
   }
   const individuals = state.tasks.filter(t => workspaceOf(t.data.context) === workspace).flatMap(t => ownerNames(t.data));

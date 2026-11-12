@@ -46,7 +46,8 @@ class PeopleTest(BaseStoreCase):
     def test_invalid_and_duplicate_roster_rejected_without_changing_tasks(self):
         before = list_tasks(self.store)
         for changes in [{'workspaces': []}, {'workspaces': [['bad']]}, {'team_status': 'settled'},
-                        {'title': ' 模拟成员'}, {'title': '模拟\n成员'}, {'role': []}, {'status': []}]:
+                        {'title': ' 模拟成员'}, {'title': '模拟\n成员'}, {'role': []}, {'status': []},
+                        {'membership_status': 'hired'}, {'arrival_note': []}]:
             person = copy.deepcopy(self.person)
             person['data'].update(changes)
             with self.subTest(changes=changes), self.assertRaises(lumos.Error):
@@ -55,6 +56,31 @@ class PeopleTest(BaseStoreCase):
         other = {**self.person, 'id': 'person-duplicate'}
         with self.assertRaisesRegex(lumos.Error, 'Duplicate active person'):
             self.save([self.person, other])
+
+    def test_organization_chart_and_candidate_roundtrip(self):
+        with self.store.db() as db:
+            context = self.store.nodes(db)['mapping']
+        chart = {"title": "模拟部门", "lead_team": "模拟负责人", "notes": ["非管理岗"],
+                 "branches": [{"title": "模拟方向", "teams": ["模拟平台组"], "lead_label": "组长空缺"}]}
+        context['data']['org_chart'] = chart
+        self.person['data'].update(membership_status='candidate', arrival_note='模拟谈薪状态，未入职')
+        self.save([context, self.person])
+        result = list_tasks(self.store)
+        self.assertEqual(next(c for c in result['contexts'] if c['id'] == 'mapping')['data']['org_chart'], chart)
+        self.assertEqual(result['people'][0]['data']['membership_status'], 'candidate')
+        chart.update(lead_team='', hidden_people=['模拟隐藏成员'], caption='科与组',
+                     team_details={'模拟平台组': {'lead_label': '', 'plan': '短期待招2人'}})
+        chart['branches'][0]['direct'] = True
+        self.person['data'].update(org_role='组长', org_note='模拟评价')
+        self.save([context, self.person])
+        self.assertEqual(list_tasks(self.store)['people'][0]['data']['org_role'], '组长')
+        for bad in [None, {**chart, 'notes': 'bad'}, {**chart, 'branches': []},
+                    {**chart, 'branches': chart['branches'] * 2}, {**chart, 'hidden_people': 'bad'},
+                    {**chart, 'team_details': {'unknown': {'lead_label':'', 'plan':'bad'}}},
+                    {**chart, 'branches': [{**chart['branches'][0], 'direct': 'yes'}]}]:
+            context['data']['org_chart'] = bad
+            with self.subTest(bad=bad), self.assertRaises(lumos.Error):
+                self.save([context])
 
     def test_legacy_owner_remains_valid_and_roster_is_in_http_board(self):
         self.save([self.person])

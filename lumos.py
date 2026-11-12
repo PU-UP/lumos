@@ -267,6 +267,9 @@ class Store:
             require(kind in KINDS and isinstance(data, dict), "Invalid node kind/data")
             require(data.get("title") or data.get("text"), f"Missing title/text: {ident}")
             if kind == "context":
+                if "org_chart" in data:
+                    from lumos_people import validate_org_chart
+                    validate_org_chart(data["org_chart"])
                 from lumos_tasks import WORKSPACES
                 require(data.get("workspace", "lingguang") in WORKSPACES, "Invalid workspace")
                 require(data.get("status", "active") in {"active", "waiting", "retained", "archived"},
