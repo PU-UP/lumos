@@ -7,6 +7,7 @@ Lumos 的目标是持续维护工作理解，使更换对话、Agent 或设备�
 - [最终验收与使用交接](docs/final-acceptance.md)：能力、修复、使用边界及下一阶段。
 - [设计复审验收与实现指示](docs/review-acceptance.md)：本轮通过结论、首批范围和运行验收要求。
 - [Agent 操作入口](AGENTS.md)与[本地工具说明](docs/local-core.md)：恢复上下文、候选保存、纠正、备份及迁移。
+- 对话命名：加载 `AGENTS.md` 后，支持改名的 Agent 按内容首次命名为 `YYYY-MM-DD | 任务处理`、`YYYY-MM-DD | 仓库维护-xxx功能` 或 `YYYY-MM-DD | 专项讨论-xxx`（上海日期）。标题确定后保持固定，只有用户明确要求才改名；标题提供默认侧重，实际工作跟随当前提问。无改名能力时给出建议标题。ChatGPT 或其他 Agent 未自动读取仓库规则时，需将 `AGENTS.md` 加入其项目指令或会话上下文。
 - [实现验收记录](docs/implementation-acceptance.md)：实际运行结果、复现命令及仍未验证的边界。
 - [最小方案与场景推演](docs/minimal-design.md)：本轮推荐、数据职责、恢复与迁移、第一版边界。
 - [参考核查与评审交接](docs/review-handoff.md)：证据范围、逐项修订对应位置与复审关注点。
