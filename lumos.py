@@ -12,6 +12,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 import uuid
 
 if __name__ == "__main__":
@@ -20,7 +21,7 @@ if __name__ == "__main__":
 
 ENGINE = Path(__file__).resolve().parent
 SCHEMA = 1
-KINDS = {"context", "evidence", "decision", "action", "document", "note", "person"}
+KINDS = {"context", "evidence", "decision", "action", "document", "note", "person", "mainline", "intake"}
 RELATIONS = {"related", "supports", "refutes", "depends_on", "derived_from", "supersedes"}
 
 
@@ -98,20 +99,24 @@ def guard_data_path(path):
 def process_lock(root):
     """OS releases this lock on a crash; session.json survives across commands."""
     with (root / ".lock").open("a+b") as stream:
-        stream.seek(0)
-        if stream.read(1) == b"":
-            stream.write(b"0")
-            stream.flush()
-        stream.seek(0)
-        try:
-            if os.name == "nt":
-                import msvcrt
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            raise Error("Another tool operation holds the data lock") from exc
+        for attempt in range(26):
+            try:
+                # Windows forbids even reading the locked byte; initialize using file size.
+                if os.fstat(stream.fileno()).st_size == 0:
+                    stream.write(b"0")
+                    stream.flush()
+                stream.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if attempt == 25:
+                    raise Error("Another tool operation holds the data lock") from exc
+                time.sleep(0.02)
         try:
             yield
         finally:
@@ -276,16 +281,19 @@ class Store:
                         "Invalid context status")
                 require(data.get("entry") in nodes and nodes[data["entry"]]["kind"] == "document",
                         f"Context needs an entry document: {ident}")
-            elif kind != "note":
+            elif kind not in {"note", "intake"}:
                 require(data.get("context") in nodes and nodes[data["context"]]["kind"] == "context",
                         f"Missing context for {ident}")
-            if kind in {"evidence", "decision", "action", "person"}:
+            if kind in {"evidence", "decision", "action", "person", "mainline"}:
                 source = data.get("source", {})
                 require(source.get("type") in {"user", "user_report", "source", "agent"}
                         and source.get("ref"), f"Source type/ref required: {ident}")
             if kind == "person":
                 from lumos_people import validate_person
                 validate_person(data)
+            if kind == "mainline":
+                from lumos_mainlines import validate_mainline
+                validate_mainline(ident, data, nodes)
             if kind == "decision":
                 require(data["source"]["type"] == "user" and data.get("reason") and data.get("scope"),
                         "A decision requires user provenance, reason and scope")
@@ -295,7 +303,10 @@ class Store:
                 validate_fields(data)
                 from lumos_notes import validate_refs
                 validate_refs(data.get("note_refs", []), nodes)
-                require(data["source"]["type"] != "agent", "Suggestions are not committed actions")
+                if data["source"]["type"] == "agent":
+                    from lumos_intake import authorized
+                    require(authorized(nodes, data["context"], data["source"].get("authorization")),
+                            "Suggestions are not committed actions without delegated authority")
                 require(data.get("condition"), "Agent must infer a minimal action completion condition")
                 require(data.get("status") in {"todo", "doing", "blocked", "done", "cancelled"}, "Invalid action status")
                 previous = old.get(ident, {}).get("data", {})
@@ -331,6 +342,9 @@ class Store:
                             "Note revision must advance once")
                     require(not previous or data["created_at"] == previous["data"]["created_at"],
                             "Note creation time is immutable")
+            if kind == "intake":
+                from lumos_intake import validate_intake
+                validate_intake(data, nodes)
         from lumos_people import list_people
         list_people(nodes, {n["id"] for n in nodes.values() if n["kind"] == "context"})
         documents = [n for n in nodes.values() if n["kind"] == "document"]
@@ -588,6 +602,18 @@ def main():
     command.add_argument("--today", help="YYYY-MM-DD, defaults to Asia/Shanghai")
     command = subs.add_parser("task")
     command.add_argument("id")
+    command = subs.add_parser("mainline")
+    command.add_argument("id")
+    command = subs.add_parser("intakes")
+    command.add_argument("--workspace", default="lingguang")
+    for name in ("intake-save", "intake-apply"):
+        command = subs.add_parser(name)
+        command.add_argument("request", type=Path)
+    command = subs.add_parser("intake-context")
+    command.add_argument("id")
+    command = subs.add_parser("intake-claim")
+    command.add_argument("id", nargs="?")
+    subs.add_parser("agent-once")
     command = subs.add_parser("task-save")
     command.add_argument("request", type=Path)
     command = subs.add_parser("notes")
@@ -638,6 +664,22 @@ def main():
                 result = getattr(store, args.command)()
             elif args.command == "context":
                 result = store.context(args.question)
+            elif args.command == "mainline":
+                from lumos_mainlines import mainline_detail
+                result = mainline_detail(store, args.id)
+            elif args.command.startswith("intake"):
+                from lumos_intake import list_intakes, save_intake, apply_intake, intake_context, claim_intake
+                if args.command == "intakes":
+                    result = list_intakes(store, args.workspace)
+                elif args.command == "intake-context":
+                    result = intake_context(store, args.id)
+                elif args.command == "intake-claim":
+                    result = claim_intake(store, args.id)
+                else:
+                    result = (save_intake if args.command == "intake-save" else apply_intake)(store, read_json(args.request))
+            elif args.command == "agent-once":
+                from lumos_worker import run_once
+                result = run_once(store)
             elif args.command in {"tasks", "task", "task-save"}:
                 from lumos_tasks import list_tasks, task_detail, save_task
                 if args.command == "tasks":

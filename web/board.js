@@ -8,12 +8,10 @@ const ownerNames = data => ownerName(data).split('、').map(name => name.trim())
 let state, editing = null, baseline, pending = null;
 let dirty = false, discardArmed = false, saving = false, opening = false;
 let editMode = false, savedValues;
-let dragging = null, movePending = null;
 let taskView = 'list', quickPending = null;
 let completionChoice = null;
 const selectedStatuses = new Set(['todo', 'doing']);
 let windowDays = null, sortKey = null, sortDirection = 1;
-const columnOf = task => task.data.status === 'cancelled' ? 'done' : task.data.status;
 const form = $('form');
 const preferencesKey = 'lumos.task-view.v1';
 
@@ -50,7 +48,7 @@ function restorePreferences() {
     }
     if (['text', 'priority', 'group', 'owner', 'status', 'follow_up', 'due'].includes(p.sortKey)) sortKey = p.sortKey;
     if (p.sortDirection === -1 || p.sortDirection === 1) sortDirection = p.sortDirection;
-    if (['list', 'board', 'schedule', 'timeline'].includes(p.taskView)) taskView = p.taskView;
+    if (['list', 'schedule'].includes(p.taskView)) taskView = p.taskView;
   } catch {
     $('preferences-message').textContent = '未能读取上次的筛选设置，已使用默认设置。';
   }
@@ -254,15 +252,10 @@ function filtered() {
   const until = end.toISOString().slice(0, 10);
   return state.tasks.filter(t => workspaceOf(t.data.context) === $('workspace').value
     && selectedStatuses.has(t.data.status)
-    && (taskView === 'timeline' || windowDays === null || (!isClosed(t.data) && (!t.data.follow_up || t.data.follow_up <= until)))
+    && (windowDays === null || (!isClosed(t.data) && (!t.data.follow_up || t.data.follow_up <= until)))
     && (!group || (group === '-' ? !t.data.group : t.data.group === group.slice(1)))
     && matchesOwner(t, $('owner-filter').value)
     && [t.short_id, t.data.text, t.data.details, t.data.next_step].join(' ').toLowerCase().includes(query));
-}
-
-function columnTasks(tasks, status) {
-  const order = state.board_order || state.tasks.map(t => t.id);
-  return tasks.filter(t => columnOf(t) === status).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
 }
 
 function followUpHint(data) {
@@ -277,50 +270,6 @@ function followUpHint(data) {
   return {text: '', cls: ''};
 }
 
-async function moveTask(id, status, beforeId = null) {
-  if (saving || opening || completionChoice || !state.writable || $('editor').open) return;
-  const task = state.tasks.find(t => t.id === id);
-  if (!task || beforeId === id) return;
-  // Reordering the combined closed column must preserve cancellation.
-  const targetStatus = columnOf(task) === status ? task.data.status : status;
-  const signature = JSON.stringify([id, targetStatus, beforeId, state.seq]);
-  if (movePending?.signature !== signature) {
-    const changes = {status: targetStatus};
-    if (targetStatus === 'done' && task.data.status !== 'done') {
-      const date = await chooseCompletionDate(task.data);
-      if (date === null) return;
-      changes.completed_on = date;
-    }
-    movePending = {signature, request: {request_id: crypto.randomUUID().replaceAll('-', ''),
-      expected_seq: state.seq, id, changes, before_id: beforeId}};
-  }
-  saving = true;
-  showSaveNotice('正在保存位置…', null, true);
-  try {
-    await api('/api/tasks', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Lumos-Token': state.token},
-      body: JSON.stringify(movePending.request)});
-    movePending = null;
-    const loaded = await refresh();
-    if (loaded) showSaveNotice('卡片位置和状态已保存。');
-    else $('message').textContent = '已保存，但看板刷新失败。请点击刷新。';
-  } catch (e) {
-    hideSaveNotice();
-    $('message').textContent = e.message + '\n尚未确认保存成功。网络失败可重复同一拖动重试；记录发生变化时请刷新后核对。';
-  } finally {
-    saving = false;
-    renderList(filtered());
-  }
-}
-
-function dropTarget(col, y) {
-  return [...col.querySelectorAll('.card')].find(card => card.dataset.id !== dragging
-    && y < card.getBoundingClientRect().top + card.getBoundingClientRect().height / 2) || null;
-}
-
-function clearDropMarks() {
-  document.querySelectorAll('.drop-before, .drop-column').forEach(node => node.classList.remove('drop-before', 'drop-column'));
-}
-
 function render() {
   if (!state) return;
   const tasks = filtered();
@@ -330,85 +279,11 @@ function render() {
     $('status-' + status).setAttribute('aria-label', labels[status]);
     $('status-' + status).textContent = (selected ? '✓ ' : '') + labels[status];
   }
-  for (const name of ['list', 'board', 'schedule', 'timeline']) $('view-' + name).setAttribute('aria-pressed', String(taskView === name));
+  for (const name of ['list', 'schedule']) $('view-' + name).setAttribute('aria-pressed', String(taskView === name));
   $('view-hint').textContent = taskView === 'list' ? '点击标题查看详情；可在列表中修改负责人、项目标签、优先级、状态和日期。'
-    : taskView === 'timeline' ? '按原交付日期排列。悬停查看全名，点击打开任务详情。'
-    : taskView === 'schedule' ? '近期安排按下次关心时间分组，沿用上方全部筛选；点击任务查看详情。'
-    : '看板沿用上方筛选。拖动卡片切换状态或排序；也可聚焦卡片后按 Alt + 方向键。';
+    : '近期安排按下次关心时间分组，沿用上方全部筛选；点击任务查看详情。';
   renderList(tasks);
   renderSchedule(tasks);
-  $('follow-up-window').hidden = taskView === 'timeline';
-  renderTimeline(tasks);
-  $('board').hidden = taskView !== 'board';
-  $('board').replaceChildren();
-  for (const status of ['todo', 'doing', 'blocked', 'done']) {
-    const items = columnTasks(tasks, status);
-    const col = element('section', undefined, 'column' + (status === 'done' ? ' closed' : ''));
-    col.ondragover = event => {
-      if (!dragging || saving || !state.writable) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = 'move';
-      clearDropMarks();
-      col.classList.add('drop-column');
-      dropTarget(col, event.clientY)?.classList.add('drop-before');
-    };
-    col.ondrop = event => {
-      if (!dragging) return;
-      event.preventDefault();
-      const id = dragging, before = dropTarget(col, event.clientY)?.dataset.id || null;
-      dragging = null;
-      clearDropMarks();
-      return moveTask(id, status, before);
-    };
-    const heading = element('h3', labels[status]);
-    heading.append(element('span', items.length));
-    col.append(heading);
-    if (!items.length) col.append(element('p', '暂无事项', 'empty'));
-    for (const t of items) {
-      const button = element('button', undefined, 'card');
-      button.type = 'button';
-      button.dataset.id = t.id;
-      button.draggable = state.writable;
-      button.title = '拖动调整位置或切换状态；Alt + 方向键也可移动';
-      button.ondragstart = event => {
-        if (saving || opening || !state.writable || $('editor').open) {event.preventDefault(); return;}
-        dragging = t.id;
-        event.dataTransfer.effectAllowed = 'move';
-        event.dataTransfer.setData('text/plain', t.id);
-        button.classList.add('dragging');
-      };
-      button.ondragend = () => {dragging = null; button.classList.remove('dragging'); clearDropMarks();};
-      button.onkeydown = async event => {
-        if (!event.altKey || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
-        event.preventDefault();
-        const index = items.indexOf(t), columns = ['todo', 'doing', 'blocked', 'done'];
-        if (event.key === 'ArrowUp' && index > 0) await moveTask(t.id, status, items[index - 1].id);
-        if (event.key === 'ArrowDown' && index < items.length - 1) await moveTask(t.id, status, items[index + 2]?.id || null);
-        const target = columns[columns.indexOf(status) + (event.key === 'ArrowLeft' ? -1 : 1)];
-        if (['ArrowLeft', 'ArrowRight'].includes(event.key) && target) await moveTask(t.id, target);
-        [...$('board').querySelectorAll('.card')].find(card => card.dataset.id === t.id)?.focus();
-      };
-      button.append(element('span', t.data.group || '未分组', 'context-label'), element('h4', t.data.text));
-      const summary = element('div', undefined, 'card-summary');
-      summary.append(element('span', '当前摘要', 'card-section-label'));
-      if (t.data.progress && t.data.progress.length <= 300) renderDocument(t.data.progress, summary);
-      else summary.append(element('p', t.data.progress ? '进展待整理为简短摘要，请打开详情查看。' : '尚未记录当前进展，请打开详情查看下一步。'));
-      button.append(summary);
-      button.append(element('p', followUpLabel(t.data) + '\n' + taskDate(t.data), 'card-dates'));
-      const hint = followUpHint(t.data);
-      if (hint.text) button.append(element('span', hint.text, 'follow-up-label ' + hint.cls));
-      if (t.data.status === 'cancelled') button.append(element('span', '已取消', 'tag'));
-      const deliveryHint = dueHint(t.data);
-      if (deliveryHint.text) button.append(element('span', deliveryHint.text, 'follow-up-label ' + deliveryHint.cls));
-      const badges = tags(t.attention.filter(item => item !== hint.text && item !== deliveryHint.text));
-      badges.append(element('span', ownerName(t.data), 'tag'), priorityTag(t.data));
-      button.append(badges);
-      button.append(element('span', '查看详情与下一步 →', 'card-detail-link'));
-      button.onclick = () => openTask(t.id);
-      col.append(button);
-    }
-    $('board').append(col);
-  }
 }
 
 function sortedTasks(tasks) {
@@ -461,97 +336,6 @@ function renderSchedule(tasks) {
     list.append(section);
   }
   if (!list.children.length) list.append(element('p', '当前筛选下暂无任务，可调整状态、负责人或时间范围。', 'empty'));
-}
-
-// Measure the full title even while the compact number is visible.
-const timelineFit = new ResizeObserver(entries => {
-  for (const {target} of entries) target.parentElement.dataset.compact = String(target.scrollWidth > target.clientWidth);
-});
-
-function timelineTask(task, dated) {
-  const button = element('button', undefined, dated ? 'delivery-node' : 'delivery-unscheduled');
-  button.type = 'button';
-  button.dataset.id = task.id;
-  button.title = [task.short_id, task.data.text, ownerName(task.data), dueLabel(task.data.due)].join(' · ');
-  button.setAttribute('aria-label', button.title);
-  button.onclick = () => openTask(task.id);
-  const name = element('span', task.data.text, 'delivery-name');
-  button.append(name, element('span', task.short_id, 'delivery-id'));
-  if (dated) timelineFit.observe(name);
-  return button;
-}
-
-function renderTimeline(tasks) {
-  const view = $('delivery-timeline');
-  timelineFit.disconnect();
-  view.replaceChildren();
-  view.hidden = taskView !== 'timeline';
-  if (view.hidden) return;
-  const weeks = new Map(), undated = [], ongoing = [];
-  for (const task of tasks) {
-    const due = task.data.due;
-    if (!due || due === 'long_term') {
-      (due ? ongoing : undated).push(task);
-      continue;
-    }
-    const date = new Date(due + 'T00:00:00Z');
-    const day = (date.getUTCDay() + 6) % 7;
-    date.setUTCDate(date.getUTCDate() - day);
-    const monday = date.toISOString().slice(0, 10);
-    if (!weeks.has(monday)) weeks.set(monday, new Map());
-    const groups = weeks.get(monday), group = task.data.group || '';
-    if (!groups.has(group)) groups.set(group, Array.from({length: 7}, () => []));
-    groups.get(group)[day].push(task);
-  }
-  for (const monday of [...weeks.keys()].sort()) {
-    const groups = weeks.get(monday);
-    const week = element('section', undefined, 'delivery-week');
-    const heading = element('h3', monday + ' 当周');
-    const scroll = element('div', undefined, 'delivery-scroll');
-    const table = element('table'), head = element('thead'), header = element('tr');
-    table.setAttribute('aria-label', monday + ' 当周交付');
-    header.append(element('th', '项目标签'));
-    const date = new Date(monday + 'T00:00:00Z');
-    for (const weekday of '一二三四五六日') {
-      const col = element('th', '周' + weekday);
-      col.append(element('small', (date.getUTCMonth()+1) + '/' + date.getUTCDate()));
-      header.append(col);
-      date.setUTCDate(date.getUTCDate()+1);
-    }
-    head.append(header);
-    const body = element('tbody');
-    for (const group of [...groups.keys()].sort((a,b) => a.localeCompare(b,'zh-CN'))) {
-      const row = element('tr'), days = groups.get(group);
-      const label = element('th', group || '未分组');
-      label.scope = 'row';
-      row.append(label);
-      for (let day = 0; day < 7;) {
-        const cell = element('td'), items = days[day];
-        let span = 1;
-        // A lone milestone can use empty space to its right for its title.
-        if (items.length === 1) {
-          while (day + span < 7 && !days[day + span].length) span++;
-        }
-        cell.colSpan = span;
-        for (const task of items) cell.append(timelineTask(task, true));
-        row.append(cell);
-        day += span;
-      }
-      body.append(row);
-    }
-    table.append(head, body);
-    scroll.append(table);
-    week.append(heading, scroll);
-    view.append(week);
-  }
-  for (const [label, items] of [['未约定交付日期', undated], ['长期任务', ongoing]]) {
-    if (!items.length) continue;
-    const details = element('details', undefined, 'delivery-other');
-    details.append(element('summary', label + ' · ' + items.length));
-    for (const task of items) details.append(timelineTask(task, false));
-    view.append(details);
-  }
-  if (!tasks.length) view.append(element('p', '当前筛选下没有任务。', 'empty'));
 }
 
 function dueLabel(value) { return value === 'long_term' ? '长期' : value || '未约定'; }
@@ -892,6 +676,9 @@ function renderHistory(detail) {
     link.target = '_blank'; link.rel = 'noopener'; fold.append(link);
   }
   sources.append(element('h4', '最初来源'), element('p', sourceText(detail.task.data.source)));
+  if(detail.task.data.planned_due)sources.append(element('p','Agent目标：'+detail.task.data.planned_due+' · '+(detail.task.data.planning_reason||'')));
+  if(detail.task.data.owner_basis==='agent')sources.append(element('p','负责人由Agent安排：'+detail.task.data.owner+' · '+(detail.task.data.owner_reason||'')));
+  if(detail.task.data.review_basis==='agent')sources.append(element('p','关心时间由Agent安排：'+detail.task.data.follow_up+' · '+(detail.task.data.review_reason||'')));
   if (detail.task.data.last_source) sources.append(element('h4', '最近修改来源'), element('p', sourceText(detail.task.data.last_source)));
   const history = disclosure('修改历史 · ' + detail.history.length + ' 次', $('history'));
   const names = {text: '任务', context: '背景脉络', status: '状态', next_step: '下一步', progress: '进展',
@@ -968,6 +755,8 @@ function renderTask(data) {
   const badges = tags(meta);
   badges.append(priorityTag(data));
   view.append(badges);
+  if(data.planned_due)view.append(element('p','Agent目标：'+data.planned_due+' · '+(data.planning_reason||''),'muted'));
+  if(data.owner_basis==='agent')view.append(element('p','负责人由Agent安排 · '+(data.owner_reason||''),'muted'));
   const hint = followUpHint(data);
   if (hint.text) view.append(element('p', hint.text, 'follow-up-label ' + hint.cls));
   const deliveryHint = dueHint(data);
@@ -1004,7 +793,7 @@ async function openTask(id = null) {
     for (const k of fields) form.elements.namedItem(k).value = data[k] || (k === 'priority' ? 'normal' : '');
     form.elements.namedItem('owner').value = ownerName(data);
     savedValues = values();
-    renderTask({...savedValues, follow_up_pending: data.follow_up_pending});
+    renderTask({...data, ...savedValues, follow_up_pending: data.follow_up_pending});
     setEditMode(!id && state.writable);
     $('form-message').textContent = '';
     $('evidence').hidden = !id;
@@ -1129,7 +918,7 @@ $('refresh').onclick = async () => {
   }
 };
 $('quick-retry').onclick = () => quickPending && quickSave(quickPending.id, quickPending.changes);
-for (const view of ['list', 'board', 'schedule', 'timeline']) $('view-' + view).onclick = () => {
+for (const view of ['list', 'schedule']) $('view-' + view).onclick = () => {
   taskView = view;
   render();
 };
@@ -1205,6 +994,12 @@ $('search').oninput = () => {if (state) render();};
 window.addEventListener('beforeunload', event => {if (dirty || saving) {event.preventDefault(); event.returnValue = '';}});
 restorePreferences();
 refresh().then(() => {
-  const id = new URLSearchParams(window.location?.search || '').get('task');
-  if (id && state?.tasks.some(t => t.id === id)) openTask(id);
+  const params = new URLSearchParams(window.location?.search || '');
+  const back = params.get('return');
+  if (back && /^\/(?:delivery)?(?:\?(?:view=delivery(?:&line=[A-Za-z0-9_-]+)?|line=[A-Za-z0-9_-]+))?$/.test(back)) {
+    $('back-mainline').href = back;
+    $('back-mainline').hidden = false;
+  }
+  const id = params.get('task');
+  if (id && state) openTask(id);
 });

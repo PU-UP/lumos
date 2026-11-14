@@ -63,12 +63,14 @@ def list_notes(store, workspace='lingguang', archived=False, query=''):
         store.verify()
         with store.db() as db:
             nodes = store.nodes(db)
+        from lumos_intake import note_intake_status
         notes = [n for n in nodes.values() if n['kind'] == 'note' and n['data']['workspace'] == workspace
                  and (n['data']['status'] == 'archived') == archived
                  and query.casefold() in (n['data']['title'] + '\n' + n['data']['body']).casefold()]
         notes.sort(key=lambda n: (n['data']['date'], n['data']['created_at'], n['id']), reverse=True)
         ctl = store.control()
-        return {'notes': [{'id': n['id'], 'data': {k: v for k, v in n['data'].items() if k != 'body'}} for n in notes],
+        return {'notes': [{'id': n['id'], 'data': {k: v for k, v in n['data'].items() if k != 'body'},
+                          'intake': note_intake_status(nodes, n['id'])} for n in notes],
                 'today': datetime.now(timezone(timedelta(hours=8))).date().isoformat(),
                 'store_id': ctl['id'], 'writable': ctl['mode'] in {'active', 'trial', 'sandbox'}
                 and ctl['bound_root'] == str(store.root) and not store.status()['session']}
@@ -84,7 +86,9 @@ def note_detail(store, ident, revision=None):
             history = [h for h in history if h['data'].get('checkpoint', True)]
             tasks = [{'id': n['id'], 'title': n['data']['text']} for n in store.nodes(db).values()
                      if n['kind'] == 'action' and any(r['id'] == ident for r in n['data'].get('note_refs', []))]
-        return {'note': note, 'history': history, 'tasks': tasks}
+            from lumos_intake import note_intake_status
+            intake = note_intake_status(store.nodes(db), ident)
+        return {'note': note, 'history': history, 'tasks': tasks, 'intake': intake}
 
 
 def save_note(store, request):
@@ -135,9 +139,12 @@ def save_note(store, request):
         validate_note(data)
         node = {'id': ident, 'kind': 'note', 'data': data}
         batch_request = {'reason': reason, 'updates': [node]}
+        from lumos_intake import enabled, note_intake
+        if operation == 'finish' and enabled(nodes, data['workspace']):
+            batch_request['updates'].append(note_intake(node))
         with store.db() as db:
             links = set(db.execute('SELECT src,dst,relation FROM links'))
-        store.validate(nodes, {**nodes, ident: node}, batch_request, links, links)
+        store.validate(nodes, {**nodes, **{n['id']: n for n in batch_request['updates']}}, batch_request, links, links)
         batch = store._begin(batch_request)
         store._commit(batch['batch'])
         return {'note': node, 'replayed': False}

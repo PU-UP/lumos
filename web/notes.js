@@ -54,7 +54,7 @@ async function refreshList() {
   for (const n of state.notes) {
     if (day !== n.data.date) {$('note-list').append(node('h2', n.data.date)); $('note-list').lastChild.className='note-day'; day=n.data.date;}
     const button = node('button', n.data.title); button.className='note-item' + (current?.id === n.id ? ' selected' : '');
-    button.append(node('small', (n.data.status === 'archived' ? '已归档' + (n.data.recording === 'editing' ? ' · 编辑中' : '') : n.data.recording === 'editing' ? '记录中' : '待处理') + ' · 修改于 ' + new Date(n.data.updated_at).toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:'Asia/Shanghai'})));
+    button.append(node('small', (n.data.status === 'archived' ? '已归档' + (n.data.recording === 'editing' ? ' · 编辑中' : '') : n.data.recording === 'editing' ? '记录中' : window.LumosIntake?.labels[n.intake?.data.status] || '待处理') + ' · 修改于 ' + new Date(n.data.updated_at).toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:'Asia/Shanghai'})));
     button.onclick = () => navigate(() => openNote(n.id)); $('note-list').append(button);
   }
   if (!state.notes.length) $('note-list').append(node('p', '这里还没有笔记。'));
@@ -82,6 +82,13 @@ function fill(data) {
   $('save-state').textContent = historical ? '历史版本 · 只读' : dirty ? '未保存草稿' : savedState();
   $('note-id').textContent = '笔记：' + current.id;
   $('history-content').replaceChildren(); controls();
+  if(window.LumosIntake && !historical && data.recording !== 'editing')window.LumosIntake.watch($('note-intake'),data.workspace,current.id,async()=>{
+    const id=current.id, revision=current.data.revision;
+    const detail=await api('/api/note?id='+encodeURIComponent(id));
+    if(current?.id!==id || current.data.revision!==revision || dirty || historical || transitioning || !isReading())return;
+    current=detail.note;fill(current.data);renderHistory(detail);await refreshList();
+  });
+  else {window.LumosIntake?.stop();$('note-intake').replaceChildren();}
 }
 function savedState() {
   if (current.data.status === 'archived') return isReading() ? '已归档 · 阅读模式' : '已归档 · 编辑中 · 自动保存当前内容';

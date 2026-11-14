@@ -56,7 +56,7 @@ py -3 lumos.py context <问题关键词>
 | decision | context、text、source.type=user、reason、scope；状态 current/superseded |
 | action | context、text、source、condition、status；状态 todo/doing/blocked/done/cancelled；负责人和日期可未知 |
 
-`source` 至少含 `type` 与 `ref`；type 为 user（用户陈述）、user_report（用户转述／结果报告）、source（有来源材料）、agent（建议／假设）。可附必要 quote 与时间，ref 不依赖旧会话才能理解。Agent 提案写 evidence，不能登记为用户决定或承诺行动。
+`source` 至少含 `type` 与 `ref`；type 为 user（用户陈述）、user_report（用户转述／结果报告）、source（有来源材料）、agent（建议／假设）。可附必要 quote 与时间，ref 不依赖旧会话才能理解。Agent 提案不能登记为用户决定或承诺；已启用工作替身授权的空间可经intake保存有依据的内部行动，保留agent来源、授权引用及planned_due，见 `docs/autonomy.md`。文档、正式决定和关系仍走本节批次流程。
 
 普通行动完成增加 `completion: {"basis":"user_report", "ref":"用户本次明确说聊完了"}`；实际观察可用 observed 并指向结果。不填写 `technical_result=passed` 即不作技术通过判断；如要记录通过，必须同时有 `acceptance` 和 `result_evidence`，并继续标明是谁报告／验证。工具只能校验字段，Agent 仍要核对来源是否真实。
 

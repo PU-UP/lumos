@@ -3,6 +3,13 @@ from lumos import require
 
 
 def validate_person(data):
+    if 'assessment' in data:
+        assessment = data['assessment']
+        require(isinstance(assessment, dict) and isinstance(assessment.get('summary'), str)
+                and 0 < len(assessment['summary']) <= 2000, 'Invalid responsibility assessment')
+        for field in ('responsibilities', 'uncertainties', 'basis_ids'):
+            require(isinstance(assessment.get(field), list) and all(isinstance(v, str) and 0 < len(v) <= 1000 for v in assessment[field]), 'Invalid assessment '+field)
+        require(isinstance(assessment.get('source'), dict) and assessment['source'].get('ref'), 'Assessment source required')
     for key, limit in (("title", 300), ("team", 80), ("role", 2000), ("arrival_note", 500),
                        ("org_role", 80), ("org_note", 500)):
         value = data.get(key, "")

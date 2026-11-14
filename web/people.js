@@ -15,7 +15,7 @@ function workspaceOf(context) {
 function counts(tasks) { return Object.keys(statuses).map(status => tasks.filter(t => t.data.status === status).length); }
 function taskRow(task) {
   const row = element('div', undefined, 'people-task'), link = element('a', task.data.text);
-  link.href = '/?task=' + encodeURIComponent(task.id);
+  link.href = '/tasks?task=' + encodeURIComponent(task.id);
   row.append(link, element('span', ownerName(task) + ' · ' + statuses[task.data.status] + ' · ' + (['done', 'cancelled'].includes(task.data.status) ? '不再提醒' : task.data.follow_up || '未设关心时间')));
   return row;
 }
@@ -151,6 +151,7 @@ function render() {
       details.append(workloadRow('summary', personLabel(person), owned));
       const body = element('div', undefined, 'member-body');
       if (person.role) body.append(element('p', person.role, 'muted'));
+      if(person.assessment){const a=person.assessment,fold=element('details');fold.append(element('summary','Agent职责判断 · '+a.as_of),element('p',a.summary));for(const r of a.responsibilities)fold.append(element('p','适合承接：'+r));for(const q of a.uncertainties)fold.append(element('p','待核对：'+q));fold.append(element('p','依据：'+a.basis_ids.map(id=>{const t=state.tasks.find(t=>t.id===id);return t?(t.short_id+' '+t.data.text):'历史职责依据';}).join('、')+' · '+a.source.ref,'muted'));if(a.source.quote)fold.append(element('p',a.source.quote,'muted'));body.append(fold);}
       if (person.arrival_note) body.append(element('p', person.arrival_note, 'muted'));
       body.append(...owned.map(taskRow));
       if (!owned.length) body.append(element('p', '暂无任务', 'muted'));

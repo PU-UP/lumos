@@ -1,8 +1,8 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lumos · 笔记</title><link rel="stylesheet" href="/board.css"><link rel="stylesheet" href="/notes.css"><script src="/notes.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lumos · 笔记</title><link rel="stylesheet" href="/board.css"><link rel="stylesheet" href="/notes.css"><script src="/intake.js" defer></script><script src="/notes.js" defer></script></head>
 <body>
-<header><div class="brand"><span class="mark">L</span><strong>Lumos</strong><nav aria-label="工作视图"><a href="/">任务看板</a><a href="/people">人员</a><a href="/notes" aria-current="page">笔记</a></nav></div><button id="new-note" class="primary" disabled>＋ 新建笔记</button></header>
+<header><div class="brand"><span class="mark">L</span><strong>Lumos</strong><nav aria-label="工作视图"><a href="/">主线</a><a href="/tasks">全部任务</a><a href="/people">人员</a><a href="/notes" aria-current="page">笔记</a></nav></div><button id="new-note" class="primary" disabled>＋ 新建笔记</button></header>
 <main class="notebook">
 <aside aria-label="笔记列表"><div class="notebook-heading"><h1>笔记</h1><span id="note-count" class="count">0</span></div>
 <label>工作空间<select id="note-workspace"><option value="lingguang">灵光</option><option value="lumos">Lumos 仓库维护</option></select></label>
@@ -11,7 +11,7 @@
 <div id="drafts"></div><div id="note-list"></div></aside>
 <section class="note-page" aria-label="笔记内容">
 <p id="note-message" role="status" aria-live="polite"></p>
-<div id="welcome"><p class="eyebrow">随手记录</p><h2>先记下来，之后再整理。</h2><p>会议要点、问题和临时想法，都可以从这里开始。</p></div>
+<div id="welcome"><h2>把进展写下来。</h2><p>会议要点、问题和临时想法，都可以从这里开始。</p></div>
 <div id="note-editor" hidden>
 <div class="note-toolbar"><label>记录日期<input id="note-date" type="date"></label><span id="save-state" role="status" aria-live="polite"></span><button id="save-note">保存当前内容</button><button id="preview-note">结束记录</button><button id="archive-note">归档</button></div>
 <div id="archive-panel" hidden><label>处理结果／资料去向<input id="archive-reason" maxlength="2000" placeholder="例如：要点已纳入某任务或项目，无剩余待处理内容"></label><button id="confirm-archive">确认归档</button><button id="cancel-archive">取消</button></div>
@@ -19,8 +19,9 @@
 <label id="body-label"><span class="sr-only">笔记正文</span><textarea id="note-body" maxlength="200000" placeholder="从这里开始写……&#10;&#10;支持 # 小标题、- 列表、[文字](链接)。"></textarea></label>
 <article id="note-preview" hidden></article>
 <div id="conflict" hidden><h3>最新保存的版本</h3><p>上方保留你的草稿。请对照下方内容在上方合并，再点击“保存合并结果”。</p><pre id="remote-note"></pre><button id="merge-note">保存合并结果</button><button id="use-remote">使用最新版本（放弃本地草稿）</button></div>
+<section id="note-intake" aria-label="Agent整理结果"></section>
 <details id="note-history"><summary>历史版本与关联任务</summary><div id="history-content"></div></details>
 <p class="note-help">输入时自动保存当前内容；点击“结束记录”生成历史版本，下次默认阅读。内容已使用或纳入任务／项目后再归档；归档可恢复，不代表任务完成。</p>
-<p class="note-help">在对话中告诉 Agent：“从这篇笔记整理任务”或“作为任务背景”。<span id="note-id"></span></p>
+<p class="note-help">结束记录后由运行中的 Agent 整理；下方可查看结果或重试。<span id="note-id"></span></p>
 </div></section></main>
 </body></html>

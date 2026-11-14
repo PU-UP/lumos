@@ -6,7 +6,8 @@ from datetime import date, datetime, timedelta, timezone
 from lumos import Error, digest, now, process_lock, require, safe_path
 
 FIELDS = {"text", "context", "status", "condition", "details", "next_step", "progress",
-          "due", "completed_on", "follow_up", "priority", "owner", "group"}
+          "due", "completed_on", "follow_up", "priority", "owner", "group",
+          "planned_due", "planning_reason", "owner_basis", "owner_reason", "review_basis", "review_reason"}
 STATES = {"todo", "doing", "blocked", "done", "cancelled"}
 WORKSPACES = {"lingguang", "lumos"}
 
@@ -25,7 +26,7 @@ def validate_fields(data):
     for field in FIELDS & data.keys():
         require(isinstance(data[field], str), f"{field} must be text")
         require(len(data[field]) <= (300 if field in {"text", "owner"} else 20000), f"{field} too long")
-    for field in ("due", "completed_on", "follow_up"):
+    for field in ("due", "completed_on", "follow_up", "planned_due"):
         value = data.get(field, "")
         if field == "due" and value == "long_term":
             continue
@@ -35,6 +36,8 @@ def validate_fields(data):
                 date.fromisoformat(value)
             except ValueError as exc:
                 raise Error(f"{field}: invalid date") from exc
+    for field in ("owner_basis", "review_basis"):
+        require(data.get(field, "") in {"", "user", "agent"}, f"Invalid {field}")
     require(data.get("priority", "normal") in {"low", "normal", "high"}, "Invalid priority")
     if data.get("completed_on") and "status" in data:
         require(data["status"] == "done", "Completion date requires a completed task")
@@ -94,7 +97,7 @@ def list_tasks(store, today=None):
     with process_lock(store.root):
         with store.db() as db:
             numbers = task_numbers(db)
-            nodes = store.nodes(db, ("action", "context", "person", "document"))
+            nodes = store.nodes(db, ("action", "context", "person", "document", "mainline"))
             seq = store.seq(db)
         contexts = [{**n, "data": {**n["data"], "workspace": context_workspace(n)}}
                     for n in nodes.values() if n["kind"] == "context"
@@ -113,7 +116,10 @@ def list_tasks(store, today=None):
         from lumos_people import list_people
         archived_people = [n for n in nodes.values() if n["kind"] == "person"
                            and n["data"].get("status") == "archived" and n["data"]["context"] in ids]
-        return {"seq": seq, "today": today.isoformat(), "contexts": contexts, "tasks": tasks, "people": list_people(nodes, ids), "archived_people": archived_people, "board_order": board_order,
+        mainlines = sorted((n for n in nodes.values() if n["kind"] == "mainline"
+                           and n["data"]["context"] in ids and n["data"].get("status", "active") == "active"),
+                          key=lambda n: (n["data"].get("order", 0), n["id"]))
+        return {"seq": seq, "today": today.isoformat(), "contexts": contexts, "tasks": tasks, "mainlines": mainlines, "people": list_people(nodes, ids), "archived_people": archived_people, "board_order": board_order,
                 "attention": [n["id"] for n in tasks if n["attention"]],
                 "writable": ctl["mode"] in {"active", "trial", "sandbox"}
                 and ctl["bound_root"] == str(store.root) and not (store.root / "session.json").exists(),
@@ -216,44 +222,14 @@ def save_task(store, request):
                                                       "updated_at": changed_at, "last_source": source}})
             require(any(n["id"] == ident for n in updates), "不能修改归档脉络中的标签。")
             return commit_tasks(store, nodes, {"reason": reason, "updates": updates}, ident)
-        data = dict(old["data"]) if old else {"status": "todo", "priority": "normal", "source": source}
-        data.update(changes)
-        if (old and old["data"]["status"] in {"done", "cancelled"} and data["status"] not in {"done", "cancelled"}
-                and "follow_up" not in changes):
-            data["follow_up"] = ""
-        if request.get("follow_up_reviewed"):
-            require(old is not None, "Follow-up review requires an existing task")
-            if "follow_up" not in changes and data["status"] not in {"done", "cancelled"}:
-                data["follow_up"] = ""
-            data["follow_up_pending"] = not bool(data.get("follow_up"))
-        elif "follow_up" in changes and (changes["follow_up"] or (old and old["data"].get("follow_up"))):
-            data["follow_up_pending"] = not bool(changes["follow_up"])
-        if data.get("status") in {"done", "cancelled"}:
-            data["follow_up_pending"] = False
-        if "note_refs" in request:
-            from lumos_notes import validate_refs, note_version
-            validate_refs(request["note_refs"], nodes)
-            with store.db() as db:
-                for ref in request["note_refs"]:
-                    version = note_version(db, ref["id"], ref["revision"])
-                    require(ref["excerpt"] in version["data"]["body"], "Excerpt must match the referenced note version")
-            data["note_refs"] = request["note_refs"]
-        data = task_defaults(data)
-        require(data.get("text", "").strip(), "任务标题不能为空")
-        require(data.get("status") in STATES, "Invalid task status")
-        ctx = nodes.get(data.get("context"))
-        require(ctx and ctx["kind"] == "context" and ctx["data"].get("status", "active") in {"active", "waiting"},
-                "请选择当前工作脉络，归档内容不能新增或修改任务。")
-        if not data.get("condition", "").strip():
-            data["condition"] = "用户确认完成：" + data["text"]
-        data["updated_at"] = now()
-        data["last_source"] = source
-        if data["status"] == "done" and (not old or old["data"]["status"] != "done"):
-            data["completion"] = {"basis": "user_report", "ref": source["ref"]}
-        elif data["status"] != "done":
-            require(not changes.get("completed_on"), "Completion date requires a completed task")
-            for field in ("completion", "completed_on", "technical_result", "acceptance", "result_evidence"):
-                data.pop(field, None)
+        changes = dict(changes)
+        if "owner" in changes:
+            changes.update(owner_basis="user", owner_reason="")
+        if "follow_up" in changes:
+            changes.update(review_basis="user", review_reason="")
+        data = prepare_task(store, nodes, old, changes, source, request.get("note_refs"),
+                            request.get("follow_up_reviewed", False))
+        ctx = nodes[data["context"]]
         update = {"id": ident, "kind": "action", "data": data}
         batch_request = {"reason": reason, "updates": [update]}
         if "before_id" in request:
@@ -285,3 +261,45 @@ def commit_tasks(store, nodes, batch_request, ident):
     store._commit(batch["batch"], task_request=batch_request)
     with store.db() as db:
         return {"id": ident, "seq": store.seq(db), "replayed": False}
+
+
+def prepare_task(store, nodes, old, changes, source, note_refs=None, reviewed=False):
+    data = dict(old["data"]) if old else {"status": "todo", "priority": "normal", "source": source}
+    data.update(changes)
+    if (old and old["data"]["status"] in {"done", "cancelled"} and data["status"] not in {"done", "cancelled"}
+            and "follow_up" not in changes):
+        data["follow_up"] = ""
+    if reviewed:
+        require(old is not None, "Follow-up review requires an existing task")
+        if "follow_up" not in changes and data["status"] not in {"done", "cancelled"}:
+            data["follow_up"] = ""
+        data["follow_up_pending"] = not bool(data.get("follow_up"))
+    elif "follow_up" in changes and (changes["follow_up"] or (old and old["data"].get("follow_up"))):
+        data["follow_up_pending"] = not bool(changes["follow_up"])
+    if data.get("status") in {"done", "cancelled"}:
+        data["follow_up_pending"] = False
+    if note_refs is not None:
+        from lumos_notes import validate_refs, note_version
+        validate_refs(note_refs, nodes)
+        with store.db() as db:
+            for ref in note_refs:
+                version = note_version(db, ref["id"], ref["revision"])
+                require(ref["excerpt"] in version["data"]["body"], "Excerpt must match the referenced note version")
+        data["note_refs"] = note_refs
+    data = task_defaults(data)
+    require(data.get("text", "").strip(), "任务标题不能为空")
+    require(data.get("status") in STATES, "Invalid task status")
+    ctx = nodes.get(data.get("context"))
+    require(ctx and ctx["kind"] == "context" and ctx["data"].get("status", "active") in {"active", "waiting"},
+            "请选择当前工作脉络，归档内容不能新增或修改任务。")
+    if not data.get("condition", "").strip():
+        data["condition"] = "用户确认完成：" + data["text"]
+    data["updated_at"] = now()
+    data["last_source"] = source
+    if data["status"] == "done" and (not old or old["data"]["status"] != "done"):
+        data["completion"] = {"basis": "user_report", "ref": source["ref"]}
+    elif data["status"] != "done":
+        require(not changes.get("completed_on"), "Completion date requires a completed task")
+        for field in ("completion", "completed_on", "technical_result", "acceptance", "result_evidence"):
+            data.pop(field, None)
+    return data

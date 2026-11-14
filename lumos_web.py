@@ -8,6 +8,8 @@ from urllib.parse import urlsplit, parse_qs
 from lumos import ENGINE, Error, require
 from lumos_tasks import list_tasks, task_detail, save_task
 from lumos_notes import list_notes, note_detail, save_note
+from lumos_mainlines import mainline_detail, save_review
+from lumos_intake import list_intakes, save_intake
 
 
 def make_server(store, port=8765):
@@ -46,14 +48,20 @@ def make_server(store, port=8765):
                 require(self.headers.get("Sec-Fetch-Site") not in {"cross-site"}, "Cross-site request refused")
                 path = urlsplit(self.path)
                 if write:
-                    require(path.path in {"/api/tasks", "/api/notes"}, "Unknown route")
+                    require(path.path in {"/api/tasks", "/api/notes", "/api/intakes", "/api/mainline-review"}, "Unknown route")
                     require(self.headers.get("Origin") == "http://" + host, "Invalid origin")
                     require(secrets.compare_digest(self.headers.get("X-Lumos-Token", ""), token), "Invalid token")
                     require(self.headers.get("Content-Type", "").split(";")[0] == "application/json", "Expected JSON")
                     request = json.loads(raw)
                     require(isinstance(request, dict), "Expected request object")
                     request["source"] = {"type": "user", "ref": "本地看板用户保存，request=" + str(request.get("request_id", ""))}
-                    self.reply(200, (save_note if path.path == "/api/notes" else save_task)(store, request))
+                    save = {"/api/tasks": save_task, "/api/notes": save_note, "/api/intakes": save_intake, "/api/mainline-review": save_review}[path.path]
+                    self.reply(200, save(store, request))
+                elif path.path == "/api/intakes":
+                    query = parse_qs(path.query)
+                    data = list_intakes(store, query.get("workspace", ["lingguang"])[0])
+                    worker = getattr(self.server, 'worker', None)
+                    self.reply(200, {**data, 'executor': worker.state if worker else 'offline', 'token': token})
                 elif path.path == "/api/notes":
                     query = parse_qs(path.query)
                     self.reply(200, {**list_notes(store, query.get("workspace", ["lingguang"])[0],
@@ -69,8 +77,12 @@ def make_server(store, port=8765):
                     self.reply(200, {**list_tasks(store), "token": token})
                 elif path.path == "/api/task":
                     self.reply(200, task_detail(store, parse_qs(path.query).get("id", [""])[0]))
-                elif path.path in {"/", "/board.js", "/board.css", "/notes", "/notes.js", "/notes.css", "/people", "/people.js", "/people.css"}:
-                    name = {"/": "index.html", "/notes": "notes.html", "/people": "people.html"}.get(path.path, path.path[1:])
+                elif path.path == "/api/mainline":
+                    self.reply(200, mainline_detail(store, parse_qs(path.query).get("id", [""])[0]))
+                elif path.path in {"/", "/tasks", "/delivery", "/intake.js", "/overview.js", "/overview.css", "/board.js", "/board.css", "/notes", "/notes.js", "/notes.css", "/people", "/people.js", "/people.css"}:
+                    name = {"/": "overview.html", "/delivery": "overview.html", "/tasks": "index.html", "/notes": "notes.html", "/people": "people.html"}.get(path.path, path.path[1:])
+                    if path.path == "/" and "task" in parse_qs(path.query):
+                        name = "index.html"  # Preserve existing task bookmarks.
                     content_type = "text/javascript" if name.endswith(".js") else "text/css" if name.endswith(".css") else "text/html"
                     self.reply(200, (ENGINE / "web" / name).read_bytes(), content_type + "; charset=utf-8")
                 else:
@@ -91,8 +103,13 @@ def make_server(store, port=8765):
 
 def serve(store, port=8765):
     with make_server(store, port) as server:
+        from lumos_worker import Worker
+        server.worker = Worker(store)
+        server.worker.thread.start()
         print(f"Lumos: http://127.0.0.1:{server.server_port}", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             pass
+        finally:
+            server.worker.stop.set()

@@ -31,7 +31,7 @@ function deferred() {
   return {promise, resolve};
 }
 
-async function page(storage = new Map(), initialBoard = {}) {
+async function page(storage = new Map(), initialBoard = {}, navigation = {}) {
   const nodes = new Map();
   const get = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
   const names = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'completed_on', 'follow_up', 'priority', 'owner', 'group', 'workspace'];
@@ -48,14 +48,27 @@ async function page(storage = new Map(), initialBoard = {}) {
   const world = {ResizeObserver: class { observe() {} disconnect() {} }, setTimeout(fn, ms) {timers.set(++nextTimer, {fn, ms}); return nextTimer;},
     clearTimeout(id) {timers.delete(id);}, document: {getElementById: get, createElement: tag => Object.assign(new Element(), {tagName:tag.toUpperCase()})},
     localStorage: {getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value)},
-    window: {addEventListener() {}}, URLSearchParams, Option: function(text, value) { this.text = text; this.label = text; this.value = value; this.tagName = 'OPTION'; },
+    window: {addEventListener() {}, location: {search: navigation.search || ''}}, URLSearchParams, Option: function(text, value) { this.text = text; this.label = text; this.value = value; this.tagName = 'OPTION'; },
     crypto: {randomUUID: () => '11111111-1111-1111-1111-111111111111'},
-    fetch: async () => response(board)};
+    fetch: async url => response(url.startsWith('/api/task?') ? navigation.detail : board)};
   vm.createContext(world);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../web/board.js'), 'utf8'), world);
   await tick();
   return {world, get, controls, form, board, timers};
 }
+
+test('direct links open historical tasks outside the current list and return only to local management views', async () => {
+  const detail = {seq:3,task:{id:'history',short_id:'T-001',data:{text:'历史任务',context:'work-current',status:'done',source:{ref:'fixture'}}},related:[],documents:{},history:[]};
+  for (const back of ['/', '/delivery', '/delivery?line=example']) {
+    const p = await page(new Map(), {}, {search:'?task=history&return='+encodeURIComponent(back), detail});
+    assert.equal(p.get('editor').open,true);
+    assert.equal(p.controls.text.value,'历史任务');
+    assert.equal(p.get('back-mainline').href,back);
+    assert.equal(p.get('back-mainline').hidden,false);
+  }
+  const p = await page(new Map(), {}, {search:'?return='+encodeURIComponent('//external.test')});
+  assert.equal(p.get('back-mainline').href,undefined);
+});
 
 test('saving locks fields, close and duplicate submission until the request settles', async () => {
   const p = await page();
@@ -277,46 +290,6 @@ test('quick status respects read-only mode and does not submit an unchanged stat
   await p.world.saveChanges({status: 'done'}, true);
 });
 
-test('board moves persist status and position, retry identically and block concurrent writes', async () => {
-  const p = await page();
-  p.board.tasks = [
-    {id: 'a', data: {text: 'A', status: 'todo'}, attention: []},
-    {id: 'b', data: {text: 'B', status: 'todo'}, attention: []},
-    {id: 'c', data: {text: 'C', status: 'cancelled'}, attention: []}
-  ];
-  p.board.board_order = ['b', 'a', 'c'];
-  assert.deepEqual(Array.from(p.world.columnTasks(p.board.tasks, 'todo'), t => t.id), ['b', 'a']);
-  const bodies = [];
-  p.world.fetch = async (url, options) => {
-    if (!options) return response(p.board);
-    bodies.push(options.body);
-    if (bodies.length === 1) throw new Error('offline');
-    return response({});
-  };
-  await p.world.moveTask('a', 'todo', 'b');
-  assert.match(p.get('message').textContent, /尚未确认保存成功/);
-  await p.world.moveTask('a', 'todo', 'b');
-  assert.equal(bodies[0], bodies[1]);
-  assert.deepEqual(JSON.parse(bodies[0]).changes, {status: 'todo'});
-  assert.equal(JSON.parse(bodies[0]).before_id, 'b');
-  await p.world.moveTask('c', 'done');
-  assert.deepEqual(JSON.parse(bodies[2]).changes, {status: 'cancelled'});
-  const delayed = deferred();
-  p.world.fetch = (url, options) => {
-    if (!options) return Promise.resolve(response(p.board));
-    bodies.push(options.body);
-    return delayed.promise;
-  };
-  const moving = p.world.moveTask('a', 'doing');
-  await p.world.moveTask('b', 'doing');
-  assert.equal(bodies.length, 4);
-  delayed.resolve(response({}));
-  await moving;
-  p.board.writable = false;
-  await p.world.moveTask('a', 'done');
-  assert.equal(bodies.length, 4);
-});
-
 test('workspaces default to Lingguang, groups span contexts and switching clears filters', async () => {
   const p = await page();
   p.board.contexts.push({id:'lidar', data:{title:'雷达背景', workspace:'lingguang'}},
@@ -415,12 +388,11 @@ test('history shows only changed fields, including cleared dates, state and comp
   assert.equal(p.get('history').children[2].open, false);
 });
 
-test('status filters default to todo and doing, compose as toggles and apply to board', async () => {
+test('status filters default to todo and doing, compose as toggles and apply to the list', async () => {
   const p = await page();
   p.board.tasks = ['todo','doing','blocked','done','cancelled'].map((status, i) => ({id: String(i),
     data: {text: status, status, context: 'work-current', group: '项目甲'}, attention: status === 'blocked' ? ['受阻'] : []}));
   await p.world.refresh();
-  assert.equal(p.get('board').hidden, true);
   assert.equal(p.get('task-list').children.length, 3);
   assert.equal(p.get('task-list').children[1].children[2].value, ':项目甲');
   assert.equal(p.get('task-list').children[1].children[3].children[0].textContent, '王牧楠');
@@ -431,10 +403,6 @@ test('status filters default to todo and doing, compose as toggles and apply to 
   assert.deepEqual(Array.from(p.world.filtered(), t => t.id), ['3']);
   p.get('status-cancelled').onclick();
   assert.deepEqual(Array.from(p.world.filtered(), t => t.id), ['3', '4']);
-  p.get('view-board').onclick();
-  assert.equal(p.get('board').hidden, false);
-  assert.equal(p.get('task-list').hidden, true);
-  assert.equal(p.get('board').children.length, 4);
   await p.world.refresh();
   assert.deepEqual(Array.from(p.world.filtered(), t => t.id), ['3', '4']);
   p.get('status-done').onclick();
@@ -547,7 +515,7 @@ test('preferences survive reopening with filters, sort and view, including an em
   p.get('status-blocked').onclick();
   p.get('task-list').children[0].children[5].onclick();
   p.get('task-list').children[0].children[5].onclick();
-  p.get('view-board').onclick();
+  p.get('view-schedule').onclick();
   const before = storage.get('lumos.task-view.v1');
   const q = await page(storage, initial);
   assert.equal(storage.get('lumos.task-view.v1'), before);
@@ -557,8 +525,8 @@ test('preferences survive reopening with filters, sort and view, including an em
   assert.equal(q.get('search').value, '维护');
   assert.equal(q.get('window-days').value, '5');
   assert.equal(q.get('status-blocked')['aria-pressed'], 'true');
-  assert.equal(q.get('view-board')['aria-pressed'], 'true');
-  assert.equal(q.get('board').hidden, false);
+  assert.equal(q.get('view-schedule')['aria-pressed'], 'true');
+  assert.equal(q.get('schedule-list').hidden, false);
   assert.match(q.get('task-list').children[0].children[5].textContent, /↓/);
   for (const s of ['todo','doing','blocked']) q.get('status-' + s).onclick();
   const r = await page(storage, initial);
@@ -607,7 +575,7 @@ test('follow-up colors use Shanghai day and pending open tasks remain in the tim
   p.get('status-blocked').onclick();
   assert.deepEqual(Array.from(p.world.filtered(), t=>t.id), ['doing','blocked']);
   assert.match(textOf(p.get('task-list')), /待设置关心时间/);
-  assert.match(textOf(p.get('board')), /待设置关心时间/);
+  assert.match(textOf(p.get('task-list')), /待设置关心时间/);
   p.board.tasks[0].data.follow_up='2026-03-05'; p.board.tasks[0].data.follow_up_pending=false;
   assert.deepEqual(Array.from(p.world.filtered(), t=>t.id), ['blocked']);
   p.get('owner-filter').value='其他人';
@@ -684,7 +652,7 @@ test('schedule is a third persistent view and composes with all task filters', a
     {id:'c',data:{text:'排除完成',context:'work-current',owner:'王牧楠',group:'组',status:'done'},attention:[]}];
   const p = await page(storage,{tasks});
   p.get('owner-filter').value='王牧楠';p.get('group-filter').value=':组';p.get('view-schedule').onclick();
-  assert.equal(p.get('schedule-list').hidden,false);assert.equal(p.get('task-list').hidden,true);assert.equal(p.get('board').hidden,true);
+  assert.equal(p.get('schedule-list').hidden,false);assert.equal(p.get('task-list').hidden,true);
   assert.match(textOf(p.get('schedule-list')), /选中任务/);assert.doesNotMatch(textOf(p.get('schedule-list')), /排除/);
   const q = await page(storage,{tasks});assert.equal(q.get('view-schedule')['aria-pressed'],'true');
   q.get('search').value='无匹配';q.get('search').oninput();assert.match(textOf(q.get('schedule-list')), /当前筛选下暂无任务/);
@@ -751,30 +719,6 @@ test('outside click closes only after an outside press and cannot discard dirty 
   p.get('close').onclick();
   assert.equal(editor.open,false);
 });
-
-test('board cards show structured current summaries instead of long next steps', async () => {
-  const tasks = [
-    {id:'summary',data:{context:'work-current',status:'doing',text:'简洁任务',progress:'- 现状：优化中\n- 待确认：效果',next_step:'不应铺开的行动全文',follow_up:'2026-10-22',due:'2026-11-02'},attention:[]},
-    {id:'empty',data:{context:'work-current',status:'doing',text:'未整理任务',next_step:'不能冒充当前结论'},attention:['待设置关心时间']},
-    {id:'long',data:{context:'work-current',status:'doing',text:'旧长进展',progress:'旧记录'.repeat(110)},attention:[]}
-  ];
-  const p=await page(undefined,{tasks});
-  p.get('view-board').onclick();
-  const cards=p.get('board').children.flatMap(n=>n.children).filter(n=>n.dataset.id);
-  const summary=cards.find(n=>n.dataset.id==='summary');
-  assert.match(textOf(summary),/当前摘要/);
-  assert.match(textOf(summary),/现状：优化中/);
-  assert.match(textOf(summary),/待确认：效果/);
-  assert.doesNotMatch(textOf(summary),/不应铺开的行动全文/);
-  assert.match(textOf(summary),/下次关心：2026-10-22\n交付日期：2026-11-02/);
-  const empty=textOf(cards.find(n=>n.dataset.id==='empty'));
-  assert.match(empty,/尚未记录当前进展/);
-  assert.doesNotMatch(empty,/不能冒充当前结论/);
-  assert.equal(empty.split('待设置关心时间').length-1,1);
-  assert.match(textOf(cards.find(n=>n.dataset.id==='long')),/进展待整理/);
-  assert.equal(tasks[0].data.next_step,'不应铺开的行动全文');
-});
-
 
 test('inline delivery editor saves modes and dates only, with independent warning colors', async () => {
   const p=await page(undefined,{tasks:[{id:'a',data:{text:'A',context:'work-current',status:'todo',follow_up:'2026-11-03'},attention:[]}]});
@@ -851,14 +795,13 @@ test('completion picker can cancel, choose the planned date, retry without repro
   assert.equal(p.world.taskDate({status:'done'}),'完成日期：未记录');
 });
 
-test('completion picker disables unavailable plan dates and board moves carry selected date', async () => {
+test('completion picker disables unavailable plan dates and task saves carry selected date', async () => {
   const p=await page(undefined,{tasks:[{id:'a',data:{text:'长期任务',context:'work-current',status:'doing',due:'long_term'},attention:[]}]});
   let request;p.world.fetch=async(url,options)=>{if(options){request=JSON.parse(options.body);return response({});}return response(p.board);};
-  const op=p.world.moveTask('a','done');
+  const op=p.world.quickSave('a',{status:'done'});
   assert.equal(p.get('complete-due').disabled,true);
   p.get('complete-today').onclick();await op;
   assert.deepEqual(request.changes,{status:'done',completed_on:p.board.today});
-  assert.equal(request.before_id,null);
 });
 
 test('saved Mango owner filter follows the user rename', async () => {
@@ -1087,30 +1030,14 @@ test('rename dialog rejects an existing name and a changed task list before writ
   assert.equal(writes, 0);
 });
 
-test('delivery timeline groups by due date and project, keeps undated tasks and opens the canonical task', async () => {
-  const tasks = ['甲','乙','丙','丁'].map((text,i) => ({id:'fixture-'+i, short_id:'T-00'+(i+1),
-    data:{text,group:'项目甲',context:'work-current',status:'doing',due:['2026-11-16','2026-11-16','','long_term'][i],
-      follow_up:'2099-01-01'},attention:[]}));
-  const p = await page(undefined,{tasks});
-  p.get('window-days').value='0'; p.get('window-days').oninput();
-  p.get('view-timeline').onclick();
-  const view = p.get('delivery-timeline');
-  assert.equal(view.hidden,false);
-  assert.match(textOf(view),/2026-11-16 当周/);
-  assert.match(textOf(view),/未约定交付日期 · 1/);
-  assert.match(textOf(view),/长期任务 · 1/);
-  const row = view.children[0].children[1].children[0].children[1].children[0];
-  assert.equal(row.children[0].textContent,'项目甲');
-  const monday = row.children[1];
-  assert.deepEqual(Array.from(monday.children,n=>n.dataset.id),['fixture-0','fixture-1']);
-  assert.match(monday.children[1].title,/T-002 · 乙/);
-  let requested;
-  p.world.fetch = async url => {requested=url; return response({seq:3,task:tasks[1],history:[],related:[],documents:{}});};
-  await monday.children[1].onclick();
-  assert.equal(requested,'/api/task?id=fixture-1');
-  assert.match(p.get('task-detail-label').textContent,/T-002/);
-});
 const ownerPeople = ['甲','乙'].map(title=>({data:{title,team:'同组',workspaces:['lingguang']}}));
+test('retired board and timeline preferences safely open the task list', async()=>{
+  for(const taskView of ['board','timeline']){
+    const p=await page(new Map([['lumos.task-view.v1',JSON.stringify({taskView})]]));
+    assert.equal(p.get('view-list')['aria-pressed'],'true');
+    assert.equal(p.get('task-list').hidden,false);
+  }
+});
 test('candidate owner labels preserve the actual name and disclose unconfirmed arrival', async () => {
  const p=await page(new Map(),{people:[{data:{title:'模拟候选',team:'模拟组',workspaces:['lingguang'],membership_status:'candidate'}}]});
  const option=p.world.ownerOptions('lingguang')[1].children[0];
