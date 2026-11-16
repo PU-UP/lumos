@@ -13,12 +13,15 @@ window.LumosIntake = (() => {
         host.replaceChildren();
         host.append(el('p',!data.enabled?'此空间尚未启用自主整理。':data.executor==='offline'?'整理执行器未运行；内容会保留为待整理。':'结束记录后自动整理；任务及原文可追溯。'));
         const all=data.intakes.filter(n=>!noteId || n.data.note?.id===noteId);
-        const jobs=noteId?all.slice(0,1):all.filter((n,i)=>i<10 || ['pending','running','failed','needs_review'].includes(n.data.status));
+        const jobs=noteId?all.slice(0,1):all;
         if(!jobs.length)host.append(el('p','暂无整理记录。'));
         for(const job of jobs){
           const d=job.data,fold=el('details','');fold.open=!!noteId || ['failed','needs_review'].includes(d.status);
-          fold.append(el('summary',d.title+' · '+labels[d.status]));
-          if(d.summary)fold.append(el('p',d.summary));
+          const submitted=d.created_at?new Date(d.created_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'时间未记录';
+          const subject=(job.subjects||[]).map(t=>t.title).join('、') || d.title;
+          fold.append(el('summary',subject+(d.review?' · 到期复核':'')+' · '+labels[d.status]+' · '+submitted));
+          if(d.text)fold.append(el('p',(d.review?'系统复核说明：':'我的反馈：')+d.text));
+          if(d.summary)fold.append(el('p','Agent 处理结果：'+d.summary));
           if(d.error)fold.append(el('p',d.error));
           for(const [index,q] of (d.questions||[]).entries()){
             const answer=(d.resolutions||[]).find(r=>r.index===index);

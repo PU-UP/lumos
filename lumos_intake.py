@@ -79,7 +79,8 @@ def list_intakes(store, workspace='lingguang'):
         nodes = store.nodes(db)
         jobs = [n for n in nodes.values() if n['kind'] == 'intake' and n['data']['workspace'] == workspace]
         jobs.sort(key=lambda n: n['data']['created_at'], reverse=True)
-        return {'intakes': [{**n, 'targets': [{'id': i, 'kind': nodes[i]['kind'],
+        return {'intakes': [{**n, 'subjects': [{'id': i, 'title': nodes[i]['data'].get('title') or nodes[i]['data'].get('text', i)}
+                    for i in n['data'].get('related_ids', []) if i in nodes], 'targets': [{'id': i, 'kind': nodes[i]['kind'],
                     'title': nodes[i]['data'].get('title') or nodes[i]['data'].get('text', i)}
                     for i in n['data'].get('destinations', []) if i in nodes]} for n in jobs], 'enabled': enabled(nodes, workspace)}
 

@@ -81,3 +81,59 @@ test('Agent targets appear on the timeline without replacing promises or becomin
   assert.equal(targetDate(b),'2026-11-20');
   assert.equal(managementModel(state([a],[line('m',['a'])]),'lingguang').issues.length,0);
 });
+
+const vm=require('node:vm');
+class Control {
+  constructor(tag='div'){this.tag=tag;this.children=[];this.value='';this.open=false;this.textContent='';}
+  append(...nodes){this.children.push(...nodes);}
+  replaceChildren(...nodes){this.children=nodes;}
+  setAttribute(){}
+  addEventListener(){}
+  get options(){return this.children;}
+  requestSubmit(){this.saving=this.onsubmit({preventDefault(){}});}
+}
+function reviewPage(post){
+  const ids=new Map(),get=id=>{if(!ids.has(id))ids.set(id,new Control());return ids.get(id);};
+  get('workspace').value='lingguang';
+  const snapshot=state([],[line('m',[])]);snapshot.seq=1;snapshot.writable=true;
+  const world={document:{getElementById:get,createElement:t=>new Control(t),querySelector:()=>new Control()},
+    window:{location:{pathname:'/',search:''}},URLSearchParams,localStorage:{getItem:()=>null,setItem(){}},
+    Option:function(text,value){this.textContent=text;this.value=value;},crypto:{randomUUID:()=> 'a'.repeat(32)},
+    fetch:async(url,options)=>{if(options)return post(JSON.parse(options.body),snapshot);return {ok:true,json:async()=>snapshot};}};
+  vm.createContext(world);vm.runInContext(fs.readFileSync('web/overview.js','utf8'),world);
+  const controls=()=>{const walk=n=>[n,...n.children.flatMap(walk)];const form=walk(get('mainlines')).find(n=>n.tag==='form');return {form,date:form.children[0].children[0],save:form.children[1],message:form.children[2]};};
+  return {get,controls,snapshot};
+}
+const settle=()=>new Promise(resolve=>setImmediate(resolve));
+test('date change saves automatically and survives a reload including explicit clearing',async()=>{
+  const posts=[];const p=reviewPage(async(request,s)=>{posts.push(request);s.mainlines[0].data.review_on=request.review_on;return {ok:true,json:async()=>({seq:++s.seq})};});
+  await settle();let c=p.controls();c.date.value='2026-11-20';c.date.onchange();await c.form.saving;
+  c=p.controls();assert.equal(c.date.value,'2026-11-20');assert.match(c.message.textContent,/已保存/);
+  c.date.value='';c.date.onchange();await c.form.saving;
+  assert.equal(posts.length,2);assert.equal(posts[1].review_on,'');assert.equal(p.controls().date.value,'');
+});
+test('failed date saves retain input across rerenders and retry the same request',async()=>{
+  const posts=[];const p=reviewPage(async(request,s)=>{posts.push(request);if(posts.length===1)throw new Error('lost response');s.mainlines[0].data.review_on=request.review_on;return {ok:true,json:async()=>({})};});
+  await settle();let c=p.controls();c.date.value='2026-11-20';c.date.onchange();await c.form.saving;
+  assert.match(c.message.textContent,/输入已保留/);
+  p.get('search').oninput();c=p.controls();assert.equal(c.date.value,'2026-11-20');assert.equal(c.save.hidden,false);
+  c.form.requestSubmit();await c.form.saving;assert.deepEqual(posts[0],posts[1]);assert.equal(p.controls().date.value,'2026-11-20');
+});
+
+test('review status follows current records and never calls an edited draft saved',async()=>{
+  const p=reviewPage(async(request,s)=>{s.mainlines[0].data.review_on=request.review_on;return {ok:true,json:async()=>({})};});
+  await settle();let c=p.controls();c.date.value='2026-11-20';c.date.onchange();await c.form.saving;
+  c=p.controls();c.date.value='2026-11-21';c.date.oninput();p.get('search').oninput();
+  c=p.controls();assert.equal(c.date.value,'2026-11-21');assert.equal(c.message.textContent,'尚未保存');
+  c.form.requestSubmit();await c.form.saving;
+  p.snapshot.mainlines[0].data.review_checked_on='2026-11-21';await p.get('refresh').onclick();
+  assert.equal(p.controls().message.textContent,'本次已复核');
+});
+
+test('reverting an edit discards its draft so later refreshes show the latest saved date',async()=>{
+  const p=reviewPage();await settle();let c=p.controls();
+  c.date.value='2026-11-20';c.date.oninput();c.date.value='';c.date.oninput();
+  assert.equal(c.message.textContent,'未安排复核');
+  p.snapshot.mainlines[0].data.review_on='2026-11-22';await p.get('refresh').onclick();
+  assert.equal(p.controls().date.value,'2026-11-22');assert.equal(p.controls().message.textContent,'已保存：2026-11-22');
+});

@@ -53,3 +53,21 @@ test('a completed background job refreshes the reading view once',async()=>{
   await [...p.timers.values()][0]();
   assert.equal(finished,1);
 });
+
+test('feedback older than ten entries remains readable with subject, time and full original text',async()=>{
+  const jobs=Array.from({length:12},(_,i)=>({...job('done'),id:'job-'+i,data:{...job('done').data,text:'原文 '+i,created_at:'2026-11-16T01:00:00Z',summary:'处理 '+i},subjects:[{title:'对应任务 '+i}]}));
+  const p=page(async()=>response(data(jobs)));await p.api.watch(p.host,'lingguang');
+  const elements=flatten(p.host);
+  assert.ok(elements.some(n=>n.textContent==='我的反馈：原文 11'));
+  assert.ok(elements.some(n=>n.textContent.includes('对应任务 11 · 已整理 · 2026/11/16')));
+  assert.ok(elements.some(n=>n.textContent==='Agent 处理结果：处理 11'));
+});
+
+test('automatic reviews are distinguished from user feedback',async()=>{
+  const item=job('done');item.data.review={id:'mainline-test'};item.data.text='没有新增用户进展';item.subjects=[{title:'模拟主线'}];
+  const p=page(async()=>response(data([item])));await p.api.watch(p.host,'lingguang');
+  const elements=flatten(p.host);
+  assert.ok(elements.some(n=>n.textContent==='系统复核说明：没有新增用户进展'));
+  assert.ok(elements.some(n=>n.textContent.includes('模拟主线 · 到期复核 · 已整理')));
+  assert.ok(!elements.some(n=>n.textContent.startsWith('我的反馈：')));
+});

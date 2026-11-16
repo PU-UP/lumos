@@ -53,7 +53,7 @@ if (typeof document !== 'undefined') {
   const deliveryView = window.location.pathname === '/delivery' || new URLSearchParams(window.location.search).get('view') === 'delivery';
   const preferencesKey = 'lumos.management.v1';
   let state, model, pinned=[], detailRequest=0, attentionOpen=true, writing=false;
-  const reviews=new Map();
+  const reviews=new Map(), reviewDrafts=new Map();
   function remember() {
     try {localStorage.setItem(preferencesKey, JSON.stringify({workspace:$('workspace').value,pinned,attentionOpen:$('attention').open}));}
     catch {$('preference-message').textContent='无法保存浏览器偏好；本次查看仍有效。';}
@@ -75,19 +75,24 @@ if (typeof document !== 'undefined') {
   }
   function setWriting(value){writing=value;$('refresh').disabled=value;$('workspace').disabled=value;}
   function reviewControl(line){
-    const form=el('form',undefined,'review-control'),label=el('label','下次复核'),date=el('input'),save=el('button','保存'),message=el('span','', 'review-message');
+    const form=el('form',undefined,'review-control'),label=el('label','下次复核'),date=el('input'),save=el('button','保存'),message=el('span',line.data.review_on?'已保存：'+line.data.review_on:'未安排复核', 'review-message');
     if(line.data.review_on && line.data.review_checked_on===line.data.review_on && (line.data.review_checked_revision||0)===(line.data.review_revision||0))message.textContent='本次已复核';
+    const savedMessage=message.textContent;
     date.type='date';date.value=line.data.review_on||'';date.setAttribute('aria-label',line.data.title+' · 下次复核');
-    date.disabled=!state.writable;save.type='submit';save.hidden=true;save.disabled=!state.writable;
+    date.disabled=!state.writable;save.type='submit';save.disabled=!state.writable;
+    if(reviewDrafts.has(line.id))date.value=reviewDrafts.get(line.id);
+    save.hidden=date.value===(line.data.review_on||'');
+    if(!save.hidden)message.textContent='尚未保存';
     const sender=reviews.get(line.id)||submission(r=>post('/api/mainline-review',r));reviews.set(line.id,sender);
-    if(sender.pending){date.value=sender.pending.review_on;date.disabled=true;save.hidden=false;save.textContent='重试保存';}
-    date.oninput=()=>{save.hidden=date.value===(line.data.review_on||'');message.textContent='';};
+    if(sender.pending){date.value=sender.pending.review_on;date.disabled=true;save.hidden=false;save.textContent='重试保存';message.textContent='上次保存结果未确认，请重试保存。';}
+    date.oninput=()=>{save.hidden=date.value===(line.data.review_on||'');if(save.hidden)reviewDrafts.delete(line.id);else reviewDrafts.set(line.id,date.value);message.textContent=save.hidden?savedMessage:'尚未保存';};
+    date.onchange=()=>{date.oninput();if(!save.hidden)form.requestSubmit();};
     label.append(date);form.append(label,save,message);message.setAttribute('role','status');
     form.onsubmit=async event=>{
-      event.preventDefault();if(writing || !state.writable)return;
+      event.preventDefault();if(writing || !state.writable){message.textContent='尚未保存，请稍后点击保存。';return;}
       setWriting(true);save.disabled=true;date.disabled=true;message.textContent='保存中…';
-      try {await sender.send({request_id:crypto.randomUUID().replaceAll('-',''),id:line.id,expected_seq:state.seq,review_on:date.value});await load();}
-      catch(e){message.textContent=e.message+' 输入已保留。';save.textContent=sender.pending?'重试保存':'保存';}
+      try {await sender.send({request_id:crypto.randomUUID().replaceAll('-',''),id:line.id,expected_seq:state.seq,review_on:date.value});reviewDrafts.delete(line.id);message.textContent='已保存'+(date.value?'：'+date.value:'：未安排复核');await load();}
+      catch(e){message.textContent=e.message+' 输入已保留，请重试保存。';save.hidden=false;save.textContent=sender.pending?'重试保存':'保存';}
       finally{setWriting(false);save.disabled=false;date.disabled=!!sender.pending;}
     };
     return form;

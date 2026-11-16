@@ -38,6 +38,9 @@ class IntakeTest(BaseStoreCase):
         self.assertEqual(context['text'],'请先核对结果')
         self.assertEqual(context['intake']['data']['related_ids'],['mainline-test'])
         self.assertTrue(save_intake(self.store,request)['replayed'])
+        receipt = list_intakes(self.store)['intakes'][0]
+        self.assertEqual(receipt['subjects'], [{'id': 'mainline-test', 'title': '模拟主线'}])
+        self.assertEqual(receipt['data']['text'], '请先核对结果')
         with self.assertRaises(lumos.Error):
             save_intake(self.store,{**request,'request_id':uuid.uuid4().hex,'related_ids':['missing']})
 
