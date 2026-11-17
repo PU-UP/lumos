@@ -60,7 +60,7 @@ test('feedback older than ten entries remains readable with subject, time and fu
   const elements=flatten(p.host);
   assert.ok(elements.some(n=>n.textContent==='我的反馈：原文 11'));
   assert.ok(elements.some(n=>n.textContent.includes('对应任务 11 · 已整理 · 2026/11/16')));
-  assert.ok(elements.some(n=>n.textContent==='Agent 处理结果：处理 11'));
+  assert.ok(elements.some(n=>n.textContent==='Lumos 处理结果：处理 11'));
 });
 
 test('automatic reviews are distinguished from user feedback',async()=>{

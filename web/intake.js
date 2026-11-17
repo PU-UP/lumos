@@ -21,13 +21,13 @@ window.LumosIntake = (() => {
           const subject=(job.subjects||[]).map(t=>t.title).join('、') || d.title;
           fold.append(el('summary',subject+(d.review?' · 到期复核':'')+' · '+labels[d.status]+' · '+submitted));
           if(d.text)fold.append(el('p',(d.review?'系统复核说明：':'我的反馈：')+d.text));
-          if(d.summary)fold.append(el('p','Agent 处理结果：'+d.summary));
+          if(d.summary)fold.append(el('p','Lumos 处理结果：'+d.summary));
           if(d.error)fold.append(el('p',d.error));
           for(const [index,q] of (d.questions||[]).entries()){
             const answer=(d.resolutions||[]).find(r=>r.index===index);
             fold.append(el('p',answer?'已答复：'+q+' · '+answer.answer:'需核对：'+q));
           }
-          if(d.status==='needs_review')fold.append(el('p','可在进展反馈或笔记中补充，Agent 会接续这些问题。'));
+          if(d.status==='needs_review')fold.append(el('p','可在进展反馈或笔记中补充，Lumos 会接续这些问题。'));
           const record=el('details','');record.append(el('summary','来源与处理去向'));
           if(d.note){const a=el('a','查看原笔记');a.href='/notes?id='+encodeURIComponent(d.note.id)+'&revision='+d.note.revision;record.append(a);}
           else record.append(el('p',d.text));

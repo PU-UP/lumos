@@ -248,7 +248,7 @@ class TaskTest(BaseStoreCase):
         tasks = list_tasks(self.store, "2026-10-21")
         self.assertEqual(set(tasks["attention"]), {overdue, near, later, "talk"})
         self.assertEqual(next(t for t in tasks["tasks"] if t["id"] == overdue)["attention"],
-                         ["关心时间晚于交付日期", "已逾期", "到跟进日", "有阻塞", "重要事项"])
+                         ["原交付已过，待核对结果", "已逾期", "到跟进日", "有阻塞", "重要事项"])
         self.assertTrue({"talk", later, done} <= {t["id"] for t in tasks["tasks"]})
         ctx = next(n for n in self.store.context("mapping")["nodes"] if n["id"] == "mapping")
         ctx["data"]["status"] = "archived"

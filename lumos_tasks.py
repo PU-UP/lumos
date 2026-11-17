@@ -57,12 +57,12 @@ def attention(data, today):
     if not data.get("follow_up"):
         reasons.append("待设置关心时间")
     due = data.get("due")
-    if not due:
+    if not due and not data.get('planned_due'):
         reasons.append("未约定交付时间")
     if due == "long_term":
         due = None
     if due and data.get("follow_up", "") > due:
-        reasons.append("关心时间晚于交付日期")
+        reasons.append("原交付已过，待核对结果" if due < today.isoformat() else "关心时间晚于交付日期")
     if due and due < today.isoformat():
         reasons.append("已逾期")
     elif due and due <= (today + timedelta(days=7)).isoformat():
@@ -97,7 +97,7 @@ def list_tasks(store, today=None):
     with process_lock(store.root):
         with store.db() as db:
             numbers = task_numbers(db)
-            nodes = store.nodes(db, ("action", "context", "person", "document", "mainline"))
+            nodes = store.nodes(db, ("action", "context", "person", "document", "mainline", "intake"))
             seq = store.seq(db)
         contexts = [{**n, "data": {**n["data"], "workspace": context_workspace(n)}}
                     for n in nodes.values() if n["kind"] == "context"
@@ -119,7 +119,9 @@ def list_tasks(store, today=None):
         mainlines = sorted((n for n in nodes.values() if n["kind"] == "mainline"
                            and n["data"]["context"] in ids and n["data"].get("status", "active") == "active"),
                           key=lambda n: (n["data"].get("order", 0), n["id"]))
+        from lumos_intake import open_questions
         return {"seq": seq, "today": today.isoformat(), "contexts": contexts, "tasks": tasks, "mainlines": mainlines, "people": list_people(nodes, ids), "archived_people": archived_people, "board_order": board_order,
+                "open_questions": [{**q, 'workspace': space} for space in sorted(WORKSPACES) for q in open_questions(nodes, space)],
                 "attention": [n["id"] for n in tasks if n["attention"]],
                 "writable": ctl["mode"] in {"active", "trial", "sandbox"}
                 and ctl["bound_root"] == str(store.root) and not (store.root / "session.json").exists(),

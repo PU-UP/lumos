@@ -2,7 +2,7 @@ const $ = id => document.getElementById(id);
 const fields = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'completed_on', 'follow_up', 'priority', 'owner', 'group'];
 const workspaces = {lingguang: '灵光', lumos: 'Lumos 仓库维护'};
 const labels = {todo: '待处理', doing: '进行中', blocked: '受阻', done: '已完成', cancelled: '已取消'};
-const priorities = {P3: 'P3 · 非项目事务', low: '低', normal: '中', high: '高'};
+const priorities = {P3: 'P3', low: '低', normal: '中', high: '高'};
 const ownerName = data => data.owner?.trim() || '王牧楠';
 const ownerNames = data => ownerName(data).split('、').map(name => name.trim()).filter(Boolean);
 let state, editing = null, baseline, pending = null;
@@ -233,7 +233,7 @@ function tags(reasons) {
 
 function priorityTag(data) {
   const priority = data.priority || 'normal';
-  return element('span', priorities[priority] + (priority === 'P3' ? '' : '优先级'), 'tag priority-' + priority);
+  return element('span', priorities[priority] + (priority === 'P3' ? ' · 非项目事务' : '优先级'), 'tag priority-' + priority);
 }
 
 function isClosed(data) {
@@ -261,7 +261,7 @@ function filtered() {
 function followUpHint(data) {
   if (['done', 'cancelled'].includes(data.status)) return {text: '', cls: ''};
   if (!data.follow_up) return {text: '待设置关心时间', cls: 'follow-up-pending'};
-  if (data.due && data.due !== 'long_term' && data.follow_up > data.due) return {text: '关心时间晚于交付日期', cls: 'date-conflict'};
+  if (data.due && data.due !== 'long_term' && data.follow_up > data.due) return data.due < state.today ? {text: '原交付已过 · 待核对结果', cls: 'follow-up-overdue'} : {text: '跟进应提前至交付前', cls: 'date-conflict'};
   if (data.follow_up === state.today) return {text: '今天', cls: 'follow-up-today'};
   if (data.follow_up && data.follow_up < state.today) {
     const days = Math.round((Date.parse(state.today + 'T00:00:00Z') - Date.parse(data.follow_up + 'T00:00:00Z')) / 86400000);
@@ -364,7 +364,7 @@ function chooseCompletionDate(data) {
 $('completion-picker').addEventListener('cancel', event => {event.preventDefault(); completionChoice?.(null);});
 
 function dueHint(data) {
-  return !['done', 'cancelled'].includes(data.status) && !data.due
+  return !['done', 'cancelled'].includes(data.status) && !data.due && !data.planned_due
     ? {text: '未约定交付时间', cls: 'follow-up-pending'} : {text: '', cls: ''};
 }
 
@@ -469,7 +469,7 @@ function renderList(tasks) {
     if (hint.text) dateCell.append(element('small', hint.text));
     for (const [control, key, label] of [[priority, 'priority', '优先级'], [status, 'status', '当前状态'], [date, 'follow_up', '下次关心时间']]) {
       control.setAttribute('aria-label', t.data.text + ' · ' + label);
-      control.title = label + ' · 修改即保存';
+      control.title = (control === priority && t.data.priority === 'P3' ? 'P3 · 非项目事务' : label) + ' · 修改即保存';
       control.disabled = !state.writable || saving || !!quickPending || (control === date && isClosed(t.data));
       control.onchange = () => quickSave(t.id, {[key]: control.value});
     }
@@ -484,6 +484,7 @@ function renderList(tasks) {
       completed.onchange = () => quickSave(t.id, {completed_on: completed.value});
       dueCell.append(completed, element('small', t.data.completed_on ? '完成日期' : '完成日期未记录'));
     } else renderDueEditor(dueCell, t.data.due, !state.writable || saving || !!quickPending, value => quickSave(t.id, {due: value}));
+    if (!t.data.due && t.data.planned_due) dueCell.append(element('small', 'Lumos目标 ' + t.data.planned_due, 'planned-target'));
     if (deliveryHint.text) dueCell.append(element('small', '待约定交付时间'));
     dueCell.title = '原交付日期：' + dueLabel(t.data.due) + '；完成日期独立记录';
     const workspace = workspaceOf(t.data.context);
@@ -676,9 +677,9 @@ function renderHistory(detail) {
     link.target = '_blank'; link.rel = 'noopener'; fold.append(link);
   }
   sources.append(element('h4', '最初来源'), element('p', sourceText(detail.task.data.source)));
-  if(detail.task.data.planned_due)sources.append(element('p','Agent目标：'+detail.task.data.planned_due+' · '+(detail.task.data.planning_reason||'')));
-  if(detail.task.data.owner_basis==='agent')sources.append(element('p','负责人由Agent安排：'+detail.task.data.owner+' · '+(detail.task.data.owner_reason||'')));
-  if(detail.task.data.review_basis==='agent')sources.append(element('p','关心时间由Agent安排：'+detail.task.data.follow_up+' · '+(detail.task.data.review_reason||'')));
+  if(detail.task.data.planned_due)sources.append(element('p','Lumos目标：'+detail.task.data.planned_due+' · '+(detail.task.data.planning_reason||'')));
+  if(detail.task.data.owner_basis==='agent')sources.append(element('p','负责人由Lumos安排：'+detail.task.data.owner+' · '+(detail.task.data.owner_reason||'')));
+  if(detail.task.data.review_basis==='agent')sources.append(element('p','关心时间由Lumos安排：'+detail.task.data.follow_up+' · '+(detail.task.data.review_reason||'')));
   if (detail.task.data.last_source) sources.append(element('h4', '最近修改来源'), element('p', sourceText(detail.task.data.last_source)));
   const history = disclosure('修改历史 · ' + detail.history.length + ' 次', $('history'));
   const names = {text: '任务', context: '背景脉络', status: '状态', next_step: '下一步', progress: '进展',
@@ -755,8 +756,8 @@ function renderTask(data) {
   const badges = tags(meta);
   badges.append(priorityTag(data));
   view.append(badges);
-  if(data.planned_due)view.append(element('p','Agent目标：'+data.planned_due+' · '+(data.planning_reason||''),'muted'));
-  if(data.owner_basis==='agent')view.append(element('p','负责人由Agent安排 · '+(data.owner_reason||''),'muted'));
+  if(data.planned_due)view.append(element('p','Lumos目标：'+data.planned_due+' · '+(data.planning_reason||''),'muted'));
+  if(data.owner_basis==='agent')view.append(element('p','负责人由Lumos安排 · '+(data.owner_reason||''),'muted'));
   const hint = followUpHint(data);
   if (hint.text) view.append(element('p', hint.text, 'follow-up-label ' + hint.cls));
   const deliveryHint = dueHint(data);

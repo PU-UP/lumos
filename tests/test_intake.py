@@ -114,6 +114,25 @@ class IntakeTest(BaseStoreCase):
         self.assertEqual(list_intakes(self.store)['intakes'][0]['data']['status'], 'running')
         self.assertIsNone(self.store.status()['session'])
 
+    def test_agent_followup_cannot_skip_future_delivery_but_can_check_past_outcome(self):
+        request = self.job()
+        request['plan']['updates'] = [self.item(changes={'due': '2099-01-10'})]
+        apply_intake(self.store, request)
+        request = self.job()
+        request['plan']['updates'] = [self.item(changes={'follow_up': '2099-01-11'}, mode='planned')]
+        before = task_detail(self.store, 'talk')['task']
+        with self.assertRaisesRegex(lumos.Error, '不能晚于'):
+            apply_intake(self.store, request)
+        self.assertEqual(task_detail(self.store, 'talk')['task'], before)
+        request['plan']['updates'][0]['changes']['follow_up'] = '2099-01-10'
+        apply_intake(self.store, request)
+        request = self.job()
+        request['plan']['updates'] = [self.item(changes={'due': '2020-01-01', 'follow_up': today(), 'review_basis': 'agent'})]
+        apply_intake(self.store, request)
+        data = task_detail(self.store, 'talk')['task']['data']
+        self.assertEqual(data['due'], '2020-01-01')
+        self.assertEqual(data['follow_up'], today())
+
     def test_note_edit_obsoletes_old_plan_without_writes(self):
         request = self.job(note=True)
         job = list_intakes(self.store)['intakes'][0]

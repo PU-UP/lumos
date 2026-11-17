@@ -1079,3 +1079,10 @@ test('new and existing task forms stage joint owners until save and preserve own
  panel.children.at(-1).children[1].onclick();assert.equal(p.controls.owner.value,'甲、旧成员、乙');
  p.get('cancel-edit').onclick();assert.equal(p.controls.owner.value,'甲、旧成员');assert.equal(writes.length,1);
 });
+
+test('internal targets avoid false unscheduled warnings and expired promises remain visible as outcome checks',async()=>{
+  const p=await page();p.board.today='2026-11-17';
+  assert.equal(p.world.dueHint({status:'doing',planned_due:'2026-11-27'}).text,'');
+  assert.equal(p.world.followUpHint({status:'doing',due:'2026-11-13',follow_up:'2026-11-18'}).text,'原交付已过 · 待核对结果');
+  assert.equal(p.world.followUpHint({status:'doing',due:'2026-11-20',follow_up:'2026-11-21'}).cls,'date-conflict');
+});

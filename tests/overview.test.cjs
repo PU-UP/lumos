@@ -68,7 +68,7 @@ test('delivery uses original due, separates long term and undated, and preserves
   assert.deepEqual(milestoneTasks(entry).map(t=>t.id),['b','a','c','d']);
   assert.ok(!milestoneTasks(entry).some(t=>t.id==='e'));
   assert.equal(deliveryDate(entry.tasks[2]),'');
-  assert.deepEqual(view.issues[0].tasks.map(t=>t.id),['b']);
+  assert.deepEqual(view.issues[0].tasks.map(t=>t.id),['b','a']);
 });
 test('shared task is referenced once per line without copying or changing it',()=>{
   const s=state([task('a',{due:'2026-11-13',status:'blocked'})],[line('main',['a']),line('other',['a'])]);
@@ -98,6 +98,7 @@ class Control {
   replaceChildren(...nodes){this.children=nodes;}
   setAttribute(){}
   addEventListener(){}
+  focus(){}
   get options(){return this.children;}
   requestSubmit(){this.saving=this.onsubmit({preventDefault(){}});}
 }
@@ -145,4 +146,30 @@ test('reverting an edit discards its draft so later refreshes show the latest sa
   assert.equal(c.message.textContent,'未安排复核');
   p.snapshot.mainlines[0].data.review_on='2026-11-22';await p.get('refresh').onclick();
   assert.equal(p.controls().date.value,'2026-11-22');assert.equal(p.controls().message.textContent,'已保存：2026-11-22');
+});
+
+test('due follow-ups become questions and future milestones stay separate from overdue delivery',()=>{
+  const s=state([task('a',{follow_up:'2026-11-14',due:'2026-11-20'}),task('b',{due:'2026-11-01'}),task('c',{planned_due:'2026-11-28'}),task('d',{due:'2026-11-29'})],[line('main',['a','b','c','d'])]);
+  const before=JSON.stringify(s),view=managementModel(s,'lingguang');
+  assert.match(view.questions[0].text,/2026-11-14/);
+  assert.deepEqual(view.upcoming.map(t=>t.id),['a','c']);
+  assert.equal(JSON.stringify(s),before);
+});
+
+test('saved questions use exact task numbers and never guess a line from batch destinations',()=>{
+  const s=state([task('001',{follow_up:'2026-11-14'})],[line('main',['001']),line('other',[])]);
+  s.open_questions=[{workspace:'lingguang',question:'T-001的结果？',destinations:['main','other']},{workspace:'lumos',question:'other workspace'}];
+  const view=managementModel(s,'lingguang');assert.equal(view.questions.length,1);assert.equal(view.questions[0].line.id,'main');
+  s.open_questions[0].question='项目总体方向？';
+  assert.equal(managementModel(s,'lingguang').questions[0].line,undefined);
+});
+
+test('answering a question preserves existing text and does not duplicate the prompt',async()=>{
+  const p=reviewPage();await settle();
+  p.snapshot.open_questions=[{workspace:'lingguang',question:'阶段结果是什么？',related_ids:['m']}];
+  p.get('feedback-text').value='已经写下的进展';p.get('search').oninput();
+  const row=p.get('attention-items').children[0],answer=row.children.find(n=>n.tag==='button');
+  answer.onclick();answer.onclick();
+  assert.equal(p.get('feedback-text').value,'已经写下的进展\n\n阶段结果是什么？\n答复：');
+  assert.equal(p.get('feedback-target').value,'m');
 });

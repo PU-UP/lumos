@@ -359,6 +359,11 @@ def apply_intake(store, request):
                     refs.append({**note_ref, 'excerpt': item['excerpt']})
                 changes_source = {**own_source, 'type': 'user_report'} if item['mode'] == 'reported' else own_source
                 data = prepare_task(store, nodes, previous, changes, changes_source, refs)
+                if 'follow_up' in changes and data.get('review_basis') == 'agent':
+                    due = data.get('due', '')
+                    if due and due != 'long_term' and due >= today():
+                        require(not data.get('follow_up') or data['follow_up'] <= due,
+                                'Lumos的跟进安排不能晚于尚未到期的交付日期')
             elif kind == 'mainline':
                 require(previous and set(changes) <= {'goal', 'summary', 'phase', 'risk', 'next_step', 'as_of', 'review_on', 'review_basis', 'review_reason', 'priority', 'priority_basis', 'priority_reason', 'task_ids', 'milestone_ids', 'source_ids', 'related_mainlines'}, 'Invalid mainline change')
                 if 'priority' in changes:

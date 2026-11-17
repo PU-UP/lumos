@@ -58,3 +58,5 @@ main{padding-top:18px}.intro{align-items:center;margin-bottom:24px}h1{font-size:
 .view-nav a:hover{color:var(--accent);background:#f0f6f6}
 .view-nav a[aria-current=page]{background:var(--soft);color:var(--accent);font-weight:600}
 @media(max-width:580px){.view-nav{padding:8px 12px;gap:2px}.view-nav a{padding:8px 10px;font-size:14px}}
+
+.row-priority.priority-P3,.priority-P3{background:#e9edf1;color:#485866}.planned-target{color:#285d4b;line-height:1.5}.row-priority{min-width:64px}
