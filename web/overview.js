@@ -5,6 +5,15 @@ const deliveryDate = t => /^\d{4}-\d{2}-\d{2}$/.test(t.data.due || '') ? t.data.
 const targetDate = t => deliveryDate(t) || t.data.planned_due || '';
 const deliverySort = (a, b) => (targetDate(a) || '9999').localeCompare(targetDate(b) || '9999') || a.id.localeCompare(b.id);
 const mainlineSort = (a, b) => (a.data.priority || 'P4').localeCompare(b.data.priority || 'P4') || (a.data.order || 0)-(b.data.order || 0) || a.id.localeCompare(b.id);
+function taskQuestionTiming(task,today){
+  const d=task.data;if(!isOpenTask(task))return {needed:false,reason:'相关任务已结束，历史问题待复核'};
+  if(deliveryDate(task)===today)return {needed:true,reason:'交付节点 '+today};
+  if(d.follow_up)return {needed:d.follow_up<=today,reason:(d.follow_up<=today?'已到跟进日 ':'下次跟进 ')+d.follow_up};
+  const due=targetDate(task);
+  if(due && due<=today)return {needed:true,reason:'阶段节点 '+due+'，结果待核对'};
+  if(d.status==='blocked')return {needed:true,reason:'事项受阻，尚未安排跟进'};
+  return {needed:false,reason:due?'阶段节点 '+due:'尚未安排提问时间，由Lumos接续'};
+}
 function managementModel(state, workspace) {
   const spaceOf = context => state.contexts.find(c => c.id === context)?.data.workspace || (context === 'lumos-maintenance' ? 'lumos' : 'lingguang');
   const tasks = state.tasks.filter(t => spaceOf(t.data.context) === workspace);
@@ -14,17 +23,17 @@ function managementModel(state, workspace) {
   const independent = tasks.filter(t => !assigned.has(t.id));
   const issues = [];
   for (const entry of entries) {
-    const blocked = entry.tasks.filter(t => isOpenTask(t) && t.data.status === 'blocked');
-    const followups = entry.tasks.filter(t => isOpenTask(t) && t.data.follow_up && t.data.follow_up <= state.today);
-    const overdue = entry.tasks.filter(t => isOpenTask(t) && (entry.line.data.milestone_ids || []).includes(t.id) && deliveryDate(t) && deliveryDate(t) < state.today);
+    const current = entry.tasks.filter(t=>taskQuestionTiming(t,state.today).needed);
+    const blocked = current.filter(t => t.data.status === 'blocked');
+    const followups = current.filter(t => t.data.follow_up && t.data.follow_up <= state.today);
+    const overdue = current.filter(t => targetDate(t) && targetDate(t) <= state.today);
     const affected = [...new Map([...blocked, ...overdue, ...followups].map(t => [t.id,t])).values()];
-    const d=entry.line.data, reviewDue=d.review_on && d.review_on<=state.today &&
-      (d.review_checked_on!==d.review_on || (d.review_checked_revision||0)!==(d.review_revision||0));
-    if (affected.length || reviewDue) issues.push({title:d.title, line:entry.line, tasks:affected,
-      severity:blocked.length ? 0 : 1, reason:blocked.length ? '有受阻事项，需核对影响与协作' : overdue.length ? '阶段交付已过原计划日期，需核对结果' : followups.length ? '已到跟进节点，需要补充结果' : '主线已到复核节点',
+    const d=entry.line.data;
+    if (affected.length) issues.push({title:d.title, line:entry.line, tasks:affected,
+      severity:blocked.length ? 0 : 1, reason:blocked.length ? '有受阻事项，需核对影响与协作' : overdue.length ? '已到阶段核对节点，需补充结果' : '已到跟进节点，需要补充结果',
       date:affected.map(deliveryDate).filter(Boolean).sort()[0] || d.review_on || '9999'});
   }
-  for (const task of independent.filter(t => isOpenTask(t) && (t.data.status === 'blocked' || t.data.priority === 'high' || (deliveryDate(t) && deliveryDate(t) < state.today) || (t.data.follow_up && t.data.follow_up <= state.today)))) {
+  for (const task of independent.filter(t => taskQuestionTiming(t,state.today).needed)) {
     issues.push({title:task.data.text, tasks:[task], severity:task.data.status === 'blocked' ? 0 : 1,
       reason:task.data.status === 'blocked' ? '独立事项受阻' : '独立事项需核对', date:deliveryDate(task) || '9999'});
   }
@@ -34,7 +43,7 @@ function managementModel(state, workspace) {
     const refs=mentioned.length?mentioned.map(t=>t.id):(q.related_ids||[]);
     const matches=entries.filter(e=>refs.includes(e.line.id) || e.tasks.some(t=>refs.includes(t.id)));
     const entry=matches.length===1?matches[0]:null;
-    return {...q, key:`question:${q.intake_id}:${q.index}`, title:entry?.line.data.title || '跨事项待确认', line:entry?.line, tasks:mentioned, text:q.question};
+    return {...q, key:`question:${q.intake_id}:${q.index}`, title:entry?.line.data.title || '跨事项待确认', line:entry?.line, tasks:tasks.filter(t=>refs.includes(t.id)), text:q.question};
   });
   questions.sort((a,b)=>Number(b.tasks.some(t=>t.data.follow_up && t.data.follow_up<=state.today))-Number(a.tasks.some(t=>t.data.follow_up && t.data.follow_up<=state.today)));
   for(const issue of issues) {
@@ -42,6 +51,12 @@ function managementModel(state, workspace) {
     const names=issue.line ? issue.line.data.title : issue.tasks.map(t=>t.data.text).join('、');
     const revision=[issue.line?.data.review_on,...issue.tasks.map(t=>t.data.follow_up)].filter(Boolean).sort().at(-1)||'';
     questions.push({...issue,key:`followup:${issue.line?.id||issue.tasks[0].id}:${revision}`,text:names ? `截至 ${state.today}，${names}有什么结果或阻塞？尚未完成的部分下一步怎样推进？` : `截至 ${state.today}，${issue.title}是否有影响方向或阶段节点的新情况？`});
+  }
+  for(const q of questions){
+    const timing=q.tasks.map(t=>taskQuestionTiming(t,state.today));
+    if(!timing.length && q.line?.data.review_on)timing.push({needed:q.line.data.review_on<=state.today,reason:'主线复核 '+q.line.data.review_on});
+    q.needsAnswer=timing.some(t=>t.needed);
+    q.timingReason=[...new Set(timing.filter(t=>t.needed===q.needsAnswer).map(t=>t.reason))].join('；')||'尚未安排提问时间，由Lumos接续';
   }
   const milestones=[...new Map(entries.flatMap(e=>milestoneTasks(e)).map(t=>[t.id,t])).values()].sort(deliverySort);
   const horizon=new Date(state.today+'T00:00:00Z');horizon.setUTCDate(horizon.getUTCDate()+14);
@@ -59,11 +74,11 @@ function questionInbox(questions, receipts, workspace) {
   for(const job of [...receipts].sort((a,b)=>(b.data.created_at||'').localeCompare(a.data.created_at||''))) {
     if(job.data.workspace===workspace && job.data.question_key && !latest.has(job.data.question_key))latest.set(job.data.question_key,job);
   }
-  const waiting=questions.filter(q=>!latest.has(q.key)), primary=[], rest=[], seen=new Set();
+  const unanswered=questions.filter(q=>!latest.has(q.key)),waiting=unanswered.filter(q=>q.needsAnswer!==false),later=unanswered.filter(q=>q.needsAnswer===false),primary=[], rest=[], seen=new Set();
   for(const q of waiting){const group=q.line?.id||q.title;if(primary.length<3 && !seen.has(group)){primary.push(q);seen.add(group);}else rest.push(q);}
-  return {primary,rest,latest};
+  return {primary,rest,later,latest};
 }
-const answerStates={pending:'已提交 · 待Lumos处理',running:'Lumos正在处理',done:'Lumos已处理',needs_review:'Lumos已处理 · 仍有待确认项',failed:'处理失败 · 可重试',obsolete:'原记录已更新 · 需重新核对'};
+const answerStates={pending:'已保存 · 等待自动整理',running:'Codex自动整理中',done:'整理结果已入库',needs_review:'已入库 · 有待确认项',failed:'自动整理失败 · 可重试',obsolete:'原记录已更新 · 需重新核对'};
 function submission(post, initial=null) {
   let pending=initial, busy=false;
   return {get pending(){return pending;}, async send(request,onPending=()=>{}) {
@@ -74,7 +89,7 @@ function submission(post, initial=null) {
     finally{busy=false;}
   }};
 }
-if (typeof module !== 'undefined') module.exports = {managementModel, milestoneTasks, deliveryDate, targetDate, matchesTask, submission, questionInbox};
+if (typeof module !== 'undefined') module.exports = {managementModel, milestoneTasks, deliveryDate, targetDate, matchesTask, submission, questionInbox, taskQuestionTiming};
 
 if (typeof document !== 'undefined') {
   const $ = id => document.getElementById(id);
@@ -141,7 +156,6 @@ if (typeof document !== 'undefined') {
   }
   function latestAnswer(){return activeQuestion?questionInbox([],receipts,feedbackWorkspace).latest.get(activeQuestion.key):receipts.find(n=>n.id===generalReceipt);}
   function answerStatus(job){
-    if(job.data.status==='done' && job.data.question_key?.startsWith('question:') && model.questions.some(q=>q.key===job.data.question_key))return 'Lumos已处理 · 问题仍待核对';
     return answerStates[job.data.status]||'状态待核对';
   }
   function updateAnswerStatus(){
@@ -157,6 +171,7 @@ if (typeof document !== 'undefined') {
     if(job){
       host.append(el('strong',answerStatus(job)));
       if(job.data.summary)host.append(el('p',job.data.summary));
+      if(['done','needs_review'].includes(job.data.status) && model.questions.some(q=>q.key===job.data.question_key))host.append(el('p','这次答复已保存到工作记录；原问题还有未确认的部分，按后续节点跟进，不要求立即补答。','muted'));
       if(job.data.error)host.append(el('p',job.data.error));
       const original=fold('已提交的答复',host);original.append(el('p',job.data.text));
       if(job.data.status==='failed'){
@@ -194,6 +209,9 @@ if (typeof document !== 'undefined') {
       if(submittedText!==undefined && $('feedback-text').value.trim()===submittedText)$('feedback-text').value='';
       stashFeedback();
       if(result?.intake){receipts=[result.intake,...receipts.filter(n=>n.id!==result.intake.id)];receiptState='ready';if(!activeQuestion)generalReceipt=result.intake.id;}
+      $('answer-notice').textContent='答复已保存。'+(answerStates[result?.intake?.data.status]||'可在答复记录中查看自动整理结果')+'；无需等待整理完成。';
+      if(!activeQuestion)$('intake-panel').open=true;
+      $('answer-dialog').close();
       renderQuestions();watchAnswers();
     }catch(e){feedbackError='未能确认提交：'+e.message+' 正文已保留，请重试核对。';}
     finally{setWriting(false);updateAnswerStatus();}
@@ -209,16 +227,17 @@ if (typeof document !== 'undefined') {
   function renderQuestions(){
     if(!model)return;
     const inbox=questionInbox(model.questions,receipts,$('workspace').value),host=$('attention-items');host.replaceChildren();
-    $('attention-count').textContent=inbox.primary.length?'先看 '+inbox.primary.length+' 件':'';
-    if(!inbox.primary.length)host.append(el('p',inbox.latest.size?'答复已交给Lumos，下方可查看处理进度。':'暂时没有需要回答的问题。','attention-empty'));
+    $('attention-count').textContent=inbox.primary.length?'本次 '+inbox.primary.length+' 件':'';
+    if(!inbox.primary.length)host.append(el('p','当前没有需要立即回答的问题。后续事项按跟进日再出现。','attention-empty'));
     const add=(question,parent)=>{
       const row=el('article',undefined,'attention-item'),heading=el('div',undefined,'question-heading');
-      heading.append(el('h3',question.title),el('span','待回答','answer-state'));
-      row.append(heading,el('p',question.text,'question-preview'));
+      heading.append(el('h3',question.title),el('span',question.needsAnswer===false?'后续跟进':'当前待答','answer-state'));
+      row.append(heading,el('p',question.text,'question-preview'),el('p',question.timingReason,'question-timing'));
       const answer=el('button','打开回答','answer-button');answer.onclick=()=>openFeedback(question,answer);row.append(answer);parent.append(row);
     };
     for(const q of inbox.primary)add(q,host);
-    if(inbox.rest.length){const more=fold('其他待确认 · '+inbox.rest.length,host);for(const q of inbox.rest)add(q,more);}
+    if(inbox.rest.length){const more=fold('其他当前问题 · '+inbox.rest.length,host);for(const q of inbox.rest)add(q,more);}
+    if(inbox.later.length){const later=fold('后续再跟进 · '+inbox.later.length+'（无需现在回答）',host);for(const q of inbox.later)add(q,later);}
     const progress=$('answer-progress');progress.replaceChildren();
     if(receiptState==='error')progress.append(el('p','处理状态读取失败，正在重试；请勿重复提交。','muted'));
     else if(receiptState==='loading')progress.append(el('p','正在核对已提交的答复…','muted'));

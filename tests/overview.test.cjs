@@ -36,13 +36,13 @@ test('mainlines sort by priority then existing order without changing input or t
   assert.equal(JSON.stringify(s),before);
 });
 
-test('due mainline review stays visible until its exact schedule is checked',()=>{
+test('scheduled agent reviews alone do not become questions for Wang',()=>{
   const main=line('m',[]),s=state([],[main]);main.data.review_on=s.today;
-  assert.equal(managementModel(s,'lingguang').issues.length,1);
+  assert.equal(managementModel(s,'lingguang').questions.length,0);
   main.data.review_checked_on=s.today;
   assert.equal(managementModel(s,'lingguang').issues.length,0);
   main.data.review_revision=1;
-  assert.equal(managementModel(s,'lingguang').issues.length,1);
+  assert.equal(managementModel(s,'lingguang').questions.length,0);
   main.data.review_checked_revision=1;
   assert.equal(managementModel(s,'lingguang').issues.length,0);
   main.data.review_on='2026-11-15';
@@ -68,7 +68,7 @@ test('delivery uses original due, separates long term and undated, and preserves
   assert.deepEqual(milestoneTasks(entry).map(t=>t.id),['b','a','c','d']);
   assert.ok(!milestoneTasks(entry).some(t=>t.id==='e'));
   assert.equal(deliveryDate(entry.tasks[2]),'');
-  assert.deepEqual(view.issues[0].tasks.map(t=>t.id),['b','a']);
+  assert.deepEqual(view.issues[0].tasks.map(t=>t.id),['a']);
 });
 test('shared task is referenced once per line without copying or changing it',()=>{
   const s=state([task('a',{due:'2026-11-13',status:'blocked'})],[line('main',['a']),line('other',['a'])]);
@@ -88,7 +88,8 @@ test('Agent targets appear on the timeline without replacing promises or becomin
   const a=task('a',{planned_due:'2026-11-13'}),b=task('b',{due:'2026-11-20',planned_due:'2026-11-18'});
   assert.equal(targetDate(a),'2026-11-13');assert.equal(deliveryDate(a),'');
   assert.equal(targetDate(b),'2026-11-20');
-  assert.equal(managementModel(state([a],[line('m',['a'])]),'lingguang').issues.length,0);
+  const view=managementModel(state([a],[line('m',['a'])]),'lingguang');
+  assert.equal(view.issues.length,1);assert.doesNotMatch(view.issues[0].reason,/交付已过/);
 });
 
 const vm=require('node:vm');
@@ -169,6 +170,7 @@ test('saved questions use exact task numbers and never guess a line from batch d
 
 test('answer dialog keeps separate drafts and restores them after closing',async()=>{
   const p=reviewPage();await settle();
+  p.snapshot.mainlines[0].data.review_on=p.snapshot.today;
   p.snapshot.open_questions=[{intake_id:'old',index:0,workspace:'lingguang',question:'阶段结果是什么？',related_ids:['m']}];
   p.get('feedback-text').value='原来的综合草稿';p.get('feedback-text').oninput();p.get('search').oninput();
   const row=p.get('attention-items').children[0],answer=row.children.find(n=>n.tag==='button');
@@ -182,16 +184,20 @@ test('answer dialog keeps separate drafts and restores them after closing',async
 test('submitted replies leave the waiting list and show real processing states',async()=>{
   let posted;
   const p=reviewPage(async request=>{posted=request;return {ok:true,json:async()=>({intake:{id:'reply',data:{...request,status:'pending',created_at:'2026-11-17'}}})};});await settle();
+  p.snapshot.mainlines[0].data.review_on=p.snapshot.today;
   p.snapshot.open_questions=[{intake_id:'old',index:0,workspace:'lingguang',question:'阶段结果？',related_ids:['m']}];p.get('search').oninput();
   p.get('attention-items').children[0].children.find(n=>n.tag==='button').onclick();
   p.get('feedback-text').value='已完成阶段测试';await p.get('feedback-form').onsubmit({preventDefault(){}});
   assert.equal(posted.question_key,'question:old:0');assert.match(posted.text,/阶段结果？\n\n王牧楠答复：\n已完成阶段测试/);
   assert.equal(p.get('attention-items').children.some(n=>n.tag==='article'),false);
-  assert.equal(p.get('feedback-submit').disabled,true);assert.match(p.get('answer-receipt').children[0].textContent,/待Lumos处理/);
-  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'running'}}]});assert.match(p.get('answer-receipt').children[0].textContent,/正在处理/);
-  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'done',summary:'任务已接续'}}]});assert.equal(p.get('answer-receipt').children[0].textContent,'Lumos已处理 · 问题仍待核对');assert.equal(p.get('feedback-submit').disabled,false);
+  assert.equal(p.get('answer-dialog').open,false);assert.equal(p.get('feedback-text').value,'');assert.match(p.get('answer-notice').textContent,/答复已保存/);
+  p.get('answer-progress').children[0].children[1].children.find(n=>n.tag==='button').onclick();
+  assert.equal(p.get('feedback-submit').disabled,true);assert.match(p.get('answer-receipt').children[0].textContent,/等待自动整理/);
+  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'running'}}]});assert.match(p.get('answer-receipt').children[0].textContent,/Codex自动整理中/);
+  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'done',summary:'任务已接续'}}]});assert.equal(p.get('answer-receipt').children[0].textContent,'整理结果已入库');assert.equal(p.get('feedback-submit').disabled,false);
+  assert.ok(p.get('answer-receipt').children.some(n=>n.textContent.includes('不要求立即补答')));
   p.snapshot.open_questions=[];p.get('search').oninput();
-  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'done',summary:'任务已接续'}}]});assert.equal(p.get('answer-receipt').children[0].textContent,'Lumos已处理');
+  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'done',summary:'任务已接续'}}]});assert.equal(p.get('answer-receipt').children[0].textContent,'整理结果已入库');
   p.receipts(null);assert.match(p.get('feedback-status').textContent,/无法读取/);
 });
 
@@ -206,6 +212,7 @@ test('uncertain answer submissions preserve text and retry exactly the same requ
 test('an unconfirmed submission can be reconciled even when its receipt is already pending',async()=>{
   let posted;
   const p=reviewPage(async request=>{posted=request;throw new Error('lost response');});await settle();
+  p.snapshot.mainlines[0].data.review_on=p.snapshot.today;
   p.snapshot.open_questions=[{intake_id:'old',index:0,workspace:'lingguang',question:'结果？',related_ids:['m']}];p.get('search').oninput();
   p.get('attention-items').children[0].children.find(n=>n.tag==='button').onclick();p.get('feedback-text').value='阶段结果';
   await p.get('feedback-form').onsubmit({preventDefault(){}});
@@ -219,4 +226,25 @@ test('question inbox prioritizes different mainlines and matches latest receipts
   assert.deepEqual(questionInbox(questions,[],'lingguang').primary.map(q=>q.key),['a','c','d']);
   const jobs=[{id:'old',data:{workspace:'lingguang',question_key:'a',created_at:'2026-11-16',status:'failed'}},{id:'new',data:{workspace:'lingguang',question_key:'a',created_at:'2026-11-17',status:'pending'}},{id:'foreign',data:{workspace:'lumos',question_key:'c',created_at:'2026-11-18'}}];
   const inbox=questionInbox(questions,jobs,'lingguang');assert.equal(inbox.latest.get('a').id,'new');assert.deepEqual(inbox.primary.map(q=>q.key),['b','c','d']);
+});
+
+test('future followups stay out of current questions even when delivery is overdue or task blocked',()=>{
+  const {questionInbox,taskQuestionTiming}=require('../web/overview.js');
+  const s=state([task('001',{due:'2026-11-01',follow_up:'2026-12-01',status:'blocked'}),task('002',{follow_up:'2026-11-14'}),task('003',{due:'2026-11-14',follow_up:'2026-11-20'}),task('004',{status:'done',follow_up:'2026-11-01'}),task('005')],[]);
+  s.open_questions=s.tasks.map((t,index)=>({workspace:'lingguang',intake_id:'old',index,question:t.short_id+'的结果？'}));
+  const original=JSON.stringify(s),view=managementModel(s,'lingguang'),inbox=questionInbox(view.questions,[],'lingguang');
+  assert.deepEqual(inbox.primary.map(q=>q.index),[1]);
+  assert.deepEqual(inbox.rest.map(q=>q.index),[2]);
+  assert.deepEqual(inbox.later.map(q=>q.index).sort(),[0,3,4]);
+  assert.match(inbox.later.find(q=>q.index===0).timingReason,/2026-12-01/);
+  assert.equal(JSON.stringify(s),original);
+  assert.equal(taskQuestionTiming(s.tasks[0],'2026-12-01').needed,true);
+  assert.ok(!view.issues.some(i=>i.tasks.some(t=>t.id==='001')));
+});
+
+test('failed submissions keep the answer dialog open with its draft',async()=>{
+  const p=reviewPage(async()=>{throw new Error('offline');});await settle();
+  p.get('open-feedback').onclick({});p.get('feedback-text').value='保留的答复';
+  await p.get('feedback-form').onsubmit({preventDefault(){}});
+  assert.equal(p.get('answer-dialog').open,true);assert.equal(p.get('feedback-text').value,'保留的答复');
 });

@@ -64,4 +64,9 @@
 #answer-receipt p{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}
 #answer-receipt summary{margin-top:10px;font-size:13px}
 .draft-hint{font-size:12px;color:var(--muted);margin:16px 0 0}
+.question-timing{font-size:12px;color:var(--muted)}
+#answer-notice:empty{display:none}
+#answer-notice{padding:12px 0;color:var(--accent);font-size:14px;line-height:1.6}
+.processing-help{margin-top:14px;color:var(--muted);font-size:13px;line-height:1.7}
+.processing-help p{max-width:70ch;margin:10px 0}
 @media(max-width:700px){.question-toolbar{align-items:start;gap:12px}.question-heading{align-items:start}.answer-progress-row{flex-wrap:wrap;gap:8px}.answer-progress-row>span:first-child{flex-basis:100%}#answer-dialog{padding:20px;max-height:94dvh;width:calc(100vw - 20px)}.answer-dialog-heading h2{font-size:20px}#answer-dialog .feedback-actions{flex-direction:column;align-items:stretch}#answer-dialog .feedback-actions button{width:100%}#answer-dialog #feedback-text{min-height:180px}}
