@@ -38,7 +38,7 @@ def validate_fields(data):
                 raise Error(f"{field}: invalid date") from exc
     for field in ("owner_basis", "review_basis"):
         require(data.get(field, "") in {"", "user", "agent"}, f"Invalid {field}")
-    require(data.get("priority", "normal") in {"low", "normal", "high"}, "Invalid priority")
+    require(data.get("priority", "normal") in {"low", "normal", "high", "P3"}, "Invalid priority")
     if data.get("completed_on") and "status" in data:
         require(data["status"] == "done", "Completion date requires a completed task")
     require(len(data.get("group", "")) <= 80 and not any(c in data.get("group", "") for c in "\r\n\t"),

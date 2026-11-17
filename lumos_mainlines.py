@@ -36,12 +36,14 @@ def save_review(store, request):
 
 def validate_mainline(ident, data, nodes):
     for key, limit in {"title": 100, "goal": 2000, "summary": 2000, "phase": 100,
-                       "risk": 2000, "next_step": 2000, "review_reason": 2000}.items():
+                       "risk": 2000, "next_step": 2000, "review_reason": 2000, "priority_reason": 2000}.items():
         value = data.get(key, "")
         require(isinstance(value, str) and len(value) <= limit, f"Invalid mainline {key}")
     require(all(data.get(key, "").strip() for key in ("title", "goal", "summary")),
             "Mainline needs title, goal and summary")
     require(data.get("status", "active") in {"active", "archived"}, "Invalid mainline status")
+    require(data.get('priority', '') in ('', 'P0', 'P1', 'P2'), '项目主线仅使用P0–P2；P3用于非项目事务')
+    require(data.get('priority_basis', '') in ('', 'user', 'agent'), 'Invalid mainline priority basis')
     require(data.get('review_basis', '') in {'', 'user', 'agent'}, 'Invalid mainline review basis')
     require(type(data.get("order", 0)) is int and data.get("order", 0) >= 0, "Invalid mainline order")
     for key in ('review_revision', 'review_checked_revision'):
@@ -66,6 +68,8 @@ def validate_mainline(ident, data, nodes):
                     f"Invalid mainline reference: {ref}")
             require(context_workspace(nodes[nodes[ref]["data"]["context"]]) == workspace,
                     "Mainline references must stay in the same workspace")
+            if key == 'task_ids' and data.get('status', 'active') == 'active':
+                require(nodes[ref]['data'].get('priority') != 'P3', 'P3非项目事务不能归入项目主线')
     require(set(data.get("milestone_ids", [])) <= set(data.get("task_ids", [])),
             "Milestones must reference linked tasks")
 

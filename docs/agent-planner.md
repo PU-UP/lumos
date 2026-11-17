@@ -16,11 +16,14 @@ Agent可依据主线节点、依赖、风险及既有安排设planned_due（YYYY
 
 mainline只更新已有记录的goal/summary/phase/risk/next_step/as_of/review_on/task_ids/milestone_ids/source_ids/related_mainlines；数组为完整替换，必须保留仍相关引用。只同步确切受影响主线。as_of按信息发生日期，不用整理日冒充。新增任务须加入确切主线引用，独立支持事项可保留独立。不要用任务数量计算完成率。
 
+mainline还可按用户要求更新priority（P0/P1/P2，或空值未分级）、priority_basis（user/agent）、priority_reason。Agent选择具体等级时标agent并说明依赖与风险，不改任务优先级或任何日期；仅系统到期复核不调整优先级。P2包括未来有开发价值的技术方向；P3仅用于不直接影响日常开发的非项目action（如服务器申请、团建），不能用于项目主线。不将普通低优先级技术任务或全部职能周会自动降为P3；团建等分类举例不自动新建任务。团队管理为职能事务，技术任务留在项目主线。
+
 person只更新assessment，结构为{summary,responsibilities:[适合承接的职责],uncertainties:[待验证/矛盾],basis_ids:[已有同空间task/evidence/person的ID]}。basis_ids只能使用records中已经存在的内部id，不能填T-短编号、note/intake编号或本计划新建任务ID。新安排不是能力证据，不能从自己刚分配的任务循环推导人员能力；原文的依据已由excerpt保留，无历史依据时basis_ids可为空，判断应标为待验证。根据实际任务安排、组织结构和日常反馈逐步修正。旧判断不是定论，有冲突记录不确定；保留依据，禁止改title/team/role/org_role/membership_status等正式名册字段。不必每轮更新所有人员，仅更新本段新增证据涉及的人员。
 
 evidence只能新建，changes_json含context/title/text；存储技术细节、决定背景、普通过程或无法构成任务的观察。所有引用用输入records已有ID或本计划新增ID，不创造不存在的背景。主线更新需要新的确切依据时新建evidence并加入source_ids，保持跨主题资料边界。
 
 最终只输出指定JSON。不把建议写成用户承诺，不声称计划已执行；数据校验和原子保存由Lumos完成。
+团队管理作为P1管理主线承接周会机制、协作、招聘、人员绩效等事项，与技术项目主线并列。原三个周会任务已按用户要求取消独立跟踪，不能因新周会记录自动重开；管理结论接续此主线，具体技术进展更新原项目任务。未来招聘、绩效仅为范围，不据此创建空任务或推断人事决定。
 `intake.data.related_ids` 是用户在页面选择的反馈对象，仅辅助匹配；用户原话仍以 text 为准，不把页面对象选择当成完成或改期依据。
 
 统一复核规则：review_basis=user（包括用户主动清空）以及历史已有日期但无basis，均按明确安排保护。不能用Agent计划改期；只有text中的新明确日期安排才用reported修改，review_basis=user。Agent安排用planned或review_basis=agent，只安排空缺或自己负责的日期；仅摘要更新不动日期及依据。同值保留原来源。Agent新主线复核日期须晚于today，避免同日循环。主线review_on与任务follow_up/due彼此独立。

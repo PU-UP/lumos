@@ -57,7 +57,7 @@
 
 移动已有任务时，`changes` 只传 `status`，额外传顶层 `before_id`（目标列某任务 ID，或 null 表示列末）。内部 `board_order` 由服务端统一生成，不能作为普通 changes 输入；未排序任务按 ID 稳定排列在已排序任务后。读接口 `board_order` 返回看板顺序，`tasks` 与 `attention` 保留关注排序。无需数据库迁移，顺序随任务记录参与历史、备份及恢复。
 
-支持字段：text、context、status、condition、details、next_step、progress、due、follow_up、priority、owner。日期用 YYYY-MM-DD 或空字符串清除；priority 为 low/normal/high（低/中/高），默认 normal；owner 为负责人姓名，最多300字符，省略或空白默认 王牧楠。更新时省略 owner 保留已有负责人。状态为 todo/doing/blocked/done/cancelled。新建至少有标题和所属脉络，其余可后补。无完成条件时使用“用户确认完成：标题”，不虚构技术验收。完成由用户报告记录，重开会撤下当前完成声明，旧结果保留在历史中。
+支持字段：text、context、status、condition、details、next_step、progress、due、follow_up、priority、owner。日期用 YYYY-MM-DD 或空字符串清除；priority 为 low/normal/high（低/中/高）或 P3（非项目事务），默认 normal；P3任务不能关联当前项目主线；owner 为负责人姓名，最多300字符，省略或空白默认 王牧楠。更新时省略 owner 保留已有负责人。状态为 todo/doing/blocked/done/cancelled。新建至少有标题和所属脉络，其余可后补。无完成条件时使用“用户确认完成：标题”，不虚构技术验收。完成由用户报告记录，重开会撤下当前完成声明，旧结果保留在历史中。
 
 另支持 `group`：单行字符串，最多80字符，去除首尾空白；空字符串清除分组，更新时省略保留已有值。分组与其他任务字段共用历史、冲突保护、幂等重试和备份。空间由所属 context 的可选 `workspace` 决定，只允许 `lingguang` 或 `lumos`，通过文档批次维护；旧脉络默认灵光，唯一兼容例外为 `lumos-maintenance` 默认维护。`tasks` 返回的 contexts 补齐 workspace，旧记录无需迁移。页面编辑空间会选择该空间的背景脉络，具体背景可在“关联背景”展开选择；只改分组不改 context。
 

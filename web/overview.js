@@ -4,12 +4,13 @@ const isOpenTask = t => !['done', 'cancelled'].includes(t.data.status);
 const deliveryDate = t => /^\d{4}-\d{2}-\d{2}$/.test(t.data.due || '') ? t.data.due : '';
 const targetDate = t => deliveryDate(t) || t.data.planned_due || '';
 const deliverySort = (a, b) => (targetDate(a) || '9999').localeCompare(targetDate(b) || '9999') || a.id.localeCompare(b.id);
+const mainlineSort = (a, b) => (a.data.priority || 'P4').localeCompare(b.data.priority || 'P4') || (a.data.order || 0)-(b.data.order || 0) || a.id.localeCompare(b.id);
 function managementModel(state, workspace) {
   const spaceOf = context => state.contexts.find(c => c.id === context)?.data.workspace || (context === 'lumos-maintenance' ? 'lumos' : 'lingguang');
   const tasks = state.tasks.filter(t => spaceOf(t.data.context) === workspace);
   const lines = (state.mainlines || []).filter(l => spaceOf(l.data.context) === workspace && l.data.status !== 'archived');
   const assigned = new Set(lines.flatMap(l => l.data.task_ids || []));
-  const entries = lines.map(line => ({line, tasks: tasks.filter(t => (line.data.task_ids || []).includes(t.id))}));
+  const entries = lines.sort(mainlineSort).map(line => ({line, tasks: tasks.filter(t => (line.data.task_ids || []).includes(t.id))}));
   const independent = tasks.filter(t => !assigned.has(t.id));
   const issues = [];
   for (const entry of entries) {
@@ -130,6 +131,7 @@ if (typeof document !== 'undefined') {
     const link=el('a',undefined,'task-link');
     link.href='/tasks?task='+encodeURIComponent(task.id)+'&return='+encodeURIComponent(window.location.pathname+window.location.search);
     link.append(el('strong',task.data.text));
+    if(task.data.priority==='P3')link.append(el('span','P3 · 非项目事务','task-meta'));
     const due=task.data.due==='long_term'?'长期':task.data.due || '未约定';
     const overdue=isOpenTask(task) && deliveryDate(task) && deliveryDate(task)<state.today;
     if(task.data.planned_due)link.append(el('span','Agent目标 '+task.data.planned_due+(task.data.planning_reason?' · '+task.data.planning_reason:''),'task-meta'));
@@ -173,12 +175,13 @@ if (typeof document !== 'undefined') {
     }
     $('mainlines').replaceChildren();
     const entries=model.entries.filter(e=>!query || [e.line.data.title,e.line.data.summary,e.line.data.goal].join(' ').toLowerCase().includes(query.toLowerCase()) || (deliveryView?milestoneTasks(e):e.tasks).some(t=>matchesTask(t,query)));
-    entries.sort((a,b)=>Number(pinned.includes(b.line.id))-Number(pinned.includes(a.line.id)) || (a.line.data.order||0)-(b.line.data.order||0) || a.line.id.localeCompare(b.line.id));
+    entries.sort((a,b)=>Number(pinned.includes(b.line.id))-Number(pinned.includes(a.line.id)) || mainlineSort(a.line,b.line));
     if(!entries.length)$('mainlines').append(el('p',query?(deliveryView?'没有匹配的主线或阶段成果。':'没有匹配的主线；相关任务见下方。'):'此空间尚未建立主线，独立事项仍可在下方查看。','empty-state'));
     for(const entry of entries) {
       const {line}=entry,d=line.data;
       const row=el('article',undefined,'mainline-row'),heading=el('div',undefined,'mainline-heading'),title=el('div',undefined,'mainline-title');
       const h=el('h2');h.append(lineButton(line,d.title,'title-button'));title.append(h,el('span',d.phase || '阶段待明确','phase'));
+      if(d.priority)title.prepend(el('strong',d.priority,'phase'));
       const actions=el('div',undefined,'mainline-actions'),pin=el('button',pinned.includes(line.id)?'已置顶':'置顶','pin');
       pin.setAttribute('aria-pressed',String(pinned.includes(line.id)));pin.setAttribute('aria-label',d.title+' · 置顶');
       pin.onclick=()=>{pinned=pinned.includes(line.id)?pinned.filter(i=>i!==line.id):[...pinned,line.id];remember();render();};
@@ -228,6 +231,7 @@ if (typeof document !== 'undefined') {
     try {
       const detail=await read('/api/mainline?id='+encodeURIComponent(id));if(request!==detailRequest || !dialog.open)return;
       const d=detail.mainline.data;body.replaceChildren();
+      if(d.priority)body.append(el('p',`优先级 ${d.priority}${d.priority_basis==='agent'?' · Agent安排':''}${d.priority_reason?'：'+d.priority_reason:''}`));
       body.append(el('h3','目标'),el('p',d.goal),el('h3','当前结论'),el('p',d.summary),el('p','摘要依据 '+(d.as_of||'日期未记录'),'muted'),reviewControl(detail.mainline));
       const live=detail.tasks.filter(t=>!['archived','retained'].includes(t.context_status));
       body.append(el('h3','阶段交付'));dateGroups(milestoneTasks({line:detail.mainline,tasks:live}),body);

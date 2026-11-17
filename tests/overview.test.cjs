@@ -27,6 +27,15 @@ const task=(id,changes={})=>({id,short_id:'T-'+id,data:{context:'work',text:id,s
 const line=(id,tasks,milestones=tasks)=>({id,data:{context:'work',title:id,task_ids:tasks,milestone_ids:milestones}});
 const state=(tasks,lines)=>({today:'2026-11-14',contexts:[{id:'work',data:{workspace:'lingguang'}},{id:'maintenance',data:{workspace:'lumos'}}],tasks,mainlines:lines});
 
+test('mainlines sort by priority then existing order without changing input or task priority',()=>{
+  const lines=['unset','P2','P1-later','P0','P1-first'].map(id=>line(id,['a']));
+  for(const l of lines)if(l.id!=='unset')l.data.priority=l.id.slice(0,2);
+  lines[2].data.order=2;
+  const s=state([task('a',{priority:'low'})],lines),before=JSON.stringify(s);
+  assert.deepEqual(managementModel(s,'lingguang').entries.map(e=>e.line.id),['P0','P1-first','P1-later','P2','unset']);
+  assert.equal(JSON.stringify(s),before);
+});
+
 test('due mainline review stays visible until its exact schedule is checked',()=>{
   const main=line('m',[]),s=state([],[main]);main.data.review_on=s.today;
   assert.equal(managementModel(s,'lingguang').issues.length,1);

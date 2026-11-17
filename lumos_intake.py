@@ -360,7 +360,10 @@ def apply_intake(store, request):
                 changes_source = {**own_source, 'type': 'user_report'} if item['mode'] == 'reported' else own_source
                 data = prepare_task(store, nodes, previous, changes, changes_source, refs)
             elif kind == 'mainline':
-                require(previous and set(changes) <= {'goal', 'summary', 'phase', 'risk', 'next_step', 'as_of', 'review_on', 'review_basis', 'review_reason', 'task_ids', 'milestone_ids', 'source_ids', 'related_mainlines'}, 'Invalid mainline change')
+                require(previous and set(changes) <= {'goal', 'summary', 'phase', 'risk', 'next_step', 'as_of', 'review_on', 'review_basis', 'review_reason', 'priority', 'priority_basis', 'priority_reason', 'task_ids', 'milestone_ids', 'source_ids', 'related_mainlines'}, 'Invalid mainline change')
+                if 'priority' in changes:
+                    changes = {**changes, 'priority_basis': 'agent' if item['mode'] == 'planned' or changes.get('priority_basis') == 'agent' else 'user',
+                               'priority_reason': item['reason']}
                 changes = review_changes(previous, changes, 'review_on', item, own_source)
                 data = {**previous['data'], **changes, 'source': own_source}
             elif kind == 'person':

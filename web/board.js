@@ -2,7 +2,7 @@ const $ = id => document.getElementById(id);
 const fields = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'completed_on', 'follow_up', 'priority', 'owner', 'group'];
 const workspaces = {lingguang: '灵光', lumos: 'Lumos 仓库维护'};
 const labels = {todo: '待处理', doing: '进行中', blocked: '受阻', done: '已完成', cancelled: '已取消'};
-const priorities = {low: '低', normal: '中', high: '高'};
+const priorities = {P3: 'P3 · 非项目事务', low: '低', normal: '中', high: '高'};
 const ownerName = data => data.owner?.trim() || '王牧楠';
 const ownerNames = data => ownerName(data).split('、').map(name => name.trim()).filter(Boolean);
 let state, editing = null, baseline, pending = null;
@@ -233,7 +233,7 @@ function tags(reasons) {
 
 function priorityTag(data) {
   const priority = data.priority || 'normal';
-  return element('span', priorities[priority] + '优先级', 'tag priority-' + priority);
+  return element('span', priorities[priority] + (priority === 'P3' ? '' : '优先级'), 'tag priority-' + priority);
 }
 
 function isClosed(data) {
@@ -289,7 +289,7 @@ function render() {
 function sortedTasks(tasks) {
   const order = state.board_order || state.tasks.map(t => t.id);
   const value = t => sortKey === 'owner' ? ownerName(t.data)
-    : sortKey === 'priority' ? ({low: 0, normal: 1, high: 2}[t.data.priority || 'normal'])
+    : sortKey === 'priority' ? ({P3: -1, low: 0, normal: 1, high: 2}[t.data.priority || 'normal'])
     : sortKey === 'follow_up' && isClosed(t.data) ? ''
     : sortKey === 'due' && t.data.status === 'done' ? t.data.completed_on || ''
     : sortKey === 'status' ? Object.keys(labels).indexOf(t.data.status) : t.data[sortKey] || '';

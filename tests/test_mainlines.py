@@ -66,7 +66,8 @@ class MainlineTest(BaseStoreCase):
                         {"task_ids": [], "milestone_ids": ["talk"]}, {"source_ids": ["talk"]},
                         {"task_ids": ["talk", "talk"]}, {"as_of": "2026-02-30"},
                         {"review_on": "long_term"}, {"order": True}, {"related_mainlines": ["mainline-test"]},
-                        {"title": "", "text": "Cannot replace title"}, {"goal": "   "}]:
+                        {"title": "", "text": "Cannot replace title"}, {"goal": "   "},
+                        {"priority": "P3"}, {"priority": "P4"}, {"priority": None}, {"priority": []}, {"priority_basis": "unknown"}]:
             with self.subTest(changes=changes):
                 line = copy.deepcopy(self.line)
                 line["data"].update(changes)
@@ -94,6 +95,16 @@ class MainlineTest(BaseStoreCase):
         self.store.commit(batch["batch"], True)
         self.assertEqual(list_tasks(self.store)["mainlines"], [])
         self.assertEqual(mainline_detail(self.store, "mainline-test")["tasks"][0]["context_status"], "archived")
+
+    def test_non_project_tasks_cannot_join_active_mainlines(self):
+        with self.store.db() as db:
+            task = self.store.nodes(db)['talk']
+        task['data']['priority'] = 'P3'
+        batch = self.store.begin({'reason':'synthetic non-project boundary','updates':[task,self.line]}, True)
+        with self.assertRaisesRegex(lumos.Error, 'P3'):
+            self.store.commit(batch['batch'], True)
+        self.store.abandon(batch['batch'])
+        self.assertNotEqual(task_detail(self.store, 'talk')['task']['data']['priority'], 'P3')
 
     def test_restore_preserves_summary_sources_and_history(self):
         self.commit_line()

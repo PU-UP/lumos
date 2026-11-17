@@ -279,7 +279,7 @@ class TaskTest(BaseStoreCase):
         task = task_detail(self.store, ident)
         self.assertEqual(task["task"]["data"]["owner"], "王牧楠")
         self.assertEqual(task["history"][0]["after"]["data"]["owner"], "王牧楠")
-        for priority in ("low", "normal", "high"):
+        for priority in ("low", "normal", "high", "P3"):
             request = self.request(owner="  同事  ", priority=priority)
             request["id"] = ident
             save_task(self.store, request)

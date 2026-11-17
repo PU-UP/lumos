@@ -88,6 +88,21 @@ class IntakeTest(BaseStoreCase):
         self.assertEqual(person['assessment']['basis_ids'], ['talk'])
         self.assertEqual(self.store.verify()['integrity'], 'ok')
 
+    def test_mainline_priority_keeps_current_basis_and_task_commitments(self):
+        before = task_detail(self.store, 'talk')
+        for priority, mode, basis in [('P1', 'reported', 'user'), ('P2', 'planned', 'agent')]:
+            request = self.job()
+            request['plan']['updates'] = [self.item('mainline-test', 'mainline', {'priority': priority}, mode)]
+            apply_intake(self.store, request)
+            data = mainline_detail(self.store, 'mainline-test')['mainline']['data']
+            self.assertEqual(data['priority'], priority)
+            self.assertEqual(data['priority_basis'], basis)
+            self.assertEqual(data['priority_reason'], request['plan']['updates'][0]['reason'])
+            self.assertNotIn('review_on', data)
+        after = task_detail(self.store, 'talk')
+        self.assertEqual(after['task'], before['task'])
+        self.assertEqual(after['history'], before['history'])
+
     def test_invalid_later_update_rolls_back_entire_result(self):
         request = self.job(note=True)
         before = task_detail(self.store, 'talk')

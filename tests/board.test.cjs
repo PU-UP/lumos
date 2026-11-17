@@ -224,9 +224,9 @@ test('new tasks default to 王牧楠 and medium, and priorities have distinct te
   await p.world.openTask();
   assert.equal(p.controls.owner.value, '王牧楠');
   assert.equal(p.controls.priority.value, 'normal');
-  const badges = ['low', 'normal', 'high'].map(priority => p.world.priorityTag({priority}));
-  assert.deepEqual(badges.map(b => b.textContent), ['低优先级', '中优先级', '高优先级']);
-  assert.equal(new Set(badges.map(b => b.className)).size, 3);
+  const badges = ['low', 'normal', 'high', 'P3'].map(priority => p.world.priorityTag({priority}));
+  assert.deepEqual(badges.map(b => b.textContent), ['低优先级', '中优先级', '高优先级', 'P3 · 非项目事务']);
+  assert.equal(new Set(badges.map(b => b.className)).size, 4);
 });
 
 test('quick status saves only status, prevents duplicate writes and refreshes the board', async () => {
