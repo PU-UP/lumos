@@ -44,6 +44,57 @@ class IntakeTest(BaseStoreCase):
         with self.assertRaises(lumos.Error):
             save_intake(self.store,{**request,'request_id':uuid.uuid4().hex,'related_ids':['missing']})
 
+    def test_chat_discussion_history_model_and_atomic_progress_update(self):
+        request = {'request_id': uuid.uuid4().hex, 'chat_id': uuid.uuid4().hex, 'chat_parent': '',
+                   'model': 'test-model', 'text': '先讨论同步方案。', 'source': self.source}
+        first = save_intake(self.store, request)['intake']
+        self.assertTrue(save_intake(self.store, request)['replayed'])
+        with self.assertRaisesRegex(lumos.Error, '等待'):
+            save_intake(self.store, {**request, 'request_id': uuid.uuid4().hex, 'chat_parent': first['id']})
+        job = claim_intake(self.store, first['id'])
+        ctx = intake_context(self.store, job['id'])
+        self.assertEqual(ctx['chat_history'], [])
+        self.assertEqual(ctx['intake']['data']['model'], 'test-model')
+        before = task_detail(self.store, 'talk')['task']
+        plan = {'summary': '仅讨论', 'reply': '可以先确认同步条件。', 'questions': [], 'updates': []}
+        envelope = {'id': job['id'], 'claim': job['data']['claim'], 'basis': ctx['basis'], 'plan': plan}
+        receipt = apply_intake(self.store, envelope)['intake']
+        self.assertEqual(receipt['data']['reply'], plan['reply'])
+        self.assertEqual(receipt['data']['destinations'], [])
+        self.assertEqual(task_detail(self.store, 'talk')['task'], before)
+        self.assertTrue(apply_intake(self.store, envelope)['replayed'])
+        with self.assertRaisesRegex(lumos.Error, '新消息'):
+            save_intake(self.store, {**request, 'request_id': uuid.uuid4().hex})
+        with self.assertRaisesRegex(lumos.Error, '当前空间'):
+            save_intake(self.store, {**request, 'request_id': uuid.uuid4().hex, 'workspace': 'lumos'})
+        second = save_intake(self.store, {**request, 'request_id': uuid.uuid4().hex, 'chat_parent': first['id'],
+                                        'text': '同步讨论已完成。'})['intake']
+        job = claim_intake(self.store, second['id']); ctx = intake_context(self.store, job['id'])
+        self.assertEqual([h['id'] for h in ctx['chat_history']], [first['id']])
+        self.assertEqual(ctx['chat_history'][0]['reply'], plan['reply'])
+        update = {'summary': '已保存进展', 'reply': '讨论结果已接续，验证仍待进行。', 'questions': [],
+                  'updates': [self.item(changes={'progress': '讨论已完成，验证待进行'})]}
+        apply_intake(self.store, {'id': job['id'], 'claim': job['data']['claim'], 'basis': ctx['basis'], 'plan': update})
+        self.assertEqual(task_detail(self.store, 'talk')['task']['data']['progress'], '讨论已完成，验证待进行')
+
+    def test_chat_validation_does_not_relax_ordinary_intake_or_apply_partial_results(self):
+        for extra in ({'chat_id': []}, {'chat_id': 'bad'}, {'chat_parent': 'missing'}, {'model': '--bad'}, {'model': '../bad'}):
+            with self.assertRaises(lumos.Error):
+                save_intake(self.store, {'request_id': uuid.uuid4().hex, 'text': '模拟讨论', 'source': self.source, **extra})
+        ordinary = self.job()
+        ordinary['plan']['reply'] = '不能靠聊天字段跳过普通整理'
+        with self.assertRaises(lumos.Error):
+            apply_intake(self.store, ordinary)
+        request = {'request_id': uuid.uuid4().hex, 'chat_id': uuid.uuid4().hex, 'text': '同步讨论已完成。', 'source': self.source}
+        saved = save_intake(self.store, request)['intake']; job = claim_intake(self.store, saved['id'])
+        ctx = intake_context(self.store, job['id']); seq = self.store.status()['seq']
+        plan = {'summary': '无效更新', 'reply': '不应保存', 'questions': [],
+                'updates': [self.item(), self.item('missing', changes={'progress': '没有这个任务'})]}
+        with self.assertRaises(lumos.Error):
+            apply_intake(self.store, {'id': job['id'], 'claim': job['data']['claim'], 'basis': ctx['basis'], 'plan': plan})
+        self.assertEqual(self.store.status()['seq'], seq)
+        self.assertNotIn('reply', intake_context(self.store, job['id'])['intake']['data'])
+
     def job(self, note=False):
         text = '同步讨论已完成。下一步由模拟同事检查接口。新结果待验证。'
         if note:

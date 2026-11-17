@@ -2,10 +2,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 test('all pages expose the same task entry in their global navigation',()=>{
-  for(const file of ['overview','index','people','notes']){
+  for(const file of ['overview','index','people','notes','chat']){
     const html=fs.readFileSync('web/'+file+'.html','utf8');
     const nav=html.match(/<nav aria-label="工作视图"[\s\S]*?<\/nav>/)[0];
     assert.match(nav,/<a href="\/tasks"[^>]*>全部任务<\/a>/,file);
+    assert.match(nav,/<a href="\/chat"[^>]*>对话<\/a>/,file);
   }
 });
 const {managementModel,milestoneTasks,deliveryDate,targetDate,matchesTask,submission} = require('../web/overview.js');

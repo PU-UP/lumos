@@ -62,6 +62,9 @@ def make_server(store, port=8765):
                     data = list_intakes(store, query.get("workspace", ["lingguang"])[0])
                     worker = getattr(self.server, 'worker', None)
                     self.reply(200, {**data, 'executor': worker.state if worker else 'offline', 'token': token})
+                elif path.path == "/api/codex-models":
+                    from lumos_worker import codex_models
+                    self.reply(200, codex_models())
                 elif path.path == "/api/notes":
                     query = parse_qs(path.query)
                     self.reply(200, {**list_notes(store, query.get("workspace", ["lingguang"])[0],
@@ -79,8 +82,8 @@ def make_server(store, port=8765):
                     self.reply(200, task_detail(store, parse_qs(path.query).get("id", [""])[0]))
                 elif path.path == "/api/mainline":
                     self.reply(200, mainline_detail(store, parse_qs(path.query).get("id", [""])[0]))
-                elif path.path in {"/", "/tasks", "/delivery", "/intake.js", "/overview.js", "/overview.css", "/board.js", "/board.css", "/notes", "/notes.js", "/notes.css", "/people", "/people.js", "/people.css"}:
-                    name = {"/": "overview.html", "/delivery": "overview.html", "/tasks": "index.html", "/notes": "notes.html", "/people": "people.html"}.get(path.path, path.path[1:])
+                elif path.path in {"/", "/tasks", "/delivery", "/intake.js", "/overview.js", "/overview.css", "/board.js", "/board.css", "/notes", "/notes.js", "/notes.css", "/people", "/people.js", "/people.css", "/chat", "/chat.js", "/chat.css"}:
+                    name = {"/": "overview.html", "/delivery": "overview.html", "/tasks": "index.html", "/notes": "notes.html", "/people": "people.html", "/chat": "chat.html"}.get(path.path, path.path[1:])
                     if path.path == "/" and "task" in parse_qs(path.query):
                         name = "index.html"  # Preserve existing task bookmarks.
                     content_type = "text/javascript" if name.endswith(".js") else "text/css" if name.endswith(".css") else "text/html"

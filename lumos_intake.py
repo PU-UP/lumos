@@ -35,10 +35,18 @@ def enabled(nodes, workspace):
 def validate_intake(data, nodes):
     require(data.get('workspace') in {'lingguang', 'lumos'} and data.get('status') in STATES, 'Invalid intake state/space')
     require(type(data.get('revision')) is int and data['revision'] > 0, 'Invalid intake revision')
-    for field, limit in [('title', 300), ('text', 200000), ('summary', 4000), ('error', 2000)]:
+    for field, limit in [('title', 300), ('text', 200000), ('summary', 4000), ('error', 2000), ('reply', 20000)]:
         require(isinstance(data.get(field, ''), str) and len(data.get(field, '')) <= limit, 'Invalid intake '+field)
     require(isinstance(data.get('source'), dict) and data['source'].get('ref'), 'Intake needs a source')
     require(isinstance(data.get('question_key', ''), str) and len(data.get('question_key', '')) <= 500, 'Invalid question key')
+    if 'chat_id' in data:
+        require(isinstance(data['chat_id'], str) and re.fullmatch('[a-f0-9]{32}', data['chat_id']), 'Invalid chat ID')
+        parent = data.get('chat_parent', '')
+        require(isinstance(parent, str) and (not parent or (nodes.get(parent, {}).get('kind') == 'intake'
+                and nodes[parent]['data'].get('chat_id') == data['chat_id']
+                and nodes[parent]['data']['workspace'] == data['workspace'])), 'Invalid chat parent')
+    model = data.get('model', '')
+    require(isinstance(model, str) and (not model or re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,99}', model)), 'Invalid Codex model')
     require(isinstance(data.get('questions', []), list) and all(isinstance(q, str) and len(q) <= 2000 for q in data.get('questions', [])), 'Invalid questions')
     answers = data.get('resolutions', [])
     require(isinstance(answers, list), 'Invalid resolutions')
@@ -87,7 +95,7 @@ def list_intakes(store, workspace='lingguang'):
 
 
 def save_intake(store, request):
-    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'text', 'title', 'source', 'note_id', 'id', 'expected_revision', 'execution', 'related_ids', 'question_key'}, 'Invalid intake request')
+    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'text', 'title', 'source', 'note_id', 'id', 'expected_revision', 'execution', 'related_ids', 'question_key', 'chat_id', 'chat_parent', 'model'}, 'Invalid intake request')
     require(request.get('execution', 'automatic') in {'automatic', 'conversation'}, 'Invalid execution mode')
     key = request.get('request_id', '')
     require(isinstance(key, str) and re.fullmatch('[a-f0-9]{32}', key), 'Invalid request_id')
@@ -115,6 +123,16 @@ def save_intake(store, request):
                 return {'intake': nodes[node['id']], 'replayed': True}
         else:
             require(isinstance(request.get('text'), str) and request['text'].strip(), 'Progress text required')
+            if 'chat_id' in request:
+                require(request.get('execution', 'automatic') == 'automatic', '网页对话需要自动执行')
+                turns = [n for n in nodes.values() if n['kind'] == 'intake' and n['data'].get('chat_id') == request['chat_id']]
+                require(all(n['data']['workspace'] == request.get('workspace', 'lingguang') for n in turns), '对话不属于当前空间')
+                parents = {n['data'].get('chat_parent') for n in turns}
+                latest = next((n for n in turns if n['id'] not in parents), None)
+                require(request.get('chat_parent', '') == (latest['id'] if latest else ''), '对话已有新消息，请刷新后接续')
+                require(not latest or latest['data']['status'] in {'done', 'needs_review'}, '请先等待本轮完成或重试失败消息')
+            else:
+                require('chat_parent' not in request, 'Missing chat ID')
             refs = request.get('related_ids', [])
             require(isinstance(refs, list) and len(refs) <= 20 and all(isinstance(i, str) for i in refs), 'Invalid feedback references')
             scoped = scoped_nodes(nodes, request.get('workspace', 'lingguang'))
@@ -125,6 +143,9 @@ def save_intake(store, request):
                 'summary': '', 'questions': [], 'related_ids': refs, 'execution': request.get('execution', 'automatic')}}
             if 'question_key' in request:
                 node['data']['question_key'] = request['question_key']
+            for field in ('chat_id', 'chat_parent', 'model'):
+                if field in request:
+                    node['data'][field] = request[field]
         require(enabled(nodes, node['data']['workspace']), '尚未启用此空间的自主整理规则')
         commit_tasks(store, nodes, {'reason': reason, 'updates': [node]}, node['id'])
         return {'intake': node, 'replayed': False}
@@ -235,8 +256,20 @@ def intake_context(store, ident):
                 content = safe_path(store.root, record['data']['version']).read_bytes()
                 require(digest(content) == record['data']['sha256'], 'Damaged source version: '+record['id'])
                 record['content'] = content.decode('utf-8-sig')
-        return {'intake': job, 'text': text, 'today': today(), 'basis': context_basis(nodes, job['data']['workspace']),
-                'records': visible, 'open_questions': open_questions(nodes, job['data']['workspace'])}
+        result = {'intake': job, 'text': text, 'today': today(), 'basis': context_basis(nodes, job['data']['workspace']),
+                  'records': visible, 'open_questions': open_questions(nodes, job['data']['workspace'])}
+        if job['data'].get('chat_id'):
+            history, parent = [], job['data'].get('chat_parent')
+            visited = {job['id']}
+            while parent:
+                require(parent not in visited, 'Invalid chat history cycle')
+                visited.add(parent)
+                prior = nodes[parent]
+                history.append({'id': parent, 'text': prior['data']['text'], 'reply': prior['data'].get('reply', ''),
+                                'summary': prior['data']['summary'], 'created_at': prior['data']['created_at']})
+                parent = prior['data'].get('chat_parent')
+            result['chat_history'] = list(reversed(history))
+        return result
 
 
 def claim_intake(store, ident=None):
@@ -282,7 +315,8 @@ def apply_intake(store, request):
     require(isinstance(request, dict) and set(request) == {'id', 'claim', 'basis', 'plan'}, 'Invalid reconciliation envelope')
     plan = request['plan']
     require(isinstance(plan, dict) and {'summary', 'questions', 'updates'} <= set(plan)
-            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions'}, 'Invalid reconciliation plan')
+            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions', 'reply'}, 'Invalid reconciliation plan')
+    require(isinstance(plan.get('reply', ''), str) and len(plan.get('reply', '')) <= 20000, 'Invalid chat reply')
     require(isinstance(plan['summary'], str) and 0 < len(plan['summary']) <= 4000, 'Receipt summary required')
     require(isinstance(plan['questions'], list) and all(isinstance(q, str) and 0 < len(q) <= 2000 for q in plan['questions']), 'Invalid questions')
     require(isinstance(plan['updates'], list) and len(plan['updates']) <= 100, 'Too many updates')
@@ -296,6 +330,7 @@ def apply_intake(store, request):
             old = nodes.get(request['id'])
             require(old and old['kind'] == 'intake', 'Intake not found')
             job = old['data']
+            require(bool(plan.get('reply', '').strip()) if job.get('chat_id') else 'reply' not in plan, '对话需要答复；普通整理不能用答复代替承接')
             if job.get('applied_hash') == plan_hash:
                 return {'intake': old, 'replayed': True}
             require(job['status'] == 'running' and job.get('claim') == request['claim'], '整理已换批次，请重新读取')
@@ -425,10 +460,12 @@ def apply_intake(store, request):
                 updates.append(target)
             target['data'].update(review_checked_on=review['on'], review_checked_revision=review['revision'],
                                   review_checked_at=now(), review_receipt=old['id'])
-        require(updates or plan['questions'], '不能把未承接的内容标为已整理')
+        require(updates or plan['questions'] or job.get('chat_id'), '不能把未承接的内容标为已整理')
         receipt = {**old, 'data': {**job, 'status': 'needs_review' if plan['questions'] else 'done',
                    'summary': plan['summary'], 'questions': plan['questions'], 'destinations': [n['id'] for n in updates],
                    'applied_hash': plan_hash, 'revision': job['revision']+1, 'updated_at': now(), 'error': ''}}
+        if job.get('chat_id'):
+            receipt['data']['reply'] = plan['reply']
         updates.append(receipt)
         if source_note and not plan['questions']:
             data = {**source_note['data'], 'status': 'archived', 'archive_reason': plan['summary'][:1000]+'；去向：'+', '.join(receipt['data']['destinations'])[:900],

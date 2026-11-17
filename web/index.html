@@ -3,7 +3,7 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lumos · 当前工作</title><link rel="stylesheet" href="/board.css"><script src="/board.js" defer></script></head>
 <body>
 <header><div class="brand"><span class="mark">L</span><strong>Lumos</strong><span class="divider">/</span><span>工作分身</span></div><div class="tools"><span id="date"></span><button id="refresh">刷新</button><button id="new" class="primary" disabled>＋ 新增任务</button></div></header>
-<nav aria-label="工作视图" class="view-nav"><a href="/">主线</a><a href="/tasks" aria-current="page">全部任务</a><a href="/people">人员</a><a href="/notes">笔记</a><a id="back-mainline" hidden>返回主线</a></nav>
+<nav aria-label="工作视图" class="view-nav"><a href="/">主线</a><a href="/tasks" aria-current="page">全部任务</a><a href="/people">人员</a><a href="/notes">笔记</a><a id="back-mainline" hidden>返回主线</a><a href="/chat">对话</a></nav>
 <main>
 <div class="intro"><div><h1>全部任务</h1><p class="muted">记录下一步，跟进变化。也可以直接在对话中告诉我。</p></div><div class="workspace-filters"><label>工作空间<select id="workspace"><option value="lingguang">灵光</option><option value="lumos">Lumos 仓库维护</option></select></label><label>项目标签<select id="group-filter"><option value="">全部分组</option></select></label><button type="button" id="rename-group" aria-haspopup="dialog" disabled>重命名标签</button></div></div>
 <div id="save-notice" hidden><span id="save-summary" role="status"></span> <button id="undo-save" type="button" hidden>撤回</button></div>
