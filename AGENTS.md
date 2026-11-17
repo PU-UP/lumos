@@ -1,5 +1,7 @@
 # Lumos Agent 入口
 
+2026-11-17任务统筹授权升级：王牧楠授权Lumos对当前任务的合理安排负责。正式policy的task_management_workspaces启用后，人工改过的owner/follow_up/review_on不再永久锁定，Lumos依据主线与职责可调整并保留原值、时间和依据；manual_edits为人工改动痕迹，接续后标seen_at。该授权优先于下文旧“人工安排只能凭新明确安排修改”的限制。due仍保留明确承诺，内部排期用planned_due，不凭复核捏造成果、完成或验收。可自行处理的异常直接处理，需王牧楠补充的关键信息须关联真实未答问题。网页“Lumos更新全部任务”核对当前空间全部未结束任务，不受筛选限制；记录逐任务复核及完成时间，不能用复核时间更新业务as_of。历史任务不批量改写，外部通知与正式人事任命不在此授权内。
+
 工作替身（2026-11-14用户授权）：大段对话/笔记默认由Agent整批整理，统一入口与规则见 `docs/autonomy.md`、`docs/agent-planner.md`。对话使用 `intake-save`（execution=conversation）→`intake-claim <ID>`→`intake-context`→`intake-apply`；笔记结束记录自动入队。整批维护任务、主线、依据、人员职责判断及回执，不逐小项请求确认。职责判断可从任务安排、人员架构及日常反馈持续学习，保存basis_ids和不确定点，可用于普通内部安排；不将判断写成正式任命、已通知或本人接受。已有明确分工优先，重要跨组责任/资源冲突才集中询问。内部目标用planned_due，明确约定仍用due；Agent可以自主安排空缺或自己负责的follow_up/review_on并写依据，用户明确安排只凭新的明确用户安排修改。不批量修改历史任务。
 
 主线视图（2026-11-14）：主页以长期主线汇总，阶段交付和具体任务按需展开；格式见 `docs/mainlines.md`。`tasks` 同时返回 `mainlines`，`mainline <ID>` 读取确切关联任务、来源与历史。Agent通过intake批次同步主线摘要与确切关联任务；正式文档、主线创建/归档等不在整理接口内的变化仍走begin/commit。不要复制任务或用摘要更新时间推定进展。主线review_on独立于任务due/follow_up；服务运行时到期自动入队，同次安排只复核一次。无新证据不能声称有新进展或更新as_of；复核标记与原日期分别保留。新输入须检查open_questions，用resolutions明确承接旧问题，保留问题、答复原文及来源；不能因新增反馈就清空旧问题。

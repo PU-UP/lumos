@@ -9,6 +9,18 @@ from lumos_worker import codex_models, plan_with_codex, SCHEMA
 
 
 class WorkerTest(unittest.TestCase):
+    def test_task_review_uses_complete_coverage_schema_and_management_prompt(self):
+        def run(command, **kwargs):
+            schema = json.loads(Path(command[command.index('--output-schema')+1]).read_text())
+            self.assertIn('task_reviews', schema['required'])
+            self.assertIn('逐项核对', kwargs['input'])
+            Path(command[command.index('--output-last-message')+1]).write_text(json.dumps({
+                'summary': 'review', 'questions': [], 'updates': [], 'resolutions': [], 'task_reviews': []}), encoding='utf-8')
+            return SimpleNamespace(returncode=0, stdout='')
+        with tempfile.TemporaryDirectory() as folder, patch('lumos_worker.executable', return_value='codex'), patch('lumos_worker.subprocess.run', side_effect=run):
+            self.assertEqual(plan_with_codex({'intake': {'data': {'task_review': True}}}, Path(folder))['task_reviews'], [])
+        self.assertNotIn('task_reviews', SCHEMA['required'])
+
     def test_model_catalog_filters_internal_metadata_and_handles_missing_cache(self):
         with tempfile.TemporaryDirectory() as folder, patch.dict('os.environ', {'CODEX_HOME': folder}), patch('lumos_worker.executable', return_value='codex'):
             self.assertEqual(codex_models()['models'], [])

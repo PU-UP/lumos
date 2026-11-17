@@ -7,6 +7,7 @@ from urllib.parse import urlsplit, parse_qs
 
 from lumos import ENGINE, Error, require
 from lumos_tasks import list_tasks, task_detail, save_task
+from lumos_task_review import request_task_review
 from lumos_notes import list_notes, note_detail, save_note
 from lumos_mainlines import mainline_detail, save_review
 from lumos_intake import list_intakes, save_intake
@@ -48,14 +49,14 @@ def make_server(store, port=8765):
                 require(self.headers.get("Sec-Fetch-Site") not in {"cross-site"}, "Cross-site request refused")
                 path = urlsplit(self.path)
                 if write:
-                    require(path.path in {"/api/tasks", "/api/notes", "/api/intakes", "/api/mainline-review"}, "Unknown route")
+                    require(path.path in {"/api/tasks", "/api/notes", "/api/intakes", "/api/mainline-review", "/api/task-review"}, "Unknown route")
                     require(self.headers.get("Origin") == "http://" + host, "Invalid origin")
                     require(secrets.compare_digest(self.headers.get("X-Lumos-Token", ""), token), "Invalid token")
                     require(self.headers.get("Content-Type", "").split(";")[0] == "application/json", "Expected JSON")
                     request = json.loads(raw)
                     require(isinstance(request, dict), "Expected request object")
                     request["source"] = {"type": "user", "ref": "本地看板用户保存，request=" + str(request.get("request_id", ""))}
-                    save = {"/api/tasks": save_task, "/api/notes": save_note, "/api/intakes": save_intake, "/api/mainline-review": save_review}[path.path]
+                    save = {"/api/tasks": save_task, "/api/notes": save_note, "/api/intakes": save_intake, "/api/mainline-review": save_review, "/api/task-review": request_task_review}[path.path]
                     self.reply(200, save(store, request))
                 elif path.path == "/api/intakes":
                     query = parse_qs(path.query)
@@ -77,7 +78,7 @@ def make_server(store, port=8765):
                 elif path.path == "/api/health":
                     self.reply(200, {"app": "lumos", "root": str(store.root)})
                 elif path.path == "/api/tasks":
-                    self.reply(200, {**list_tasks(store), "token": token})
+                    self.reply(200, {**list_tasks(store), "token": token, "executor": getattr(getattr(self.server, "worker", None), "state", "offline")})
                 elif path.path == "/api/task":
                     self.reply(200, task_detail(store, parse_qs(path.query).get("id", [""])[0]))
                 elif path.path == "/api/mainline":

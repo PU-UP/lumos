@@ -153,6 +153,33 @@ test('old tasks default to normal priority and detail requests cannot overlap', 
   assert.equal(p.controls.text.value, '旧任务');
 });
 
+test('full task review ignores task filters, disables duplicate requests and shows completion time', async () => {
+  const p=await page(new Map(),{task_reviews:{lingguang:{enabled:true,latest:null,completed:null}}});
+  p.get('search').value='只看一个任务';p.world.render();const posted=[];
+  p.world.fetch=async(url,options)=>{
+    if(!options)return response(p.board);
+    posted.push([url,JSON.parse(options.body)]);
+    p.board.task_reviews.lingguang.latest={id:'review-1',data:{status:'running'}};
+    return response({});
+  };
+  await p.get('review-tasks').onclick();
+  assert.equal(posted[0][0],'/api/task-review');assert.deepEqual(Object.keys(posted[0][1]).sort(),['request_id','workspace']);
+  assert.equal(p.get('review-tasks').disabled,true);assert.match(p.get('task-review-status').textContent,/逐项核对/);
+  await p.get('review-tasks').onclick();assert.equal(posted.length,1);
+  const completed={id:'review-1',data:{status:'done',completed_at:'2026-11-17T10:00:00Z',task_reviews:[{id:'a'}],summary:'已检查'}};
+  p.board.task_reviews.lingguang={enabled:true,latest:completed,completed};await p.world.refresh();
+  assert.match(p.get('task-review-time').textContent,/1 项任务/);assert.equal(p.get('review-tasks').disabled,false);
+});
+
+test('manual edit markers retain original values and distinguish acknowledgement', async () => {
+  const p=await page();
+  const task={data:{manual_edits:{owner:{value:'王牧楠',at:'2026-11-17T10:00:00Z'}}}};
+  assert.match(p.world.manualBadge(task,['owner']).textContent,/待复核/);
+  task.data.manual_edits.owner.seen_at='2026-11-17T11:00:00Z';
+  assert.match(p.world.manualBadge(task,['owner']).textContent,/已接续/);
+  assert.match(p.world.manualBadge(task,['owner']).title,/王牧楠/);
+});
+
 async function existingTask(p) {
   p.world.fetch = async () => response({seq: 3, task: {data: {text: '已记录的任务', context: 'work-current',
     status: 'doing', next_step: '第一行\n第二行', details: '<script>不执行</script>', source: {ref: 'fixture'}}},

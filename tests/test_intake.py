@@ -17,6 +17,84 @@ from test_core import BaseStoreCase
 
 
 class IntakeTest(BaseStoreCase):
+    def enable_management(self):
+        with self.store.db() as db:
+            policy = self.store.nodes(db)[POLICY]
+        policy['data']['task_management_workspaces'] = ['lingguang']
+        batch = self.store.begin({'reason': 'synthetic task management grant', 'updates': [policy]}, True)
+        self.store.commit(batch['batch'], True)
+
+    def full_review(self):
+        from lumos_task_review import request_task_review
+        job = request_task_review(self.store, {'request_id': uuid.uuid4().hex, 'workspace': 'lingguang', 'source': self.source})['intake']
+        claimed = claim_intake(self.store, job['id']); ctx = intake_context(self.store, job['id'])
+        return ctx, {'id': job['id'], 'claim': claimed['data']['claim'], 'basis': ctx['basis'],
+                    'plan': {'summary': '已核对全部模拟任务', 'questions': [], 'updates': [], 'resolutions': [],
+                             'task_reviews': [{'id': 'talk', 'question': '', 'reason': '核对模拟任务安排'}]}}
+
+    def test_full_review_requires_grant_coverage_and_real_questions_then_stamps_atomically(self):
+        from lumos_task_review import request_task_review
+        request = {'request_id': uuid.uuid4().hex, 'workspace': 'lingguang', 'source': self.source}
+        with self.assertRaisesRegex(lumos.Error, '统筹授权'):
+            request_task_review(self.store, request)
+        self.enable_management()
+        first = request_task_review(self.store, request)['intake']
+        again = request_task_review(self.store, {**request, 'request_id': uuid.uuid4().hex})['intake']
+        self.assertEqual(first['id'], again['id'])
+        ctx, env = self.full_review()
+        before = task_detail(self.store, 'talk')['task']['data']
+        for reviews in ([], [{'id': 'talk', 'question': '', 'reason': '未处理异常'}],
+                        [{'id': 'talk', 'question': 'new:99', 'reason': '不存在的问题'}]):
+            env['plan']['task_reviews'] = reviews
+            with self.assertRaises(lumos.Error):
+                apply_intake(self.store, env)
+            self.assertEqual(task_detail(self.store, 'talk')['task']['data'], before)
+        env['plan']['task_reviews'] = [{'id': 'talk', 'question': 'new:0', 'reason': '尚缺关键节点结果'}]
+        env['plan']['questions'] = ['模拟主线的实际阶段结果是什么？']
+        receipt = apply_intake(self.store, env)['intake']
+        self.assertTrue(receipt['data']['completed_at'])
+        board = list_tasks(self.store)
+        self.assertEqual(board['task_reviews']['lingguang']['completed']['id'], first['id'])
+        task = next(t for t in board['tasks'] if t['id'] == 'talk')
+        self.assertEqual(task['management_question']['question'], env['plan']['questions'][0])
+        self.assertEqual(task['management_question']['related_ids'], ['talk'])
+        self.assertEqual(task['data'].get('progress'), before.get('progress'))
+        self.assertEqual(task['data'].get('updated_at'), before.get('updated_at'))
+
+    def test_manual_edits_are_preserved_and_management_can_rearrange_without_faking_progress(self):
+        self.enable_management()
+        save_task(self.store, {'request_id': uuid.uuid4().hex, 'expected_seq': self.store.status()['seq'], 'id': 'talk',
+                              'changes': {'owner': '王牧楠', 'follow_up': '2020-01-01'}, 'source': self.source})
+        ctx, env = self.full_review()
+        future = (date.fromisoformat(today()) + timedelta(days=3)).isoformat()
+        env['plan']['updates'] = [{'id': 'talk', 'kind': 'action', 'mode': 'planned', 'excerpt': ctx['text'],
+                                  'reason': '依据模拟同事既有分工接续', 'changes': {'owner': '模拟同事', 'follow_up': future, 'planned_due': future}}]
+        apply_intake(self.store, env)
+        task = task_detail(self.store, 'talk')['task']['data']
+        self.assertEqual(task['owner'], '模拟同事')
+        self.assertEqual(task['manual_edits']['owner']['value'], '王牧楠')
+        self.assertTrue(task['manual_edits']['owner']['seen_at'])
+        self.assertEqual(task['status'], 'todo')
+        self.assertEqual(task['task_review']['issues'], [])
+        ctx, env = self.full_review()
+        env['plan']['updates'] = [{'id': 'talk', 'kind': 'action', 'mode': 'reported', 'excerpt': ctx['text'],
+                                  'reason': '不应伪造', 'changes': {'status': 'done'}}]
+        with self.assertRaisesRegex(lumos.Error, '新进展报告'):
+            apply_intake(self.store, env)
+
+    def test_full_review_rejects_concurrent_manual_changes_and_keeps_previous_completion(self):
+        self.enable_management(); ctx, env = self.full_review()
+        env['plan']['questions'] = ['模拟关键节点？']; env['plan']['task_reviews'][0]['question'] = 'new:0'
+        first = apply_intake(self.store, env)['intake']
+        ctx, env = self.full_review()
+        save_task(self.store, {'request_id': uuid.uuid4().hex, 'expected_seq': self.store.status()['seq'], 'id': 'talk',
+                              'changes': {'progress': '王牧楠新修改'}, 'source': self.source})
+        with self.assertRaisesRegex(lumos.Error, '已变化'):
+            apply_intake(self.store, env)
+        board = list_tasks(self.store)
+        self.assertEqual(board['task_reviews']['lingguang']['completed']['id'], first['id'])
+        self.assertNotIn('seen_at', task_detail(self.store, 'talk')['task']['data']['manual_edits']['progress'])
+
     def setUp(self):
         super().setUp(); self.seed()
         self.source = {'type': 'user', 'ref': 'ISOLATED SYNTHETIC AUTHORIZATION'}

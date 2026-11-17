@@ -196,8 +196,10 @@ class TaskTest(BaseStoreCase):
         self.assertEqual(task_detail(self.store, first)["task"]["data"]["group"], "新标签")
         after = task_detail(self.store, second)["task"]["data"]
         self.assertEqual(after["group"], "新标签")
-        for field in before.keys() - {"group", "updated_at", "last_source"}:
+        for field in before.keys() - {"group", "updated_at", "last_source", "manual_edits"}:
             self.assertEqual(after[field], before[field])
+        self.assertEqual(after['manual_edits']['group']['value'], '新标签')
+        self.assertEqual(after['manual_edits']['owner'], before['manual_edits']['owner'])
         self.assertEqual(task_detail(self.store, other)["task"]["data"]["group"], "旧标签")
 
     def test_detail_uses_exact_context_and_explicit_document_links(self):

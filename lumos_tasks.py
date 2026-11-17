@@ -97,7 +97,7 @@ def list_tasks(store, today=None):
     with process_lock(store.root):
         with store.db() as db:
             numbers = task_numbers(db)
-            nodes = store.nodes(db, ("action", "context", "person", "document", "mainline", "intake"))
+            nodes = store.nodes(db, ("action", "context", "person", "document", "mainline", "intake", "decision"))
             seq = store.seq(db)
         contexts = [{**n, "data": {**n["data"], "workspace": context_workspace(n)}}
                     for n in nodes.values() if n["kind"] == "context"
@@ -119,8 +119,21 @@ def list_tasks(store, today=None):
         mainlines = sorted((n for n in nodes.values() if n["kind"] == "mainline"
                            and n["data"]["context"] in ids and n["data"].get("status", "active") == "active"),
                           key=lambda n: (n["data"].get("order", 0), n["id"]))
-        from lumos_intake import open_questions
+        from lumos_intake import open_questions, management_enabled
+        from lumos_task_review import task_issues
+        questions = {space: open_questions(nodes, space) for space in WORKSPACES}
+        for task in tasks:
+            space = context_workspace(nodes[task['data']['context']])
+            task['management_issues'] = task_issues(task['data'], today.isoformat())
+            ref = task['data'].get('task_review', {}).get('question')
+            task['management_question'] = next((q for q in questions[space] if ref and q['intake_id'] == ref['intake_id'] and q['index'] == ref['index']), None)
+        reviews = {}
+        for space in WORKSPACES:
+            jobs = sorted((n for n in nodes.values() if n['kind'] == 'intake' and n['data']['workspace'] == space and n['data'].get('task_review')), key=lambda n: n['data']['created_at'], reverse=True)
+            completed = next((n for n in jobs if n['data'].get('completed_at')), None)
+            reviews[space] = {'enabled': management_enabled(nodes, space), 'latest': jobs[0] if jobs else None, 'completed': completed}
         return {"seq": seq, "today": today.isoformat(), "contexts": contexts, "tasks": tasks, "mainlines": mainlines, "people": list_people(nodes, ids), "archived_people": archived_people, "board_order": board_order,
+                "task_reviews": reviews,
                 "open_questions": [{**q, 'workspace': space} for space in sorted(WORKSPACES) for q in open_questions(nodes, space)],
                 "attention": [n["id"] for n in tasks if n["attention"]],
                 "writable": ctl["mode"] in {"active", "trial", "sandbox"}
@@ -220,17 +233,21 @@ def save_task(store, request):
                 group = node["data"].get("group", "").strip()
                 require(group != target, "该项目标签已存在，请选择其他名称。")
                 if group == previous:
-                    updates.append({**node, "data": {**node["data"], "group": target,
-                                                      "updated_at": changed_at, "last_source": source}})
+                    data = {**node["data"], "group": target, "updated_at": changed_at, "last_source": source}
+                    from lumos_task_review import mark_manual_edits
+                    mark_manual_edits(node['data'], data, {'group': target}, source)
+                    updates.append({**node, "data": data})
             require(any(n["id"] == ident for n in updates), "不能修改归档脉络中的标签。")
             return commit_tasks(store, nodes, {"reason": reason, "updates": updates}, ident)
         changes = dict(changes)
-        if "owner" in changes:
+        if "owner" in changes and (not old or changes["owner"] != old["data"].get("owner")):
             changes.update(owner_basis="user", owner_reason="")
-        if "follow_up" in changes:
+        if "follow_up" in changes and (not old or changes["follow_up"] != old["data"].get("follow_up")):
             changes.update(review_basis="user", review_reason="")
         data = prepare_task(store, nodes, old, changes, source, request.get("note_refs"),
                             request.get("follow_up_reviewed", False))
+        from lumos_task_review import mark_manual_edits
+        mark_manual_edits(old["data"] if old else {}, data, request["changes"], source)
         ctx = nodes[data["context"]]
         update = {"id": ident, "kind": "action", "data": data}
         batch_request = {"reason": reason, "updates": [update]}

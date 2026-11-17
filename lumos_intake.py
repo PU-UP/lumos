@@ -32,6 +32,11 @@ def enabled(nodes, workspace):
             and workspace in data.get('autonomy_workspaces', []))
 
 
+def management_enabled(nodes, workspace):
+    spaces = nodes.get(POLICY, {}).get('data', {}).get('task_management_workspaces', [])
+    return enabled(nodes, workspace) and isinstance(spaces, list) and workspace in spaces
+
+
 def validate_intake(data, nodes):
     require(data.get('workspace') in {'lingguang', 'lumos'} and data.get('status') in STATES, 'Invalid intake state/space')
     require(type(data.get('revision')) is int and data['revision'] > 0, 'Invalid intake revision')
@@ -57,6 +62,7 @@ def validate_intake(data, nodes):
         require(all(isinstance(answer.get(k), str) and answer[k] for k in ('answer', 'excerpt', 'source_intake', 'at')), 'Resolution source required')
         require(nodes.get(answer['source_intake'], {}).get('kind') == 'intake', 'Resolution intake missing')
         indices.add(answer['index'])
+    require(type(data.get('task_review', False)) is bool, 'Invalid task review flag')
     review = data.get('review')
     if review:
         require(isinstance(review, dict) and set(review) == {'id', 'on', 'revision'}
@@ -95,8 +101,9 @@ def list_intakes(store, workspace='lingguang'):
 
 
 def save_intake(store, request):
-    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'text', 'title', 'source', 'note_id', 'id', 'expected_revision', 'execution', 'related_ids', 'question_key', 'question_text', 'chat_id', 'chat_parent', 'model'}, 'Invalid intake request')
+    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'text', 'title', 'source', 'note_id', 'id', 'expected_revision', 'execution', 'related_ids', 'question_key', 'question_text', 'chat_id', 'chat_parent', 'model', 'task_review'}, 'Invalid intake request')
     require(request.get('execution', 'automatic') in {'automatic', 'conversation'}, 'Invalid execution mode')
+    require(type(request.get('task_review', False)) is bool, 'Invalid task review flag')
     key = request.get('request_id', '')
     require(isinstance(key, str) and re.fullmatch('[a-f0-9]{32}', key), 'Invalid request_id')
     reason = 'intake:'+key+':'+digest(json.dumps(request, sort_keys=True, ensure_ascii=False).encode())
@@ -133,6 +140,14 @@ def save_intake(store, request):
                 require(not latest or latest['data']['status'] in {'done', 'needs_review'}, '请先等待本轮完成或重试失败消息')
             else:
                 require('chat_parent' not in request, 'Missing chat ID')
+            if request.get('task_review'):
+                require(management_enabled(nodes, request.get('workspace', 'lingguang')), '尚未启用任务统筹授权')
+                require(not (set(request) & {'chat_id', 'note_id', 'question_key'}), '全量复核不能混入对话或笔记')
+                active = next((n for n in nodes.values() if n['kind'] == 'intake' and n['data'].get('task_review')
+                               and n['data']['workspace'] == request.get('workspace', 'lingguang')
+                               and n['data']['status'] in {'pending', 'running'}), None)
+                if active:
+                    return {'intake': active, 'replayed': True}
             refs = request.get('related_ids', [])
             require(isinstance(refs, list) and len(refs) <= 20 and all(isinstance(i, str) for i in refs), 'Invalid feedback references')
             scoped = scoped_nodes(nodes, request.get('workspace', 'lingguang'))
@@ -143,7 +158,7 @@ def save_intake(store, request):
                 'summary': '', 'questions': [], 'related_ids': refs, 'execution': request.get('execution', 'automatic')}}
             if 'question_key' in request:
                 node['data']['question_key'] = request['question_key']
-            for field in ('chat_id', 'chat_parent', 'model', 'question_text'):
+            for field in ('chat_id', 'chat_parent', 'model', 'question_text', 'task_review'):
                 if field in request:
                     node['data'][field] = request[field]
         require(enabled(nodes, node['data']['workspace']), '尚未启用此空间的自主整理规则')
@@ -168,7 +183,7 @@ def fingerprint(nodes):
 
 def open_questions(nodes, workspace):
     return [{'intake_id': n['id'], 'index': index, 'question': question,
-             'related_ids': n['data'].get('related_ids', []), 'destinations': n['data'].get('destinations', [])}
+             'related_ids': list(dict.fromkeys(n['data'].get('related_ids', []) + [r['id'] for r in n['data'].get('task_reviews', []) if r['question'] == f'new:{index}'])), 'destinations': n['data'].get('destinations', [])}
             for n in nodes.values() if n['kind'] == 'intake' and n['data']['workspace'] == workspace
             and n['data']['status'] == 'needs_review'
             for index, question in enumerate(n['data'].get('questions', []))
@@ -216,7 +231,7 @@ def enqueue_due_reviews(store):
         return len(updates)
 
 
-def review_changes(previous, changes, field, item, source):
+def review_changes(previous, changes, field, item, source, management=False):
     """Keep explicit user schedules distinct from inferred internal arrangements."""
     require(field in changes or not (set(changes) & {'review_basis', 'review_reason'}), '复核依据必须随日期一起保存')
     if field not in changes:
@@ -225,7 +240,7 @@ def review_changes(previous, changes, field, item, source):
     basis = 'agent' if item['mode'] == 'planned' or changes.get('review_basis') == 'agent' else 'user'
     old = previous['data'] if previous else {}
     protected = old.get('review_basis') == 'user' or (old.get(field) and old.get('review_basis') != 'agent')
-    if protected and changes[field] != old.get(field, ''):
+    if protected and changes[field] != old.get(field, '') and not management:
         require(basis == 'user', '用户安排的复核日期只能依据新的明确用户安排修改')
     if field == 'review_on' and basis == 'agent' and changes[field] and changes[field] != old.get(field):
         require(changes[field] > today(), 'Agent新复核安排必须晚于今天，避免重复到期循环')
@@ -315,7 +330,7 @@ def apply_intake(store, request):
     require(isinstance(request, dict) and set(request) == {'id', 'claim', 'basis', 'plan'}, 'Invalid reconciliation envelope')
     plan = request['plan']
     require(isinstance(plan, dict) and {'summary', 'questions', 'updates'} <= set(plan)
-            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions', 'reply'}, 'Invalid reconciliation plan')
+            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions', 'reply', 'task_reviews'}, 'Invalid reconciliation plan')
     require(isinstance(plan.get('reply', ''), str) and len(plan.get('reply', '')) <= 20000, 'Invalid chat reply')
     require(isinstance(plan['summary'], str) and 0 < len(plan['summary']) <= 4000, 'Receipt summary required')
     require(isinstance(plan['questions'], list) and all(isinstance(q, str) and 0 < len(q) <= 2000 for q in plan['questions']), 'Invalid questions')
@@ -345,6 +360,11 @@ def apply_intake(store, request):
             commit_tasks(store, nodes, {'reason': 'stale intake source', 'updates': [node]}, old['id'])
             return {'intake': node, 'replayed': False}
         source = {'type': 'agent', 'ref': '自主整理 '+old['id'], 'intake_id': old['id'], 'authorization': POLICY}
+        management = management_enabled(nodes, job['workspace'])
+        full_review = job.get('task_review', False)
+        require('task_reviews' not in plan or full_review, '只有全量复核才能提交逐任务回执')
+        if full_review:
+            require(management and not resolutions, '全量复核需要统筹授权，不能代替王牧楠回答旧问题')
         review = job.get('review')
         if review:
             require(review_matches(nodes, review), '复核安排已变化，请重新整理')
@@ -365,6 +385,13 @@ def apply_intake(store, request):
                 require(item['mode'] == 'planned' and kind == 'mainline' and ident == review['id']
                         and set(changes) <= {'summary', 'risk', 'next_step', 'review_on', 'review_basis', 'review_reason'},
                         '系统复核只能整理该主线的现有摘要、风险和复核安排，不能推定新进展')
+            if full_review:
+                require(item['mode'] == 'planned', '全量复核没有新进展报告，必须保留推断性质')
+                require(kind in {'action', 'mainline', 'evidence'}, '全量任务复核不调整人员档案')
+                if kind == 'action':
+                    require(previous and previous['data']['status'] not in {'done', 'cancelled'}, '只复核当前未结束任务')
+                if kind == 'mainline':
+                    require(not (set(changes) & {'as_of', 'phase', 'goal'}), '复核时间不能冒充主线新进展')
             if kind == 'action':
                 require(set(changes) <= FIELDS, 'Invalid task fields')
                 changes = dict(changes)
@@ -375,18 +402,19 @@ def apply_intake(store, request):
                 owner_planned = item['mode'] == 'planned' or changes.get('owner_basis') == 'agent'
                 if 'owner' in changes:
                     if owner_planned:
-                        if previous and previous['data'].get('owner') and previous['data'].get('owner_basis') != 'agent':
+                        if previous and previous['data'].get('owner') and previous['data'].get('owner_basis') != 'agent' and not management:
                             require(changes['owner'] == previous['data']['owner'], '已有明确负责人不能由推测改派')
-                        people = [n['data'] for n in nodes.values() if n['kind'] == 'person' and n['data']['title'] == changes['owner']
+                        names = [name.strip() for name in changes['owner'].split('、')]
+                        people = [n['data'] for n in nodes.values() if n['kind'] == 'person' and n['data']['title'] in names
                                   and job['workspace'] in n['data']['workspaces'] and n['data'].get('status', 'active') == 'active'
                                   and n['data'].get('membership_status', 'member') == 'member']
-                        require(len(people) == 1 or changes['owner'] == '待分配', '自动分配需要当前在岗人员或待分配')
+                        require((len(people) == len(names) == len(set(names))) or changes['owner'] == '待分配', '自动分配需要当前在岗人员或待分配')
                     changes.update(owner_basis='agent' if owner_planned else 'user', owner_reason=item['reason'])
                 if not previous and not changes.get('owner'):
                     changes.update(owner='待分配', owner_basis='agent', owner_reason='尚无可靠分工依据')
                 if 'planned_due' in changes:
                     changes['planning_reason'] = item['reason']
-                changes = review_changes(previous, changes, 'follow_up', item, own_source)
+                changes = review_changes(previous, changes, 'follow_up', item, own_source, management)
                 if changes.get('status') == 'done' and (not previous or previous['data']['status'] != 'done'):
                     require(item['mode'] == 'reported', '完成须有明确报告')
                     if not changes.get('completed_on'):
@@ -397,6 +425,8 @@ def apply_intake(store, request):
                     refs.append({**note_ref, 'excerpt': item['excerpt']})
                 changes_source = {**own_source, 'type': 'user_report'} if item['mode'] == 'reported' else own_source
                 data = prepare_task(store, nodes, previous, changes, changes_source, refs)
+                from lumos_task_review import acknowledge_edits
+                acknowledge_edits(data)
                 if 'follow_up' in changes and data.get('review_basis') == 'agent':
                     due = data.get('due', '')
                     if due and due != 'long_term' and due >= today():
@@ -407,7 +437,7 @@ def apply_intake(store, request):
                 if 'priority' in changes:
                     changes = {**changes, 'priority_basis': 'agent' if item['mode'] == 'planned' or changes.get('priority_basis') == 'agent' else 'user',
                                'priority_reason': item['reason']}
-                changes = review_changes(previous, changes, 'review_on', item, own_source)
+                changes = review_changes(previous, changes, 'review_on', item, own_source, management)
                 data = {**previous['data'], **changes, 'source': own_source}
             elif kind == 'person':
                 require(previous and set(changes) == {'assessment'}, 'Only responsibility assessment may be inferred')
@@ -460,10 +490,15 @@ def apply_intake(store, request):
                 updates.append(target)
             target['data'].update(review_checked_on=review['on'], review_checked_revision=review['revision'],
                                   review_checked_at=now(), review_receipt=old['id'])
-        require(updates or plan['questions'] or job.get('chat_id'), '不能把未承接的内容标为已整理')
+        if full_review:
+            from lumos_task_review import complete_task_review
+            complete_task_review(nodes, updates, old, plan.get('task_reviews'), plan['questions'], open_questions(nodes, job['workspace']), today())
+        require(updates or plan['questions'] or job.get('chat_id') or full_review, '不能把未承接的内容标为已整理')
         receipt = {**old, 'data': {**job, 'status': 'needs_review' if plan['questions'] else 'done',
                    'summary': plan['summary'], 'questions': plan['questions'], 'destinations': [n['id'] for n in updates],
                    'applied_hash': plan_hash, 'revision': job['revision']+1, 'updated_at': now(), 'error': ''}}
+        if full_review:
+            receipt['data'].update(task_reviews=plan['task_reviews'], completed_at=now())
         if job.get('chat_id'):
             receipt['data']['reply'] = plan['reply']
         updates.append(receipt)

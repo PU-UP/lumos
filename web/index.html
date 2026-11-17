@@ -2,13 +2,14 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lumos · 当前工作</title><link rel="stylesheet" href="/board.css"><script src="/dialog.js" defer></script><script src="/board.js" defer></script></head>
 <body>
-<header><div class="brand"><span class="mark">L</span><strong>Lumos</strong><span class="divider">/</span><span>工作分身</span></div><div class="tools"><span id="date"></span><button id="refresh">刷新</button><button id="new" class="primary" disabled>＋ 新增任务</button></div></header>
+<header><div class="brand"><span class="mark">L</span><strong>Lumos</strong><span class="divider">/</span><span>工作分身</span></div><div class="tools"><span id="date"></span><button id="review-tasks" class="primary" disabled>Lumos 更新全部任务</button><button id="refresh">刷新</button><button id="new" disabled>＋ 新增任务</button></div></header>
 <nav aria-label="工作视图" class="view-nav"><a href="/">主线</a><a href="/tasks" aria-current="page">全部任务</a><a href="/people">人员</a><a href="/notes">笔记</a><a id="back-mainline" hidden>返回主线</a><a href="/chat">对话</a></nav>
 <main>
 <div class="intro"><div><h1>全部任务</h1><p class="muted">记录下一步，跟进变化。也可以直接在对话中告诉我。</p></div><div class="workspace-filters"><label>工作空间<select id="workspace"><option value="lingguang">灵光</option><option value="lumos">Lumos 仓库维护</option></select></label><label>项目标签<select id="group-filter"><option value="">全部分组</option></select></label><button type="button" id="rename-group" aria-haspopup="dialog" disabled>重命名标签</button></div></div>
 <div id="save-notice" hidden><span id="save-summary" role="status"></span> <button id="undo-save" type="button" hidden>撤回</button></div>
 <p id="message" role="status" aria-live="polite"></p>
 <p id="preferences-message" role="status" aria-live="polite"></p>
+<section class="task-review-status" aria-label="Lumos任务维护"><p id="task-review-status" role="status" aria-live="polite"></p><p id="task-review-time" class="muted"></p><details id="task-review-result" hidden><summary>查看本轮处理结果</summary><div id="task-review-content"></div></details><small>复核当前空间的全部未结束任务，不受列表筛选影响。复核时间与实际进展时间分别记录。</small></section>
 <div class="task-toolbar"><div class="scope-tabs" role="group" aria-label="当前状态筛选（可多选）"><span class="filter-label">当前状态</span><button id="status-todo" aria-pressed="true">待处理</button><button id="status-doing" aria-pressed="true">进行中</button><button id="status-blocked" aria-pressed="false">受阻</button><button id="status-done" aria-pressed="false">已完成</button><button id="status-cancelled" aria-pressed="false">已取消</button></div><div role="group" aria-label="展示方式"><button id="view-list" aria-pressed="true">列表</button><button id="view-schedule" aria-pressed="false">近期安排</button></div></div>
 <div class="time-filter" id="follow-up-window"><label for="window-days">下次关心时间 · 未来</label><input id="window-days" type="number" min="0" max="36500" step="1" placeholder="不限" aria-label="未来天数"><span>天</span><button id="clear-window">不限时间</button><span id="window-hint">状态可多选；时间留空显示全部日期。</span></div>
 
