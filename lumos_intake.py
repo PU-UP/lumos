@@ -38,6 +38,7 @@ def validate_intake(data, nodes):
     for field, limit in [('title', 300), ('text', 200000), ('summary', 4000), ('error', 2000)]:
         require(isinstance(data.get(field, ''), str) and len(data.get(field, '')) <= limit, 'Invalid intake '+field)
     require(isinstance(data.get('source'), dict) and data['source'].get('ref'), 'Intake needs a source')
+    require(isinstance(data.get('question_key', ''), str) and len(data.get('question_key', '')) <= 500, 'Invalid question key')
     require(isinstance(data.get('questions', []), list) and all(isinstance(q, str) and len(q) <= 2000 for q in data.get('questions', [])), 'Invalid questions')
     answers = data.get('resolutions', [])
     require(isinstance(answers, list), 'Invalid resolutions')
@@ -86,7 +87,7 @@ def list_intakes(store, workspace='lingguang'):
 
 
 def save_intake(store, request):
-    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'text', 'title', 'source', 'note_id', 'id', 'expected_revision', 'execution', 'related_ids'}, 'Invalid intake request')
+    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'text', 'title', 'source', 'note_id', 'id', 'expected_revision', 'execution', 'related_ids', 'question_key'}, 'Invalid intake request')
     require(request.get('execution', 'automatic') in {'automatic', 'conversation'}, 'Invalid execution mode')
     key = request.get('request_id', '')
     require(isinstance(key, str) and re.fullmatch('[a-f0-9]{32}', key), 'Invalid request_id')
@@ -122,6 +123,8 @@ def save_intake(store, request):
                 'title': request.get('title') or '对话进展整理', 'text': request['text'], 'workspace': request.get('workspace', 'lingguang'),
                 'source': request.get('source'), 'created_at': now(), 'updated_at': now(), 'status': 'pending', 'revision': 1,
                 'summary': '', 'questions': [], 'related_ids': refs, 'execution': request.get('execution', 'automatic')}}
+            if 'question_key' in request:
+                node['data']['question_key'] = request['question_key']
         require(enabled(nodes, node['data']['workspace']), '尚未启用此空间的自主整理规则')
         commit_tasks(store, nodes, {'reason': reason, 'updates': [node]}, node['id'])
         return {'intake': node, 'replayed': False}

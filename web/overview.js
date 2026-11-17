@@ -34,13 +34,14 @@ function managementModel(state, workspace) {
     const refs=mentioned.length?mentioned.map(t=>t.id):(q.related_ids||[]);
     const matches=entries.filter(e=>refs.includes(e.line.id) || e.tasks.some(t=>refs.includes(t.id)));
     const entry=matches.length===1?matches[0]:null;
-    return {...q, title:entry?.line.data.title || '跨事项待确认', line:entry?.line, tasks:mentioned, text:q.question};
+    return {...q, key:`question:${q.intake_id}:${q.index}`, title:entry?.line.data.title || '跨事项待确认', line:entry?.line, tasks:mentioned, text:q.question};
   });
   questions.sort((a,b)=>Number(b.tasks.some(t=>t.data.follow_up && t.data.follow_up<=state.today))-Number(a.tasks.some(t=>t.data.follow_up && t.data.follow_up<=state.today)));
   for(const issue of issues) {
     if(questions.some(q=>(q.line && q.line.id===issue.line?.id) || q.tasks.some(t=>issue.tasks.some(other=>other.id===t.id))))continue;
     const names=issue.line ? issue.line.data.title : issue.tasks.map(t=>t.data.text).join('、');
-    questions.push({...issue,text:names ? `截至 ${state.today}，${names}有什么结果或阻塞？尚未完成的部分下一步怎样推进？` : `截至 ${state.today}，${issue.title}是否有影响方向或阶段节点的新情况？`});
+    const revision=[issue.line?.data.review_on,...issue.tasks.map(t=>t.data.follow_up)].filter(Boolean).sort().at(-1)||'';
+    questions.push({...issue,key:`followup:${issue.line?.id||issue.tasks[0].id}:${revision}`,text:names ? `截至 ${state.today}，${names}有什么结果或阻塞？尚未完成的部分下一步怎样推进？` : `截至 ${state.today}，${issue.title}是否有影响方向或阶段节点的新情况？`});
   }
   const milestones=[...new Map(entries.flatMap(e=>milestoneTasks(e)).map(t=>[t.id,t])).values()].sort(deliverySort);
   const horizon=new Date(state.today+'T00:00:00Z');horizon.setUTCDate(horizon.getUTCDate()+14);
@@ -53,6 +54,16 @@ function milestoneTasks(entry) {
 function matchesTask(task, query) {
   return [task.short_id, task.data.text, task.data.progress, task.data.next_step, task.data.owner].join(' ').toLowerCase().includes(query.toLowerCase());
 }
+function questionInbox(questions, receipts, workspace) {
+  const latest=new Map();
+  for(const job of [...receipts].sort((a,b)=>(b.data.created_at||'').localeCompare(a.data.created_at||''))) {
+    if(job.data.workspace===workspace && job.data.question_key && !latest.has(job.data.question_key))latest.set(job.data.question_key,job);
+  }
+  const waiting=questions.filter(q=>!latest.has(q.key)), primary=[], rest=[], seen=new Set();
+  for(const q of waiting){const group=q.line?.id||q.title;if(primary.length<3 && !seen.has(group)){primary.push(q);seen.add(group);}else rest.push(q);}
+  return {primary,rest,latest};
+}
+const answerStates={pending:'已提交 · 待Lumos处理',running:'Lumos正在处理',done:'Lumos已处理',needs_review:'Lumos已处理 · 仍有待确认项',failed:'处理失败 · 可重试',obsolete:'原记录已更新 · 需重新核对'};
 function submission(post, initial=null) {
   let pending=initial, busy=false;
   return {get pending(){return pending;}, async send(request,onPending=()=>{}) {
@@ -63,7 +74,7 @@ function submission(post, initial=null) {
     finally{busy=false;}
   }};
 }
-if (typeof module !== 'undefined') module.exports = {managementModel, milestoneTasks, deliveryDate, targetDate, matchesTask, submission};
+if (typeof module !== 'undefined') module.exports = {managementModel, milestoneTasks, deliveryDate, targetDate, matchesTask, submission, questionInbox};
 
 if (typeof document !== 'undefined') {
   const $ = id => document.getElementById(id);
@@ -115,35 +126,111 @@ if (typeof document !== 'undefined') {
     };
     return form;
   }
-  let feedbackSender,feedbackWorkspace;
-  const feedbackKey=()=> 'lumos.feedback.'+feedbackWorkspace;
+  let feedbackSender,feedbackWorkspace,activeQuestion=null,answerOpener=null,receipts=[],receiptState='loading',executor='',feedbackError='',generalReceipt=null;
+  const feedbackKey=()=> 'lumos.feedback.'+feedbackWorkspace+(activeQuestion?'.'+encodeURIComponent(activeQuestion.key):'');
   function stashFeedback(){
     try{localStorage.setItem(feedbackKey(),JSON.stringify({text:$('feedback-text').value,target:$('feedback-target').value,pending:feedbackSender?.pending}));}
-    catch{$('feedback-status').textContent='浏览器无法保存草稿，请保持页面打开或复制正文。';}
+    catch{feedbackError='浏览器无法保存草稿，请保持页面打开或复制正文。';$('feedback-status').textContent=feedbackError;}
   }
   function restoreFeedback(){
     feedbackWorkspace=$('workspace').value;let draft={};
     try{draft=JSON.parse(localStorage.getItem(feedbackKey()))||{};}catch{}
-    $('feedback-text').value=draft.text||'';$('feedback-target').value=draft.target||'';
+    $('feedback-text').value=draft.text||'';
+    $('feedback-target').value=activeQuestion?.line?.id || activeQuestion?.tasks[0]?.id || draft.target || '';
     feedbackSender=submission(r=>post('/api/intakes',r),draft.pending||null);
-    $('feedback-submit').textContent=feedbackSender.pending?'重试提交':'交给 Lumos 整理';
-    $('feedback-status').textContent=feedbackSender.pending?'上次提交结果未确认，重试会核对同一份内容。':'提交后由 Lumos 整理，可在下方查看结果。';
   }
+  function latestAnswer(){return activeQuestion?questionInbox([],receipts,feedbackWorkspace).latest.get(activeQuestion.key):receipts.find(n=>n.id===generalReceipt);}
+  function answerStatus(job){
+    if(job.data.status==='done' && job.data.question_key?.startsWith('question:') && model.questions.some(q=>q.key===job.data.question_key))return 'Lumos已处理 · 问题仍待核对';
+    return answerStates[job.data.status]||'状态待核对';
+  }
+  function updateAnswerStatus(){
+    if(!$('answer-dialog').open)return;
+    const job=latestAnswer(),busy=job && ['pending','running'].includes(job.data.status),pending=feedbackSender?.pending;
+    $('feedback-target').disabled=!!activeQuestion || writing || !!pending;
+    $('feedback-text').readOnly=writing || !!pending || !!busy;
+    $('feedback-submit').disabled=writing || !state.writable || (!!busy && !pending);
+    $('close-answer').disabled=writing;
+    $('feedback-submit').textContent=pending?'重试提交':job?'提交补充':'提交答复';
+    $('feedback-status').textContent=feedbackError || (pending?'上次提交结果未确认，请重试核对同一份答复。':receiptState==='error'?'暂时无法读取处理状态；正文保留，可刷新重试。':busy?(executor==='offline'?'答复已保存；Lumos执行器未运行，恢复后接续。':answerStates[job.data.status]):'填写已知情况即可，Lumos会接续任务和安排。');
+    const host=$('answer-receipt');host.replaceChildren();
+    if(job){
+      host.append(el('strong',answerStatus(job)));
+      if(job.data.summary)host.append(el('p',job.data.summary));
+      if(job.data.error)host.append(el('p',job.data.error));
+      const original=fold('已提交的答复',host);original.append(el('p',job.data.text));
+      if(job.data.status==='failed'){
+        const retry=el('button','重试Lumos处理');retry.type='button';retry.disabled=writing || !!pending;
+        retry.onclick=()=>sendFeedback({request_id:crypto.randomUUID().replaceAll('-',''),id:job.id,expected_revision:job.data.revision});host.append(retry);
+      }
+    }
+  }
+  function openFeedback(question=null,opener=null){
+    activeQuestion=question;answerOpener=opener;feedbackError='';generalReceipt=null;restoreFeedback();
+    $('answer-title').textContent=question?.title||'补充进展';
+    $('answer-label').textContent=question?'你的答复':'补充进展或处理意见';
+    $('answer-question').textContent=question?.text||'直接写下最新情况、判断或希望如何推进。';
+    $('feedback-target').parentElement.hidden=!!question;
+    $('answer-dialog').showModal();updateAnswerStatus();$('feedback-text').focus();
+  }
+  $('open-feedback').onclick=event=>openFeedback(null,event.currentTarget);
+  $('close-answer').onclick=()=>$('answer-dialog').close();
+  $('answer-dialog').addEventListener('cancel',event=>{if(writing)event.preventDefault();});
+  $('answer-dialog').addEventListener('close',()=>{stashFeedback();(answerOpener?.isConnected?answerOpener:$('open-feedback')).focus();});
   $('feedback-text').oninput=stashFeedback;$('feedback-target').onchange=stashFeedback;
+  function watchAnswers(){
+    const workspace=$('workspace').value;
+    window.LumosIntake?.watch($('intake-list'),workspace,null,load,data=>{
+      if(workspace!==$('workspace').value)return;
+      receiptState=data?'ready':'error';if(data){receipts=data.intakes;executor=data.executor;}
+      renderQuestions();updateAnswerStatus();
+    });
+  }
+  async function sendFeedback(request,submittedText){
+    if(writing || !state?.writable)return;
+    feedbackError='';setWriting(true);updateAnswerStatus();$('feedback-status').textContent='正在提交…';
+    try{
+      const result=await feedbackSender.send(request,stashFeedback);
+      if(submittedText!==undefined && $('feedback-text').value.trim()===submittedText)$('feedback-text').value='';
+      stashFeedback();
+      if(result?.intake){receipts=[result.intake,...receipts.filter(n=>n.id!==result.intake.id)];receiptState='ready';if(!activeQuestion)generalReceipt=result.intake.id;}
+      renderQuestions();watchAnswers();
+    }catch(e){feedbackError='未能确认提交：'+e.message+' 正文已保留，请重试核对。';}
+    finally{setWriting(false);updateAnswerStatus();}
+  }
   $('feedback-form').onsubmit=async event=>{
     event.preventDefault();if(writing || !state?.writable)return;
-    const text=$('feedback-text').value.trim();if(!text && !feedbackSender.pending){$('feedback-status').textContent='请先填写进展或处理意见。';$('feedback-text').focus();return;}
+    const text=$('feedback-text').value.trim();if(!text && !feedbackSender.pending){$('feedback-status').textContent='请先填写答复。';$('feedback-text').focus();return;}
     const target=$('feedback-target').value;
-    const request=feedbackSender.pending||{request_id:crypto.randomUUID().replaceAll('-',''),workspace:feedbackWorkspace,text,title:'主线页反馈',related_ids:target?[target]:[]};
-    setWriting(true);$('feedback-submit').disabled=true;$('feedback-status').textContent='正在提交…';
-    try{
-      await feedbackSender.send(request,stashFeedback);
-      if($('feedback-text').value.trim()===request.text)$('feedback-text').value='';
-      stashFeedback();$('feedback-status').textContent='已保存，等待 Lumos 整理。原文与处理结果会保留在下方。';
-      $('intake-panel').open=true;window.LumosIntake?.watch($('intake-list'),feedbackWorkspace,null,load);
-    }catch(e){$('feedback-status').textContent='未能提交：'+e.message+' 正文已保留。';}
-    finally{setWriting(false);$('feedback-submit').disabled=false;$('feedback-submit').textContent=feedbackSender.pending?'重试提交':'交给 Lumos 整理';}
+    const request=feedbackSender.pending||{request_id:crypto.randomUUID().replaceAll('-',''),workspace:feedbackWorkspace,
+      text:activeQuestion?activeQuestion.text+'\n\n王牧楠答复：\n'+text:text,title:activeQuestion?.title.slice(0,300)||'主线页反馈',related_ids:target?[target]:[],...(activeQuestion?{question_key:activeQuestion.key}:{})};
+    await sendFeedback(request,request.id?undefined:text);
   };
+  function renderQuestions(){
+    if(!model)return;
+    const inbox=questionInbox(model.questions,receipts,$('workspace').value),host=$('attention-items');host.replaceChildren();
+    $('attention-count').textContent=inbox.primary.length?'先看 '+inbox.primary.length+' 件':'';
+    if(!inbox.primary.length)host.append(el('p',inbox.latest.size?'答复已交给Lumos，下方可查看处理进度。':'暂时没有需要回答的问题。','attention-empty'));
+    const add=(question,parent)=>{
+      const row=el('article',undefined,'attention-item'),heading=el('div',undefined,'question-heading');
+      heading.append(el('h3',question.title),el('span','待回答','answer-state'));
+      row.append(heading,el('p',question.text,'question-preview'));
+      const answer=el('button','打开回答','answer-button');answer.onclick=()=>openFeedback(question,answer);row.append(answer);parent.append(row);
+    };
+    for(const q of inbox.primary)add(q,host);
+    if(inbox.rest.length){const more=fold('其他待确认 · '+inbox.rest.length,host);for(const q of inbox.rest)add(q,more);}
+    const progress=$('answer-progress');progress.replaceChildren();
+    if(receiptState==='error')progress.append(el('p','处理状态读取失败，正在重试；请勿重复提交。','muted'));
+    else if(receiptState==='loading')progress.append(el('p','正在核对已提交的答复…','muted'));
+    if(inbox.latest.size){
+      const jobs=[...inbox.latest.values()],working=jobs.filter(job=>['pending','running','failed'].includes(job.data.status)).length;
+      const section=fold('答复处理进度 · '+inbox.latest.size+(working?' · '+working+' 件待处理或重试':' · 处理回执可查看'),progress);section.open=working>0;
+      for(const [key,job] of inbox.latest){
+        const row=el('div',undefined,'answer-progress-row');row.append(el('span',job.data.title),el('span',answerStatus(job),'answer-state'));
+        const view=el('button','查看答复与结果');view.onclick=()=>openFeedback(model.questions.find(q=>q.key===key)||{key,title:job.data.title,text:'这份答复的原文与处理结果如下。可继续补充新情况。',tasks:[],line:job.data.related_ids?.length===1?model.entries.find(e=>e.line.id===job.data.related_ids[0])?.line:null},view);row.append(view);section.append(row);
+      }
+    }
+  }
   function taskLink(task, progress=false) {
     const link=el('a',undefined,'task-link');
     link.href='/tasks?task='+encodeURIComponent(task.id)+'&return='+encodeURIComponent(window.location.pathname+window.location.search);
@@ -174,7 +261,6 @@ if (typeof document !== 'undefined') {
   }
   function render() {
     model=managementModel(state,$('workspace').value);
-    $('attention-count').textContent=model.questions.length?String(model.questions.length):'';
     const target=$('feedback-target'),selected=target.value;target.replaceChildren(new Option('综合反馈',''));
     for(const e of model.entries)target.append(new Option(e.line.data.title,e.line.id));
     for(const issue of model.issues.filter(i=>!i.line))target.append(new Option(issue.title,issue.tasks[0].id));
@@ -183,25 +269,7 @@ if (typeof document !== 'undefined') {
     $('feedback-submit').disabled=!state.writable;
     const query=$('search').value.trim();$('clear-search').hidden=!query;
     $('attention').hidden=deliveryView || !!query;
-    $('attention-items').replaceChildren();
-    if(!model.questions.length)$('attention-items').append(el('p','暂时没有需要回答的问题。Lumos继续按节点跟进。','attention-empty'));
-    let more;
-    for(const [index,question] of model.questions.entries()) {
-      if(index===3)more=fold('其余待确认事项 · '+(model.questions.length-3),$('attention-items'));
-      const row=el('article',undefined,'attention-item');
-      row.append(el('h3',question.title),el('p',question.text,'question-text'));
-      const answer=el('button','回答这件事','answer-button');
-      answer.onclick=()=>{
-        $('feedback-target').value=question.line?.id || question.tasks[0]?.id || '';
-        const text=$('feedback-text');
-        const prompt=question.text+'\n答复：';
-        if(!text.value.includes(prompt))text.value+=(text.value?'\n\n':'')+prompt;
-        stashFeedback();text.focus();
-      };
-      row.append(answer);
-      if(question.tasks.length){const evidence=fold('相关任务 · '+question.tasks.length,row);for(const t of question.tasks)evidence.append(taskLink(t));}
-      (index<3?$('attention-items'):more).append(row);
-    }
+    renderQuestions();
     const near=$('near-term');near.replaceChildren();near.hidden=deliveryView || !!query;
     near.append(el('h2','未来两周的阶段节点'),el('p',state.today+' 起 · 明确约定与Lumos目标分别标注','muted'));
     if(model.upcoming.length)dateGroups(model.upcoming,near);else near.append(el('p','暂无已排定的阶段节点；需要明确的关键时间会在问题中提出。','muted'));
@@ -245,6 +313,7 @@ if (typeof document !== 'undefined') {
     if(past.length){const closed=fold('已结束独立事项 · '+past.length,$('independent-items'));for(const t of past)closed.append(taskLink(t));}
     $('overview-date').textContent=state.today;
     $('sync').textContent='记录日期 '+state.today+' · 已读取最新版本';
+    updateAnswerStatus();
   }
   async function read(url){const r=await fetch(url);const data=await r.json();if(!r.ok)throw new Error(data.error||'读取失败');return data;}
   async function load() {
@@ -252,7 +321,7 @@ if (typeof document !== 'undefined') {
     try {
       const fresh=await read('/api/tasks');
       if(!Array.isArray(fresh.mainlines))throw new Error('当前服务尚未加载主线功能，请重启 Lumos 服务后刷新。');
-      state=fresh;render(); if(window.LumosIntake) window.LumosIntake.watch($('intake-list'),$('workspace').value,null,load);
+      state=fresh;render(); watchAnswers();
       $('message').textContent=state.integrity?.drafts_or_missing_working_copies?.length?'存在未吸收的工作文档改动，当前展示正式保存记录。':'';
       const id=new URLSearchParams(window.location.search).get('line');
       if(id && model.entries.some(e=>e.line.id===id))await openLine(id);
@@ -286,7 +355,7 @@ if (typeof document !== 'undefined') {
   }
   function closed(){detailRequest++;const url=new URL(window.location.href);url.searchParams.delete('line');history.replaceState(null,'',url);}
   $('close-detail').onclick=()=>$('mainline-detail').close();$('mainline-detail').addEventListener('close',closed);
-  $('workspace').onchange=()=>{if($('mainline-detail').open)$('mainline-detail').close();const url=new URL(window.location.href);url.searchParams.delete('line');history.replaceState(null,'',url);remember();if(state)render();if(window.LumosIntake)window.LumosIntake.watch($('intake-list'),$('workspace').value,null,load);};
+  $('workspace').onchange=()=>{if($('answer-dialog').open)$('answer-dialog').close();activeQuestion=null;if($('mainline-detail').open)$('mainline-detail').close();const url=new URL(window.location.href);url.searchParams.delete('line');history.replaceState(null,'',url);remember();if(state)render();receipts=[];receiptState='loading';renderQuestions();watchAnswers();};
   $('refresh').onclick=load;$('search').oninput=()=>{if(state)render();};$('clear-search').onclick=()=>{$('search').value='';render();$('search').focus();};
   $(deliveryView?'nav-delivery':'view-summary').setAttribute('aria-current','page');
   if(deliveryView){$('page-title').textContent='阶段交付';document.title='Lumos · 主线交付';$('page-description').textContent='跨主线按日期查看阶段成果；已过节点单独核对，原计划始终保留。';}

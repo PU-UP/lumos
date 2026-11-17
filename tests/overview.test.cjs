@@ -93,11 +93,13 @@ test('Agent targets appear on the timeline without replacing promises or becomin
 
 const vm=require('node:vm');
 class Control {
-  constructor(tag='div'){this.tag=tag;this.children=[];this.value='';this.open=false;this.textContent='';}
+  constructor(tag='div'){this.tag=tag;this.children=[];this.value='';this.open=false;this.textContent='';this.parentElement={};this.events={};}
   append(...nodes){this.children.push(...nodes);}
   replaceChildren(...nodes){this.children=nodes;}
   setAttribute(){}
-  addEventListener(){}
+  addEventListener(name,fn){this.events[name]=fn;}
+  showModal(){this.open=true;}
+  close(){this.open=false;this.events.close?.();}
   focus(){}
   get options(){return this.children;}
   requestSubmit(){this.saving=this.onsubmit({preventDefault(){}});}
@@ -106,13 +108,14 @@ function reviewPage(post){
   const ids=new Map(),get=id=>{if(!ids.has(id))ids.set(id,new Control());return ids.get(id);};
   get('workspace').value='lingguang';
   const snapshot=state([],[line('m',[])]);snapshot.seq=1;snapshot.writable=true;
+  const drafts=new Map();let onUpdate;
   const world={document:{getElementById:get,createElement:t=>new Control(t),querySelector:()=>new Control()},
-    window:{location:{pathname:'/',search:''}},URLSearchParams,localStorage:{getItem:()=>null,setItem(){}},
+    window:{location:{pathname:'/',search:''},LumosIntake:{watch:(host,workspace,note,finished,update)=>{onUpdate=update;}}},URLSearchParams,localStorage:{getItem:k=>drafts.get(k)||null,setItem:(k,v)=>drafts.set(k,v)},
     Option:function(text,value){this.textContent=text;this.value=value;},crypto:{randomUUID:()=> 'a'.repeat(32)},
     fetch:async(url,options)=>{if(options)return post(JSON.parse(options.body),snapshot);return {ok:true,json:async()=>snapshot};}};
   vm.createContext(world);vm.runInContext(fs.readFileSync('web/overview.js','utf8'),world);
   const controls=()=>{const walk=n=>[n,...n.children.flatMap(walk)];const form=walk(get('mainlines')).find(n=>n.tag==='form');return {form,date:form.children[0].children[0],save:form.children[1],message:form.children[2]};};
-  return {get,controls,snapshot};
+  return {get,controls,snapshot,receipts:data=>onUpdate(data)};
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 test('date change saves automatically and survives a reload including explicit clearing',async()=>{
@@ -164,12 +167,56 @@ test('saved questions use exact task numbers and never guess a line from batch d
   assert.equal(managementModel(s,'lingguang').questions[0].line,undefined);
 });
 
-test('answering a question preserves existing text and does not duplicate the prompt',async()=>{
+test('answer dialog keeps separate drafts and restores them after closing',async()=>{
   const p=reviewPage();await settle();
-  p.snapshot.open_questions=[{workspace:'lingguang',question:'阶段结果是什么？',related_ids:['m']}];
-  p.get('feedback-text').value='已经写下的进展';p.get('search').oninput();
+  p.snapshot.open_questions=[{intake_id:'old',index:0,workspace:'lingguang',question:'阶段结果是什么？',related_ids:['m']}];
+  p.get('feedback-text').value='原来的综合草稿';p.get('feedback-text').oninput();p.get('search').oninput();
   const row=p.get('attention-items').children[0],answer=row.children.find(n=>n.tag==='button');
-  answer.onclick();answer.onclick();
-  assert.equal(p.get('feedback-text').value,'已经写下的进展\n\n阶段结果是什么？\n答复：');
+  answer.onclick();assert.equal(p.get('answer-dialog').open,true);assert.equal(p.get('feedback-text').value,'');
+  p.get('feedback-text').value='这件事的答复';p.get('feedback-text').oninput();p.get('answer-dialog').close();answer.onclick();
+  assert.equal(p.get('feedback-text').value,'这件事的答复');
   assert.equal(p.get('feedback-target').value,'m');
+  p.get('answer-dialog').close();p.get('open-feedback').onclick({});assert.equal(p.get('feedback-text').value,'原来的综合草稿');
+});
+
+test('submitted replies leave the waiting list and show real processing states',async()=>{
+  let posted;
+  const p=reviewPage(async request=>{posted=request;return {ok:true,json:async()=>({intake:{id:'reply',data:{...request,status:'pending',created_at:'2026-11-17'}}})};});await settle();
+  p.snapshot.open_questions=[{intake_id:'old',index:0,workspace:'lingguang',question:'阶段结果？',related_ids:['m']}];p.get('search').oninput();
+  p.get('attention-items').children[0].children.find(n=>n.tag==='button').onclick();
+  p.get('feedback-text').value='已完成阶段测试';await p.get('feedback-form').onsubmit({preventDefault(){}});
+  assert.equal(posted.question_key,'question:old:0');assert.match(posted.text,/阶段结果？\n\n王牧楠答复：\n已完成阶段测试/);
+  assert.equal(p.get('attention-items').children.some(n=>n.tag==='article'),false);
+  assert.equal(p.get('feedback-submit').disabled,true);assert.match(p.get('answer-receipt').children[0].textContent,/待Lumos处理/);
+  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'running'}}]});assert.match(p.get('answer-receipt').children[0].textContent,/正在处理/);
+  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'done',summary:'任务已接续'}}]});assert.equal(p.get('answer-receipt').children[0].textContent,'Lumos已处理 · 问题仍待核对');assert.equal(p.get('feedback-submit').disabled,false);
+  p.snapshot.open_questions=[];p.get('search').oninput();
+  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'done',summary:'任务已接续'}}]});assert.equal(p.get('answer-receipt').children[0].textContent,'Lumos已处理');
+  p.receipts(null);assert.match(p.get('feedback-status').textContent,/无法读取/);
+});
+
+test('uncertain answer submissions preserve text and retry exactly the same request',async()=>{
+  const posts=[];const p=reviewPage(async request=>{posts.push(request);throw new Error('lost response');});await settle();
+  p.get('open-feedback').onclick({});p.get('feedback-text').value='不能丢失';
+  await p.get('feedback-form').onsubmit({preventDefault(){}});p.get('answer-dialog').close();p.get('open-feedback').onclick({});
+  assert.equal(p.get('feedback-text').value,'不能丢失');assert.equal(p.get('feedback-text').readOnly,true);
+  await p.get('feedback-form').onsubmit({preventDefault(){}});assert.deepEqual(posts[0],posts[1]);assert.match(p.get('feedback-status').textContent,/未能确认/);
+});
+
+test('an unconfirmed submission can be reconciled even when its receipt is already pending',async()=>{
+  let posted;
+  const p=reviewPage(async request=>{posted=request;throw new Error('lost response');});await settle();
+  p.snapshot.open_questions=[{intake_id:'old',index:0,workspace:'lingguang',question:'结果？',related_ids:['m']}];p.get('search').oninput();
+  p.get('attention-items').children[0].children.find(n=>n.tag==='button').onclick();p.get('feedback-text').value='阶段结果';
+  await p.get('feedback-form').onsubmit({preventDefault(){}});
+  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'pending'}}]});
+  assert.equal(p.get('feedback-submit').disabled,false);assert.equal(p.get('feedback-submit').textContent,'重试提交');
+});
+
+test('question inbox prioritizes different mainlines and matches latest receipts only within workspace',()=>{
+  const {questionInbox}=require('../web/overview.js');
+  const questions=[{key:'a',title:'A'},{key:'b',title:'A'},{key:'c',title:'C'},{key:'d',title:'D'}];
+  assert.deepEqual(questionInbox(questions,[],'lingguang').primary.map(q=>q.key),['a','c','d']);
+  const jobs=[{id:'old',data:{workspace:'lingguang',question_key:'a',created_at:'2026-11-16',status:'failed'}},{id:'new',data:{workspace:'lingguang',question_key:'a',created_at:'2026-11-17',status:'pending'}},{id:'foreign',data:{workspace:'lumos',question_key:'c',created_at:'2026-11-18'}}];
+  const inbox=questionInbox(questions,jobs,'lingguang');assert.equal(inbox.latest.get('a').id,'new');assert.deepEqual(inbox.primary.map(q=>q.key),['b','c','d']);
 });

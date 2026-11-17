@@ -54,6 +54,15 @@ test('a completed background job refreshes the reading view once',async()=>{
   assert.equal(finished,1);
 });
 
+test('receipt updates report pending, failed reads and recovery without losing polling',async()=>{
+  let count=0;const updates=[];
+  const p=page(async()=>{if(++count===2)throw new Error('offline');return response(data([job(count===1?'pending':'done')]));});
+  await p.api.watch(p.host,'lingguang',null,null,d=>updates.push(d));
+  await [...p.timers.values()][0]();
+  assert.equal(updates[0].intakes[0].data.status,'pending');assert.equal(updates[1],null);
+  await [...p.timers.values()].at(-1)();assert.equal(updates[2].intakes[0].data.status,'done');
+});
+
 test('feedback older than ten entries remains readable with subject, time and full original text',async()=>{
   const jobs=Array.from({length:12},(_,i)=>({...job('done'),id:'job-'+i,data:{...job('done').data,text:'原文 '+i,created_at:'2026-11-16T01:00:00Z',summary:'处理 '+i},subjects:[{title:'对应任务 '+i}]}));
   const p=page(async()=>response(data(jobs)));await p.api.watch(p.host,'lingguang');

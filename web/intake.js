@@ -3,13 +3,14 @@ window.LumosIntake = (() => {
   const labels={pending:'待整理',running:'正在整理',failed:'整理失败，原文保留',needs_review:'已整理，有待核对事项',done:'已整理',obsolete:'原文已更新，请整理新版本'};
   const el=(tag,text)=>{const n=document.createElement(tag);n.textContent=text;return n;};
   let timer,generation=0;
-  async function watch(host,workspace,noteId=null,onFinished=null) {
+  async function watch(host,workspace,noteId=null,onFinished=null,onUpdate=null) {
     clearTimeout(timer);const current=++generation;let wasWorking=false;
     async function refresh() {
       try {
         const response=await fetch('/api/intakes?workspace='+encodeURIComponent(workspace));const data=await response.json();
         if(current!==generation)return;
         if(!response.ok)throw new Error(data.error||'读取失败');
+        if(onUpdate)onUpdate(data);
         host.replaceChildren();
         host.append(el('p',!data.enabled?'此空间尚未启用自主整理。':data.executor==='offline'?'整理执行器未运行；内容会保留为待整理。':'结束记录后自动整理；任务及原文可追溯。'));
         const all=data.intakes.filter(n=>!noteId || n.data.note?.id===noteId);
@@ -48,7 +49,7 @@ window.LumosIntake = (() => {
         if(working)timer=setTimeout(refresh,5000);
         else if(wasWorking && onFinished)await onFinished();
         wasWorking=working;
-      }catch(e){if(current===generation)host.replaceChildren(el('p','整理结果读取失败：'+e.message));}
+      }catch(e){if(current===generation){host.replaceChildren(el('p','整理结果读取失败：'+e.message));if(onUpdate)onUpdate(null);timer=setTimeout(refresh,5000);}}
     }
     await refresh();
   }

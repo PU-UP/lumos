@@ -28,3 +28,40 @@
 @media(max-width:700px){#near-term .delivery-date,#near-term .task-link{grid-column:1}}
 #mainlines>.delivery-group{display:grid;grid-template-columns:130px minmax(0,1fr);gap:8px 24px;padding:18px 0;border-top:1px solid var(--line)}#mainlines>.delivery-group>.delivery-date{grid-column:1;margin:0;padding:6px 0;font-size:16px;font-weight:600}#mainlines>.delivery-group>.task-link{grid-column:2;margin:0;padding:6px 0 12px}.management .task-link strong{font-size:15px}.management .task-meta{font-size:12px;line-height:1.6}
 @media(max-width:700px){#mainlines>.delivery-group{grid-template-columns:1fr;gap:4px}#mainlines>.delivery-group>.delivery-date,#mainlines>.delivery-group>.task-link{grid-column:1}}
+
+/* A focused answer keeps its question, draft and processing receipt together. */
+.management:has(#answer-dialog[open]){overflow:hidden}
+.management .attention-body{display:block}
+.question-toolbar{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:8px}
+.question-toolbar button{flex-shrink:0;font-size:13px;min-height:40px}
+.question-toolbar .attention-description{margin:0}
+.question-heading{display:flex;align-items:center;gap:16px;justify-content:space-between}
+.question-heading h3{margin:0}
+.answer-state{font-size:12px;color:var(--accent);flex-shrink:0}
+.question-preview{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:14px;max-width:85ch}
+.attention-item .answer-button{min-height:36px;margin:6px 0 0}
+#attention-items>details{margin-top:12px;padding-top:14px;border-top:1px solid var(--line);font-size:13px}
+#answer-progress:empty{display:none}
+#answer-progress{margin-top:18px;font-size:13px}
+#answer-progress summary{padding:8px 0;font-weight:600}
+.answer-progress-row{display:flex;align-items:center;gap:16px;padding:10px 0;border-top:1px solid var(--line)}
+.answer-progress-row>span:first-child{flex:1;overflow-wrap:anywhere}
+.answer-progress-row button{font-size:12px;min-height:36px}
+#answer-dialog{position:fixed;inset:0;margin:auto;width:min(760px,calc(100vw - 32px));max-width:none;max-height:90dvh;padding:28px;border:1px solid var(--line);border-radius:14px;overflow:auto;background:var(--white);color:var(--ink)}
+#answer-dialog::backdrop{background:#152f3b80}
+.answer-dialog-heading{display:flex;align-items:start;justify-content:space-between;gap:20px}
+.answer-dialog-heading h2{font-size:22px;margin:0;line-height:1.5}
+.answer-dialog-heading button{flex-shrink:0;min-height:40px}
+#answer-question{font-size:15px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere;margin:18px 0}
+#answer-dialog #feedback-form{border-top:1px solid var(--line);padding:18px 0 0;margin:0}
+#answer-dialog #feedback-text{width:100%;min-height:220px;font-size:16px;resize:vertical}
+#answer-dialog #feedback-text:read-only{background:#f0f4f5;color:var(--muted)}
+#answer-dialog .feedback-actions{display:flex;flex-direction:row;align-items:center;justify-content:space-between}
+#answer-dialog .feedback-actions p{max-width:48ch}
+#answer-dialog .feedback-actions button{min-height:44px;align-self:auto}
+#answer-receipt:empty{display:none}
+#answer-receipt{margin-top:18px;padding:16px;background:#edf5f5;border-radius:8px;font-size:14px;line-height:1.7}
+#answer-receipt p{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}
+#answer-receipt summary{margin-top:10px;font-size:13px}
+.draft-hint{font-size:12px;color:var(--muted);margin:16px 0 0}
+@media(max-width:700px){.question-toolbar{align-items:start;gap:12px}.question-heading{align-items:start}.answer-progress-row{flex-wrap:wrap;gap:8px}.answer-progress-row>span:first-child{flex-basis:100%}#answer-dialog{padding:20px;max-height:94dvh;width:calc(100vw - 20px)}.answer-dialog-heading h2{font-size:20px}#answer-dialog .feedback-actions{flex-direction:column;align-items:stretch}#answer-dialog .feedback-actions button{width:100%}#answer-dialog #feedback-text{min-height:180px}}

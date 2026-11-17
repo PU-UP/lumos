@@ -59,6 +59,30 @@ class IntakeTest(BaseStoreCase):
         return {'id': job['id'], 'claim': job['data']['claim'], 'basis': context['basis'],
                 'plan': {'summary': '模拟处理回执', 'questions': [], 'updates': []}}
 
+    def test_question_receipt_key_survives_processing_and_replay_without_resolving_questions(self):
+        first = self.job()
+        first['plan']['questions'] = ['阶段结果？']
+        apply_intake(self.store, first)
+        request = {'request_id': uuid.uuid4().hex, 'text': '阶段结果待核对', 'source': self.source,
+                   'question_key': 'question:'+first['id']+':0'}
+        saved = save_intake(self.store, request)['intake']
+        self.assertTrue(save_intake(self.store, request)['replayed'])
+        job = claim_intake(self.store, saved['id'])
+        context = intake_context(self.store, job['id'])
+        self.assertEqual(context['intake']['data']['question_key'], request['question_key'])
+        evidence = {'id': job['id']+'-basis', 'kind': 'evidence', 'mode': 'reported',
+                    'changes': {'context': 'mapping', 'title': '模拟阶段答复', 'text': request['text']},
+                    'excerpt': request['text'], 'reason': '仅保存答复，旧问题未解决'}
+        apply_intake(self.store, {'id': job['id'], 'claim': job['data']['claim'], 'basis': context['basis'],
+                                 'plan': {'summary': '仍需核对', 'questions': [], 'updates': [evidence], 'resolutions': []}})
+        self.assertEqual(len(intake_context(self.store, job['id'])['open_questions']), 1)
+        result = next(n for n in list_intakes(self.store)['intakes'] if n['id'] == job['id'])
+        self.assertEqual(result['data']['status'], 'done')
+        self.assertEqual(result['data']['question_key'], request['question_key'])
+        for key in (None, [], 'x'*501):
+            with self.assertRaisesRegex(lumos.Error, 'Invalid question key'):
+                save_intake(self.store, {**request, 'request_id': uuid.uuid4().hex, 'question_key': key})
+
     def item(self, ident='talk', kind='action', changes=None, mode='reported'):
         return {'id': ident, 'kind': kind, 'changes': changes or {'progress': '已讨论，验证待接续'},
                 'mode': mode, 'reason': '模拟原文和既有职责依据', 'excerpt': '同步讨论已完成。'}
