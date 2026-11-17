@@ -13,19 +13,24 @@ function chatReceipt(job) {
   const changes=(job.targets||[]).filter(t=>['action','mainline','person'].includes(t.kind));
   return (changes.length?'已保存 '+changes.length+' 项工作记录':d.destinations?.length?'已保存依据或问题答复':'仅讨论 · 未修改工作记录')+(d.status==='needs_review'?' · 有待确认项':'');
 }
-function suggestedTasks(state,workspace){
+const chatWorkModel=typeof module!=='undefined'?require('./work-model.js'):window.LumosWorkModel;
+function discussionItems(state,workspace,query='',type='all'){
   const contexts=new Map((state.contexts||[]).map(c=>[c.id,c.data]));
-  const end=new Date(state.today+'T00:00:00Z');end.setUTCDate(end.getUTCDate()+14);
-  if(Number.isNaN(end.getTime()))return {upcoming:[],overdue:[]};
-  const until=end.toISOString().slice(0,10),milestones=new Set((state.mainlines||[]).flatMap(l=>l.data.milestone_ids||[]));
-  const candidates=(state.tasks||[]).filter(t=>{const c=contexts.get(t.data.context);return c && ['active','waiting'].includes(c.status||'active') && (c.workspace||(t.data.context==='lumos-maintenance'?'lumos':'lingguang'))===workspace && !['done','cancelled'].includes(t.data.status);}).map(t=>{
-    const agreed=/^\d{4}-\d{2}-\d{2}$/.test(t.data.due||'');return {...t,date:agreed?t.data.due:t.data.planned_due||'',dateLabel:agreed?'约定交付':'Lumos目标'};
-  }).filter(t=>/^\d{4}-\d{2}-\d{2}$/.test(t.date));
-  const order=(a,b)=>a.date.localeCompare(b.date)||Number(milestones.has(b.id))-Number(milestones.has(a.id))||a.id.localeCompare(b.id);
-  return {upcoming:candidates.filter(t=>t.date>=state.today && t.date<=until).sort(order).slice(0,6),
-          overdue:candidates.filter(t=>t.date<state.today).sort((a,b)=>b.date.localeCompare(a.date)||a.id.localeCompare(b.id)).slice(0,3)};
+  const terms=query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return [...(state.mainlines||[]).map(n=>({...n,kind:'mainline'})),...(state.tasks||[]).map(n=>({...n,kind:'action'}))].filter(n=>{
+    const c=contexts.get(n.data.context),d=n.data;
+    return c && ['active','waiting'].includes(c.status||'active') && (c.workspace||(n.data.context==='lumos-maintenance'?'lumos':'lingguang'))===workspace
+      && (n.kind==='mainline'?d.status!=='archived':!['done','cancelled'].includes(d.status)) && (type==='all'||n.kind===type)
+      && terms.every(term=>[n.short_id,d.title,d.text,d.owner,d.summary,d.progress,d.next_step,d.goal].join(' ').toLowerCase().includes(term));
+  }).sort((a,b)=>Number(b.kind==='mainline')-Number(a.kind==='mainline') || (a.short_id||a.data.title||'').localeCompare(b.short_id||b.data.title||'','zh-CN',{numeric:true}));
 }
-if(typeof module!=='undefined')module.exports={chatTurns,chatReceipt,suggestedTasks};
+function discussionQuestions(state,jobs,workspace){
+  if(!state?.today)return {primary:[],rest:[],later:[]};
+  const current=chatWorkModel.managementModel({...state,contexts:state.contexts||[],tasks:state.tasks||[]},workspace);
+  return chatWorkModel.questionInbox(current.questions.filter(q=>q.line),jobs,workspace);
+}
+const subjectTitle=n=>(n.kind==='mainline'?'主线 · ':n.short_id?n.short_id+' · ':'')+(n.data.title||n.data.text);
+if(typeof module!=='undefined')module.exports={chatTurns,chatReceipt,discussionItems,discussionQuestions};
 if(typeof document!=='undefined'){
   const $=id=>document.getElementById(id),el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
   const uuid=()=>crypto.randomUUID().replaceAll('-','');
@@ -33,31 +38,47 @@ if(typeof document!=='undefined'){
   let workspace=url.searchParams.get('workspace')==='lumos'?'lumos':'lingguang',chatId=url.searchParams.get('id');
   try{chatId ||= localStorage.getItem('lumos.chat.active.'+workspace);}catch{}chatId ||= uuid();
   let jobs=[],token='',enabled=false,executor='',loaded=false,busy=false,pending=null,timer,generation=0,signature='',listSignature='',error='';
-  let selected=[],taskState=null,taskError='',taskRead=0,expanded=false;
+  let selected=[],taskState=null,taskError='',taskRead=0,expanded=false,selectedQuestion=null;
   const draftKey=()=>`lumos.chat.${workspace}.${chatId}`;
-  function saveDraft(){localStorage.setItem(draftKey(),JSON.stringify({text:$('chat-text').value,pending,selected}));}
-  function restoreDraft(){let d={};try{d=JSON.parse(localStorage.getItem(draftKey())||'{}')||{};}catch{}pending=d.pending||null;selected=Array.isArray(d.selected)?d.selected.filter(t=>typeof t.id==='string'&&typeof t.title==='string').slice(0,20):[];$('chat-text').value=d.text||'';}
+  function saveDraft(){localStorage.setItem(draftKey(),JSON.stringify({text:$('chat-text').value,pending,selected,selectedQuestion}));}
+  function restoreDraft(){let d={};try{d=JSON.parse(localStorage.getItem(draftKey())||'{}')||{};}catch{}pending=d.pending||null;selected=Array.isArray(d.selected)?d.selected.filter(t=>typeof t.id==='string'&&typeof t.title==='string').slice(0,20):[];selectedQuestion=d.selectedQuestion?.key && Array.isArray(d.selectedQuestion.related_ids)?d.selectedQuestion:null;$('chat-text').value=d.text||'';}
+  function changedSelection(){try{saveDraft();}catch{error='浏览器无法保留草稿，请勿关闭页面。';}signature='';render();if($('subject-picker').open)renderPicker();else $('chat-text').focus();}
   function chooseTask(task){
     if(busy||pending)return;
     if(selected.some(t=>t.id===task.id))selected=selected.filter(t=>t.id!==task.id);
-    else if(selected.length<20)selected.push({id:task.id,title:(task.short_id?task.short_id+' · ':'')+task.data.text});
-    try{saveDraft();}catch{error='浏览器无法保留草稿，请勿关闭页面。';}
-    signature='';render();$('chat-text').focus();
+    else if(new Set([...selected.map(t=>t.id),...(selectedQuestion?.related_ids||[]),task.id]).size<=20)selected.push({id:task.id,title:subjectTitle(task)});
+    else{error='每轮最多选择20个讨论对象，请先移除部分选择。';controls();return;}
+    changedSelection();
+  }
+  function chooseQuestion(q){
+    if(busy||pending)return;
+    if(new Set([...selected.map(t=>t.id),q.line.id]).size>20){error='每轮最多选择20个讨论对象，请先移除部分选择。';controls();return;}
+    selectedQuestion={key:q.key,title:q.title,text:q.text,related_ids:[q.line.id]};changedSelection();
+  }
+  function renderPicker(){
+    const host=$('subject-results');host.replaceChildren();
+    if(!taskState){$('subject-count').textContent=taskError||'正在读取当前任务与主线…';return;}
+    const options=discussionItems(taskState,workspace,$('subject-search').value,$('subject-type').value||'all');
+    $('subject-count').textContent='找到 '+options.length+' 项 · 已选 '+selected.length+' 项';
+    if(!options.length)host.append(el('p','没有匹配的当前事项，试试其他关键词或切换查看范围。','muted'));
+    for(const n of options){const b=el('button',undefined,'task-prompt');b.type='button';b.setAttribute('aria-pressed',String(selected.some(t=>t.id===n.id)));b.disabled=busy||!!pending;
+      b.append(el('span',subjectTitle(n)),el('small',n.kind==='mainline'?(n.data.phase||n.data.summary||'主线'):[chatWorkModel.mainlineLabels[n.data.status],n.data.owner||'负责人待定',n.data.due&&n.data.due!=='long_term'?'约定交付 '+n.data.due:n.data.planned_due?'Lumos目标 '+n.data.planned_due:n.data.due==='long_term'?'长期':'未约定交付'].join(' · ')));
+      b.onclick=()=>chooseTask(n);host.append(b);
+    }
   }
   function suggestions(host){
-    const welcome=el('div',undefined,'chat-welcome');welcome.append(el('h2','从近期任务开始'),el('p','可选多个任务，再写进展、问题或判断；也可以直接自由表述。'));
-    if(!taskState)welcome.append(el('p',taskError||'正在读取近期任务…','muted'));
+    const welcome=el('div',undefined,'chat-welcome');welcome.append(el('h2','Lumos 需要你回答'),el('p','先接续主线的关键问题；其他事情可从「搜索任务 / 主线」选择，也可以自由表述。'));
+    if(!taskState||!loaded)welcome.append(el('p',taskError||'正在核对当前问题与已提交的答复…','muted'));
     else{
-      const options=suggestedTasks(taskState,workspace);
-      const cards=(tasks,parent)=>{for(const t of tasks){const b=el('button',undefined,'task-prompt');b.type='button';b.setAttribute('aria-pressed',String(selected.some(s=>s.id===t.id)));b.disabled=busy||!!pending;b.append(el('span',(t.short_id?t.short_id+' · ':'')+t.data.text),el('small',t.dateLabel+' '+t.date+(t.date<taskState.today?' · 结果待核对':'')+(t.data.owner?' · '+t.data.owner:'')));b.onclick=()=>chooseTask(t);parent.append(b);}};
-      welcome.append(el('p','未来两周 · '+taskState.today+' 起','prompt-period'));
-      const grid=el('div',undefined,'task-prompts');cards(options.upcoming,grid);welcome.append(grid);
-      if(!options.upcoming.length)welcome.append(el('p','当前空间未来两周暂无已安排的交付节点。','muted'));
-      if(options.overdue.length){const fold=el('details',undefined,'overdue-prompts');fold.append(el('summary','原节点已过，结果待核对 · '+options.overdue.length));cards(options.overdue,fold);welcome.append(fold);}
+      const inbox=discussionQuestions(taskState,jobs,workspace);
+      const cards=(questions,parent)=>{for(const q of questions){const b=el('button',undefined,'question-prompt');b.type='button';b.setAttribute('aria-pressed',String(selectedQuestion?.key===q.key));b.disabled=busy||!!pending;b.append(el('strong',q.title),el('span',q.text),el('small',q.timingReason+' · 点击回答'));b.onclick=()=>chooseQuestion(q);parent.append(b);}};
+      cards(inbox.primary,welcome);
+      if(!inbox.primary.length)welcome.append(el('p','当前没有需要立即回答的主线问题。可以搜索并选择你想讨论的事项。','muted'));
+      for(const [label,questions] of [['其他当前问题',inbox.rest],['后续再跟进',inbox.later]])if(questions.length){const fold=el('details',undefined,'overdue-prompts');fold.append(el('summary',label+' · '+questions.length));cards(questions,fold);welcome.append(fold);}
     }
     host.append(welcome);
   }
-  async function loadTasks(){const current=++taskRead;try{const r=await fetch('/api/tasks'),data=await r.json();if(current!==taskRead)return;if(!r.ok)throw new Error();taskState=data;taskError='';}catch{if(current!==taskRead)return;taskState=null;taskError='近期任务暂时读取失败，可直接写下任务名称和进展。';}signature='';render();}
+  async function loadTasks(){const current=++taskRead;try{const r=await fetch('/api/tasks'),data=await r.json();if(current!==taskRead)return;if(!r.ok)throw new Error();taskState=data;taskError='';}catch{if(current!==taskRead)return;taskState=null;taskError='任务与主线暂时读取失败，可直接写下名称和进展。';}signature='';render();if($('subject-picker').open)renderPicker();}
   function address(){const u=new URL(window.location.href);u.searchParams.set('workspace',workspace);u.searchParams.set('id',chatId);history.replaceState(null,'',u);try{localStorage.setItem('lumos.chat.active.'+workspace,chatId);}catch{}}
   function controls(){
     const latest=chatTurns(jobs,chatId).at(-1),waiting=latest && ['pending','running','failed'].includes(latest.data.status);
@@ -65,9 +86,11 @@ if(typeof document!=='undefined'){
     $('send-chat').disabled=!loaded||!enabled||busy||(!pending && (waiting||!$('chat-text').value.trim()));
     $('send-chat').textContent=pending?'重试确认':busy?'发送中…':'发送';
     $('chat-model').disabled=busy||!!pending;
-    $('chat-workspace').disabled=busy;$('new-chat').disabled=busy;
+    $('chat-workspace').disabled=busy;$('new-chat').disabled=busy;$('choose-subjects').disabled=busy||!!pending;
+    const question=$('selected-question');question.replaceChildren();
+    if(selectedQuestion){question.append(el('strong','正在回答 · '+selectedQuestion.title),el('p',selectedQuestion.text));const clear=el('button','取消问题选择');clear.type='button';clear.disabled=busy||!!pending;clear.onclick=()=>{selectedQuestion=null;changedSelection();};question.append(clear);}
     const picked=$('selected-tasks');picked.replaceChildren();
-    for(const t of selected){const b=el('button',t.title+' ×','selected-task');b.type='button';b.disabled=busy||!!pending;b.setAttribute('aria-label','移除讨论任务：'+t.title);b.onclick=()=>chooseTask({id:t.id});picked.append(b);}
+    for(const t of selected){const b=el('button',t.title+' ×','selected-task');b.type='button';b.disabled=busy||!!pending;b.setAttribute('aria-label','移除讨论对象：'+t.title);b.onclick=()=>chooseTask({id:t.id});picked.append(b);}
     $('chat-status').textContent=error||(pending?'上次发送结果未确认，重试会核对同一条消息，不会重复创建。':!loaded?'正在读取对话…':!enabled?'此空间尚未启用自主整理。':executor==='offline'?'Codex 执行器未运行；消息可保存，恢复后接续。':waiting?latest.data.status==='failed'?'本轮失败，原话已保留。请在消息下方重试。':'消息已保存，可离开页面；答复完成后会保留在此处。':'明确进展自动保存；每轮答复下方可查看实际更新。');
   }
   function render(){
@@ -80,7 +103,7 @@ if(typeof document!=='undefined'){
     }
     const turns=chatTurns(jobs,chatId),latest=turns.at(-1);
     $('chat-title').textContent=turns[0]?.data.title||'从一件正在推进的事开始';
-    const nextSignature=JSON.stringify(turns);
+    const nextSignature=JSON.stringify(turns)+(turns.length?'':JSON.stringify(jobs.map(n=>[n.id,n.data.revision]))+loaded);
     if(nextSignature!==signature){
       const host=$('messages'),bottom=host.scrollHeight-host.scrollTop-host.clientHeight<90;
       host.replaceChildren();
@@ -88,7 +111,8 @@ if(typeof document!=='undefined'){
       for(const job of turns){
         const d=job.data,turn=el('article',undefined,'chat-turn'),user=el('div',undefined,'user-message');
         user.append(el('p','王牧楠 · '+new Date(d.created_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}),'chat-author'),el('p',d.text,'chat-text'));turn.append(user);
-        if(job.subjects?.length)user.append(el('p','讨论任务：'+job.subjects.map(t=>t.title).join('、'),'chat-author'));
+        if(d.question_text)user.append(el('p','回答问题：'+d.question_text,'chat-author'));
+        if(job.subjects?.length)user.append(el('p','讨论对象：'+job.subjects.map(t=>t.title).join('、'),'chat-author'));
         const answer=el('div',undefined,'assistant-message');answer.append(el('p','Lumos · '+(d.model||'Codex 默认模型'),'chat-author'));
         if(d.reply)answer.append(el('p',d.reply,'chat-text'));
         const receipt=el('div',undefined,'chat-receipt');receipt.append(el('p',chatReceipt(job)));
@@ -126,7 +150,7 @@ if(typeof document!=='undefined'){
       const r=await fetch('/api/intakes',{method:'POST',headers:{'Content-Type':'application/json','X-Lumos-Token':token},body:JSON.stringify(pending)}),data=await r.json();
       if(!r.ok){if(r.status>=400 && r.status<500){pending=null;saveDraft();}throw new Error(data.error||'发送失败');}
       const retry=!!pending.id;pending=null;
-      if(!retry){selected=[];$('chat-text').value='';setExpanded(false);}saveDraft();signature='';
+      if(!retry){selected=[];selectedQuestion=null;$('chat-text').value='';setExpanded(false);}saveDraft();signature='';
       jobs=[data.intake,...jobs.filter(n=>n.id!==data.intake.id)];render();await refresh();
     }catch(e){error=e.message;timer=setTimeout(refresh,4000);}finally{busy=false;signature='';render();$('chat-text').focus();}
   }
@@ -135,8 +159,11 @@ if(typeof document!=='undefined'){
   $('chat-workspace').onchange=()=>{const space=$('chat-workspace').value;let id;try{id=localStorage.getItem('lumos.chat.active.'+space);}catch{}return selectChat(id||uuid(),space);};
   $('chat-text').oninput=()=>{error='';try{saveDraft();}catch{error='浏览器无法保留草稿，请勿关闭页面。';}controls();};
   $('chat-text').onkeydown=e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'&&!e.isComposing){e.preventDefault();$('chat-form').requestSubmit();}};
-  $('chat-form').onsubmit=e=>{e.preventDefault();if($('send-chat').disabled)return;const text=$('chat-text').value.trim();send(pending||{request_id:uuid(),workspace,chat_id:chatId,chat_parent:chatTurns(jobs,chatId).at(-1)?.id||'',model:$('chat-model').value,text,title:text.slice(0,60),related_ids:selected.map(t=>t.id)});};
+  $('chat-form').onsubmit=e=>{e.preventDefault();if($('send-chat').disabled)return;const text=$('chat-text').value.trim();send(pending||{request_id:uuid(),workspace,chat_id:chatId,chat_parent:chatTurns(jobs,chatId).at(-1)?.id||'',model:$('chat-model').value,text,title:text.slice(0,60),related_ids:[...new Set([...selected.map(t=>t.id),...(selectedQuestion?.related_ids||[])])],...(selectedQuestion?{question_key:selectedQuestion.key,question_text:selectedQuestion.text}:{})});};
   function setExpanded(value){expanded=value;$('conversation').setAttribute('data-writing',value?'expanded':'normal');$('expand-writing').setAttribute('aria-expanded',String(value));$('expand-writing').textContent=value?'收起书写':'展开书写';}
+  $('choose-subjects').onclick=()=>{$('subject-search').value='';$('subject-type').value='all';renderPicker();$('subject-picker').showModal();$('subject-search').focus();loadTasks();};
+  $('subject-search').oninput=renderPicker;$('subject-type').onchange=renderPicker;
+  $('close-subject-picker').onclick=()=>$('subject-picker').close();$('subject-picker').onclose=()=>{$('chat-text').focus();};
   $('expand-writing').onclick=()=>{setExpanded(!expanded);$('chat-text').focus();};
   $('chat-model').onchange=()=>{try{localStorage.setItem('lumos.chat.model',$('chat-model').value);}catch{}};
   async function models(){try{const r=await fetch('/api/codex-models'),data=await r.json();if(!r.ok)throw new Error();for(const m of data.models){const o=el('option',m.name);o.value=m.id;$('chat-model').append(o);}let selected='';try{selected=localStorage.getItem('lumos.chat.model')||'';}catch{}if(data.models.some(m=>m.id===selected))$('chat-model').value=selected;if(!data.models.length)$('model-help').textContent='暂未读取到本机模型列表，将使用 Codex 默认模型。';}catch{$('model-help').textContent='模型列表读取失败，将使用 Codex 默认模型。';}}

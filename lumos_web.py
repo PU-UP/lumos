@@ -82,7 +82,7 @@ def make_server(store, port=8765):
                     self.reply(200, task_detail(store, parse_qs(path.query).get("id", [""])[0]))
                 elif path.path == "/api/mainline":
                     self.reply(200, mainline_detail(store, parse_qs(path.query).get("id", [""])[0]))
-                elif path.path in {"/", "/tasks", "/delivery", "/intake.js", "/overview.js", "/overview.css", "/board.js", "/board.css", "/notes", "/notes.js", "/notes.css", "/people", "/people.js", "/people.css", "/chat", "/chat.js", "/chat.css"}:
+                elif path.path in {"/", "/tasks", "/delivery", "/intake.js", "/overview.js", "/work-model.js", "/overview.css", "/board.js", "/board.css", "/notes", "/notes.js", "/notes.css", "/people", "/people.js", "/people.css", "/chat", "/chat.js", "/chat.css"}:
                     name = {"/": "overview.html", "/delivery": "overview.html", "/tasks": "index.html", "/notes": "notes.html", "/people": "people.html", "/chat": "chat.html"}.get(path.path, path.path[1:])
                     if path.path == "/" and "task" in parse_qs(path.query):
                         name = "index.html"  # Preserve existing task bookmarks.

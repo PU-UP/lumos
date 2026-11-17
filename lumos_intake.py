@@ -35,7 +35,7 @@ def enabled(nodes, workspace):
 def validate_intake(data, nodes):
     require(data.get('workspace') in {'lingguang', 'lumos'} and data.get('status') in STATES, 'Invalid intake state/space')
     require(type(data.get('revision')) is int and data['revision'] > 0, 'Invalid intake revision')
-    for field, limit in [('title', 300), ('text', 200000), ('summary', 4000), ('error', 2000), ('reply', 20000)]:
+    for field, limit in [('title', 300), ('text', 200000), ('summary', 4000), ('error', 2000), ('reply', 20000), ('question_text', 4000)]:
         require(isinstance(data.get(field, ''), str) and len(data.get(field, '')) <= limit, 'Invalid intake '+field)
     require(isinstance(data.get('source'), dict) and data['source'].get('ref'), 'Intake needs a source')
     require(isinstance(data.get('question_key', ''), str) and len(data.get('question_key', '')) <= 500, 'Invalid question key')
@@ -95,7 +95,7 @@ def list_intakes(store, workspace='lingguang'):
 
 
 def save_intake(store, request):
-    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'text', 'title', 'source', 'note_id', 'id', 'expected_revision', 'execution', 'related_ids', 'question_key', 'chat_id', 'chat_parent', 'model'}, 'Invalid intake request')
+    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'text', 'title', 'source', 'note_id', 'id', 'expected_revision', 'execution', 'related_ids', 'question_key', 'question_text', 'chat_id', 'chat_parent', 'model'}, 'Invalid intake request')
     require(request.get('execution', 'automatic') in {'automatic', 'conversation'}, 'Invalid execution mode')
     key = request.get('request_id', '')
     require(isinstance(key, str) and re.fullmatch('[a-f0-9]{32}', key), 'Invalid request_id')
@@ -143,7 +143,7 @@ def save_intake(store, request):
                 'summary': '', 'questions': [], 'related_ids': refs, 'execution': request.get('execution', 'automatic')}}
             if 'question_key' in request:
                 node['data']['question_key'] = request['question_key']
-            for field in ('chat_id', 'chat_parent', 'model'):
+            for field in ('chat_id', 'chat_parent', 'model', 'question_text'):
                 if field in request:
                     node['data'][field] = request[field]
         require(enabled(nodes, node['data']['workspace']), '尚未启用此空间的自主整理规则')
