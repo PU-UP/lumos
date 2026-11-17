@@ -51,7 +51,8 @@ async function page(storage = new Map(), initialBoard = {}, navigation = {}) {
     window: {addEventListener() {}, location: {search: navigation.search || ''}}, URLSearchParams, Option: function(text, value) { this.text = text; this.label = text; this.value = value; this.tagName = 'OPTION'; },
     crypto: {randomUUID: () => '11111111-1111-1111-1111-111111111111'},
     fetch: async url => response(url.startsWith('/api/task?') ? navigation.detail : board)};
-  vm.createContext(world);
+  world.Event = Event;
+  vm.createContext(world);vm.runInContext(fs.readFileSync('web/dialog.js','utf8'),world);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../web/board.js'), 'utf8'), world);
   await tick();
   return {world, get, controls, form, board, timers};

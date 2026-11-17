@@ -197,6 +197,6 @@ class NoteTest(BaseStoreCase):
         self.assertEqual(json.loads(raw)['note']['data']['recording'], 'finished')
         for bad in ({**headers,'Origin':'https://evil.example'}, {**headers,'X-Lumos-Token':'wrong'}):
             self.assertEqual(call('POST','/api/notes',req,bad)[0],409)
-        for route in ['/notes','/notes.js','/notes.css','/chat','/chat.js','/chat.css','/work-model.js','/api/codex-models','/api/note?id='+req['id']]:
+        for route in ['/notes','/notes.js','/notes.css','/chat','/chat.js','/chat.css','/work-model.js','/dialog.js','/api/codex-models','/api/note?id='+req['id']]:
             self.assertEqual(call('GET',route)[0],200)
         self.assertEqual(call('GET','/api/note?id='+req['id']+'&revision=oops')[0],400)

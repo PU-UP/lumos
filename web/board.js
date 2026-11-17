@@ -875,21 +875,12 @@ async function saveChanges(changes, quick = false) {
   }
 }
 $('editor').addEventListener('cancel', event => {event.preventDefault(); closeEditor();});
-let backdropStart = false;
-function outsideEditor(event) {
-  if (event.target !== $('editor')) return false;
-  const r = $('editor').getBoundingClientRect();
-  return event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom;
-}
-$('editor').addEventListener('pointerdown', event => { backdropStart = outsideEditor(event); });
-$('editor').addEventListener('click', event => {
-  if (backdropStart && outsideEditor(event)) {
-    // Accidental outside clicks must never discard an unsaved edit.
-    if (dirty) discardArmed = false;
-    closeEditor();
-  }
-  backdropStart = false;
+dismissOnBackdrop($('editor'), () => {
+  // Accidental outside clicks must never discard an unsaved edit.
+  if (dirty) discardArmed = false;
+  closeEditor();
 });
+for (const id of ['rename-dialog', 'completion-picker']) dismissOnBackdrop($(id));
 $('close').onclick = closeEditor;
 $('edit').onclick = () => {
   if (!state.writable || saving) return;

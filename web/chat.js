@@ -164,6 +164,7 @@ if(typeof document!=='undefined'){
   $('choose-subjects').onclick=()=>{$('subject-search').value='';$('subject-type').value='all';renderPicker();$('subject-picker').showModal();$('subject-search').focus();loadTasks();};
   $('subject-search').oninput=renderPicker;$('subject-type').onchange=renderPicker;
   $('close-subject-picker').onclick=()=>$('subject-picker').close();$('subject-picker').onclose=()=>{$('chat-text').focus();};
+  dismissOnBackdrop($('subject-picker'));
   $('expand-writing').onclick=()=>{setExpanded(!expanded);$('chat-text').focus();};
   $('chat-model').onchange=()=>{try{localStorage.setItem('lumos.chat.model',$('chat-model').value);}catch{}};
   async function models(){try{const r=await fetch('/api/codex-models'),data=await r.json();if(!r.ok)throw new Error();for(const m of data.models){const o=el('option',m.name);o.value=m.id;$('chat-model').append(o);}let selected='';try{selected=localStorage.getItem('lumos.chat.model')||'';}catch{}if(data.models.some(m=>m.id===selected))$('chat-model').value=selected;if(!data.models.length)$('model-help').textContent='暂未读取到本机模型列表，将使用 Codex 默认模型。';}catch{$('model-help').textContent='模型列表读取失败，将使用 Codex 默认模型。';}}

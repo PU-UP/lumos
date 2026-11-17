@@ -3,7 +3,8 @@ const {chatTurns,chatReceipt,discussionItems,discussionQuestions}=require('../we
 const tick=()=>new Promise(r=>setImmediate(r));
 const response=(data,status=200)=>({ok:status===200,status,json:async()=>data});
 class Element{
-  constructor(){this.value='';this.children=[];this.scrollHeight=500;this.scrollTop=400;this.clientHeight=100;}
+  constructor(){this.value='';this.children=[];this.scrollHeight=500;this.scrollTop=400;this.clientHeight=100;this.events={};}
+  addEventListener(name,fn){this.events[name]=fn;}
   showModal(){this.open=true;}close(){this.open=false;this.onclose?.();}
   append(...v){this.children.push(...v);}replaceChildren(...v){this.children=v;}setAttribute(k,v){this[k]=v;}focus(){}
 }
@@ -13,7 +14,8 @@ async function page(storage=new Map(),href='http://127.0.0.1/chat?id='+'a'.repea
   const world={document:{getElementById:get,createElement:()=>new Element()},window:{location:{href}},history:{replaceState(a,b,u){world.window.location.href=String(u);}},URL,crypto,
     localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},setTimeout:()=>1,clearTimeout(){},
     fetch:async(url,opts)=>{if(!opts)return response(url==='/api/codex-models'?{models:[{id:'test-model',name:'Test model'}]}:url==='/api/tasks'?board:listing);const req=JSON.parse(opts.body);posts.push(req);const intake={id:'intake-'+req.request_id,data:{...req,status:'pending',revision:1,created_at:'2026-11-17T00:00:00Z'}};listing.intakes.unshift(intake);return response({intake});}};
-  vm.createContext(world);vm.runInContext(fs.readFileSync('web/work-model.js','utf8'),world);vm.runInContext(fs.readFileSync('web/chat.js','utf8'),world);await tick();
+  world.Event = Event;
+  vm.createContext(world);vm.runInContext(fs.readFileSync('web/dialog.js','utf8'),world);vm.runInContext(fs.readFileSync('web/work-model.js','utf8'),world);vm.runInContext(fs.readFileSync('web/chat.js','utf8'),world);await tick();
   const edit=text=>{get('chat-text').value=text;get('chat-text').oninput();};
   const submit=async()=>{get('chat-form').onsubmit({preventDefault(){}});await tick();};
   return {world,get,listing,posts,edit,submit,storage};

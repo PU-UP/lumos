@@ -115,7 +115,8 @@ function reviewPage(post){
     window:{location:{pathname:'/',search:''},LumosIntake:{watch:(host,workspace,note,finished,update)=>{onUpdate=update;}}},URLSearchParams,localStorage:{getItem:k=>drafts.get(k)||null,setItem:(k,v)=>drafts.set(k,v)},
     Option:function(text,value){this.textContent=text;this.value=value;},crypto:{randomUUID:()=> 'a'.repeat(32)},
     fetch:async(url,options)=>{if(options)return post(JSON.parse(options.body),snapshot);return {ok:true,json:async()=>snapshot};}};
-  vm.createContext(world);vm.runInContext(fs.readFileSync('web/work-model.js','utf8'),world);vm.runInContext(fs.readFileSync('web/overview.js','utf8'),world);
+  world.Event = Event;
+  vm.createContext(world);vm.runInContext(fs.readFileSync('web/dialog.js','utf8'),world);vm.runInContext(fs.readFileSync('web/work-model.js','utf8'),world);vm.runInContext(fs.readFileSync('web/overview.js','utf8'),world);
   const controls=()=>{const walk=n=>[n,...n.children.flatMap(walk)];const form=walk(get('mainlines')).find(n=>n.tag==='form');return {form,date:form.children[0].children[0],save:form.children[1],message:form.children[2]};};
   return {get,controls,snapshot,receipts:data=>onUpdate(data)};
 }

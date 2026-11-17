@@ -112,6 +112,7 @@ if (typeof document !== 'undefined') {
   }
   $('open-feedback').onclick=event=>openFeedback(null,event.currentTarget);
   $('close-answer').onclick=()=>$('answer-dialog').close();
+  for(const id of ['answer-dialog','mainline-detail'])dismissOnBackdrop($(id));
   $('answer-dialog').addEventListener('cancel',event=>{if(writing)event.preventDefault();});
   $('answer-dialog').addEventListener('close',()=>{stashFeedback();(answerOpener?.isConnected?answerOpener:$('open-feedback')).focus();});
   $('feedback-text').oninput=stashFeedback;$('feedback-target').onchange=stashFeedback;
