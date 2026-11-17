@@ -6,8 +6,10 @@ const priorities = {P3: 'P3', low: '低', normal: '中', high: '高'};
 const ownerName = data => data.owner?.trim() || '王牧楠';
 const ownerNames = data => ownerName(data).split('、').map(name => name.trim()).filter(Boolean);
 let state, editing = null, baseline, pending = null;
-let dirty = false, discardArmed = false, saving = false, opening = false;
+let dirty = false, saving = false, opening = false;
 let editMode = false, savedValues;
+let draftKey, draftBasis, savedBaseline;
+const taskDrafts = new Map(), volatileDrafts = new Set();
 let taskView = 'list', quickPending = null;
 let completionChoice = null;
 const selectedStatuses = new Set(['todo', 'doing']);
@@ -612,6 +614,42 @@ function values() {
   return Object.fromEntries(fields.map(k => [k, form.elements.namedItem(k).value]));
 }
 
+function writeTaskDraft(draft) {
+  taskDrafts.set(draftKey, draft);
+  try {
+    localStorage.setItem(draftKey, JSON.stringify(draft));
+    volatileDrafts.delete(draftKey);
+  } catch {
+    volatileDrafts.add(draftKey);
+    $('message').textContent = '浏览器暂时无法保存草稿，内容仍保留在本页；请勿刷新或关闭浏览器。';
+  }
+}
+function keepTaskDraft() {
+  if (dirty) writeTaskDraft({values:values(), base:draftBasis, baseline, pending,
+    workspace:form.elements.namedItem('workspace').value});
+}
+function restoreTaskDraft() {
+  let draft=taskDrafts.get(draftKey);
+  if (!taskDrafts.has(draftKey)) {
+    try { draft=JSON.parse(localStorage.getItem(draftKey)); } catch { return; }
+  }
+  if (!draft || !draft.values || !draft.base || !Number.isInteger(draft.baseline)
+      || !Object.hasOwn(workspaces,draft.workspace)
+      || !fields.every(k=>typeof draft.values[k]==='string' && typeof draft.base[k]==='string')) return;
+  const changed=fields.some(k=>draft.base[k]!==savedValues[k]);
+  // Never silently rebase stale edits over a changed task, or replace an uncertain save request.
+  if (changed || draft.pending) baseline=draft.baseline;
+  draftBasis=changed?draft.base:savedValues;
+  pending=draft.pending||null;
+  setTaskWorkspace(draft.workspace,draft.values.context);
+  for (const k of fields) form.elements.namedItem(k).value=draft.values[k];
+  dirty=true;
+  setEditMode(state.writable);
+  $('form-message').textContent=changed
+    ? '已恢复草稿；任务记录已有变化。草稿保留原版本检查，请核对最新详情后再保存，或放弃草稿重新编辑。'
+    : '已恢复未提交的草稿，可继续编辑。';
+}
+
 function disclosure(title, parent) {
   const node = element('details', undefined, 'detail-fold');
   node.append(element('summary', title));
@@ -723,7 +761,7 @@ function setEditMode(enabled) {
   $('edit').hidden = enabled;
   $('edit').disabled = !state.writable;
   $('save').disabled = !enabled || !state.writable;
-  $('cancel-edit').hidden = !editing;
+  $('cancel-edit').hidden = !enabled;
   $('quick-status').hidden = enabled || !editing;
   for (const button of $('status-buttons').children) {
     button.disabled = !state.writable || button.value === savedValues.status;
@@ -781,12 +819,13 @@ async function openTask(id = null) {
     $('task-detail-label').textContent = detail?.task.short_id ? '任务详情 · ' + detail.task.short_id : '任务详情';
     editing = id;
     baseline = detail ? detail.seq : state.seq;
+    savedBaseline = baseline;
     pending = null;
     dirty = false;
-    discardArmed = false;
     $('close').textContent = '关闭';
     form.reset();
     const workspace = detail ? workspaceOf(detail.task.data.context) : $('workspace').value;
+    draftKey='lumos.task-draft.v1.'+(id || 'new.'+workspace);
     setTaskWorkspace(workspace, detail?.task.data.context);
     const data = detail?.task.data || {context: form.elements.namedItem('context').value,
       group: $('group-filter').value.startsWith(':') ? $('group-filter').value.slice(1) : '',
@@ -794,9 +833,11 @@ async function openTask(id = null) {
     for (const k of fields) form.elements.namedItem(k).value = data[k] || (k === 'priority' ? 'normal' : '');
     form.elements.namedItem('owner').value = ownerName(data);
     savedValues = values();
+    draftBasis = savedValues;
     renderTask({...data, ...savedValues, follow_up_pending: data.follow_up_pending});
     setEditMode(!id && state.writable);
     $('form-message').textContent = '';
+    restoreTaskDraft();
     $('evidence').hidden = !id;
     $('context-details').open = false;
     renderHistory(detail);
@@ -810,23 +851,17 @@ async function openTask(id = null) {
 
 function closeEditor() {
   if (saving) return;
-  if (dirty && !discardArmed) {
-    discardArmed = true;
-    $('form-message').textContent = '还有未保存的修改。继续编辑，或再次点击关闭以放弃修改。';
-    $('close').textContent = '放弃修改并关闭';
-    return;
-  }
+  keepTaskDraft();
   $('editor').close();
   dirty = false;
-  discardArmed = false;
 }
 
 function markDirty() {
   if (!editMode) return;
   dirty = true;
   pending = null;
-  discardArmed = false;
   $('close').textContent = '关闭';
+  keepTaskDraft();
 }
 form.addEventListener('input', markDirty);
 form.addEventListener('change', markDirty);
@@ -855,9 +890,11 @@ async function saveChanges(changes, quick = false) {
   try {
     pending ||= {request_id: crypto.randomUUID().replaceAll('-', ''), expected_seq: baseline,
       changes, ...(editing ? {id: editing} : {})};
+    keepTaskDraft();
     const result = await api('/api/tasks', {method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-Lumos-Token': state.token}, body: JSON.stringify(pending)});
     dirty = false;
+    writeTaskDraft(null);
     $('editor').close();
     const loaded = await refresh();
     if (loaded) showSaveNotice(result.replayed ? '已确认上次保存成功。'
@@ -875,11 +912,7 @@ async function saveChanges(changes, quick = false) {
   }
 }
 $('editor').addEventListener('cancel', event => {event.preventDefault(); closeEditor();});
-dismissOnBackdrop($('editor'), () => {
-  // Accidental outside clicks must never discard an unsaved edit.
-  if (dirty) discardArmed = false;
-  closeEditor();
-});
+dismissOnBackdrop($('editor'), closeEditor);
 for (const id of ['rename-dialog', 'completion-picker']) dismissOnBackdrop($(id));
 $('close').onclick = closeEditor;
 $('edit').onclick = () => {
@@ -893,10 +926,13 @@ $('cancel-edit').onclick = () => {
   setTaskWorkspace(workspaceOf(savedValues.context), savedValues.context);
   for (const k of fields) form.elements.namedItem(k).value = savedValues[k];
   dirty = false;
-  discardArmed = false;
+  writeTaskDraft(null);
+  draftBasis = savedValues;
+  baseline = savedBaseline;
   pending = null;
   $('form-message').textContent = '';
   $('close').textContent = '关闭';
+  if (!editing) { $('editor').close(); return; }
   setEditMode(false);
   $('edit').focus();
 };
@@ -983,7 +1019,7 @@ form.elements.namedItem('workspace').onchange = () => {
 };
 $('owner-filter').onchange = render;
 $('search').oninput = () => {if (state) render();};
-window.addEventListener('beforeunload', event => {if (dirty || saving) {event.preventDefault(); event.returnValue = '';}});
+window.addEventListener('beforeunload', event => {if (volatileDrafts.size || saving) {event.preventDefault(); event.returnValue = '';}});
 restorePreferences();
 refresh().then(() => {
   const params = new URLSearchParams(window.location?.search || '');

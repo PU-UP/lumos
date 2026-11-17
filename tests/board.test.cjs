@@ -127,17 +127,15 @@ test('successful save followed by failed refresh reports both states', async () 
   assert.match(p.get('message').textContent, /任务已保存，但看板刷新失败/);
 });
 
-test('continuing to edit resets the discard confirmation', async () => {
-  const p = await page();
-  await p.world.openTask();
-  p.form.events.input();
-  p.world.closeEditor();
-  assert.equal(p.get('editor').open, true);
-  p.form.events.input();
-  p.world.closeEditor();
-  assert.equal(p.get('editor').open, true);
-  p.world.closeEditor();
-  assert.equal(p.get('editor').open, false);
+test('closing a new task keeps a durable draft and restores editing after reload', async () => {
+  const storage=new Map(),p=await page(storage);
+  await p.world.openTask();p.controls.text.value='继续写这件事';p.controls.progress.value='长段进展\n第二行';p.form.events.input();
+  p.world.closeEditor();assert.equal(p.get('editor').open,false);
+  const resumed=await page(storage);await resumed.world.openTask();
+  assert.equal(resumed.controls.text.value,'继续写这件事');assert.equal(resumed.controls.progress.value,'长段进展\n第二行');
+  assert.equal(resumed.get('task-fields').hidden,false);
+  resumed.get('cancel-edit').onclick();assert.equal(resumed.get('editor').open,false);
+  await resumed.world.openTask();assert.equal(resumed.controls.text.value,'');
 });
 
 test('old tasks default to normal priority and detail requests cannot overlap', async () => {
@@ -161,6 +159,43 @@ async function existingTask(p) {
     related: [], documents: {}, history: []});
   await p.world.openTask('existing');
 }
+
+test('task drafts are isolated and rebase only when saved fields are unchanged', async () => {
+  const storage=new Map(),p=await page(storage);
+  await existingTask(p);p.get('edit').onclick();p.controls.progress.value='未提交的进展';p.form.events.input();p.world.closeEditor();
+  const resumed=await page(storage);await existingTask(resumed);
+  assert.equal(resumed.controls.progress.value,'未提交的进展');assert.equal(resumed.get('task-fields').hidden,false);
+  resumed.world.closeEditor();await resumed.world.openTask('another');
+  assert.equal(resumed.controls.progress.value,'');resumed.world.closeEditor();
+  const fresh={...resumed.board,seq:10};
+  resumed.world.fetch=async url=>response(url.startsWith('/api/task?')?{seq:10,task:{data:{text:'已记录的任务',context:'work-current',status:'doing',next_step:'第一行\n第二行',details:'<script>不执行</script>',source:{ref:'fixture'}}},related:[],documents:{},history:[]}:fresh);
+  await resumed.world.openTask('existing');assert.equal(vm.runInContext('baseline',resumed.world),10);
+  resumed.world.closeEditor();
+  resumed.world.fetch=async()=>response({seq:11,task:{data:{text:'已有新标题',context:'work-current',status:'doing',source:{ref:'fixture'}}},related:[],documents:{},history:[]});
+  await resumed.world.openTask('existing');
+  assert.equal(vm.runInContext('baseline',resumed.world),10);assert.match(resumed.get('form-message').textContent,/记录已有变化/);
+  assert.equal(resumed.controls.progress.value,'未提交的进展');
+  resumed.get('cancel-edit').onclick();assert.equal(resumed.controls.text.value,'已有新标题');
+});
+
+test('uncertain task save survives close and reload with its original request', async () => {
+  const storage=new Map(),p=await page(storage);await p.world.openTask();
+  p.controls.text.value='不能重复创建';p.form.events.input();let original;
+  p.world.fetch=async(url,options)=>{original=options.body;throw new Error('response lost');};
+  await p.form.onsubmit({preventDefault(){}});p.world.closeEditor();
+  const resumed=await page(storage);await resumed.world.openTask();let replay;
+  resumed.world.fetch=async(url,options)=>{if(!options)return response(resumed.board);replay=options.body;return response({replayed:true});};
+  await resumed.form.onsubmit({preventDefault(){}});assert.equal(replay,original);
+  const clean=await page(storage);await clean.world.openTask();assert.equal(clean.controls.text.value,'');
+});
+
+test('unavailable browser storage still allows closing and continuing within the page', async () => {
+  const p=await page();await p.world.openTask();
+  p.world.localStorage.setItem=()=>{throw new Error('quota');};
+  p.controls.text.value='暂存在本页';p.form.events.input();p.world.closeEditor();
+  assert.equal(p.get('editor').open,false);assert.match(p.get('message').textContent,/请勿刷新/);
+  await p.world.openTask();assert.equal(p.controls.text.value,'暂存在本页');
+});
 
 test('recorded tasks open read-only, edit is explicit, cancel restores saved content', async () => {
   const p = await page();
@@ -699,7 +734,7 @@ test('summary formats bullets safely and folds uncurated long progress without l
   assert.match(textOf(view), /询问实际效果/);
 });
 
-test('outside click closes only after an outside press and cannot discard dirty edits', async () => {
+test('outside click closes only after an outside press and retains dirty edits as a draft', async () => {
   const p = await page();
   await p.world.openTask();
   const editor=p.get('editor');
@@ -714,11 +749,10 @@ test('outside click closes only after an outside press and cannot discard dirty 
   assert.equal(editor.open,false);
   await p.world.openTask();
   p.controls.text.value='未保存'; p.form.events.input();
-  for(let i=0;i<2;i++){editor.events.pointerdown(outside); editor.events.click(outside);}
-  assert.equal(editor.open,true);
-  assert.equal(p.controls.text.value,'未保存');
-  p.get('close').onclick();
+  editor.events.pointerdown(outside); editor.events.click(outside);
   assert.equal(editor.open,false);
+  await p.world.openTask();
+  assert.equal(p.controls.text.value,'未保存');
 });
 
 test('inline delivery editor saves modes and dates only, with independent warning colors', async () => {
