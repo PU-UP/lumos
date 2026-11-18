@@ -72,22 +72,24 @@ def validate_intake(data, nodes):
                 and isinstance(review['on'], str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', review['on'])
                 and type(review['revision']) is int and review['revision'] >= 0, 'Invalid scheduled review')
     note = data.get('note')
+    require(data.get('note_mode', 'archive') in {'archive', 'format'}, 'Invalid note mode')
     if note:
         require(set(note) == {'id', 'revision'} and nodes.get(note['id'], {}).get('kind') == 'note', 'Invalid intake note')
         require(type(note['revision']) is int and 0 < note['revision'] <= nodes[note['id']]['data']['revision'], 'Invalid intake note revision')
 
 
-def note_intake(node):
+def note_intake(node, mode='archive'):
     data = node['data']
-    return {'id': 'intake-'+digest(f"{node['id']}:{data['revision']}".encode())[:32], 'kind': 'intake', 'data': {
+    return {'id': 'intake-'+digest(f"{node['id']}:{data['revision']}:{mode}".encode())[:32], 'kind': 'intake', 'data': {
         'title': data['title'], 'workspace': data['workspace'], 'status': 'pending', 'revision': 1,
         'note': {'id': node['id'], 'revision': data['revision']}, 'created_at': now(), 'updated_at': now(),
+        'note_mode': mode, 'model': 'gpt-6.2-astra',
         'summary': '', 'questions': [], 'source': {'type': 'user', 'ref': f"结束笔记 {node['id']} revision {data['revision']}"}}}
 
 
 def note_intake_status(nodes, note_id):
     jobs = [n for n in nodes.values() if n['kind'] == 'intake' and n['data'].get('note', {}).get('id') == note_id]
-    return max(jobs, key=lambda n: n['data']['note']['revision']) if jobs else None
+    return max(jobs, key=lambda n: (n['data']['note']['revision'], n['data']['created_at'])) if jobs else None
 
 
 def list_intakes(store, workspace='lingguang'):
@@ -126,7 +128,11 @@ def save_intake(store, request):
             node = {**old, 'data': {**old['data'], 'status': 'pending', 'error': '', 'revision': old['data']['revision']+1, 'updated_at': now()}}
         elif request.get('note_id'):
             note = nodes.get(request['note_id'])
-            require(note and note['kind'] == 'note' and note['data'].get('recording', 'finished') == 'finished', '请先结束笔记记录')
+            require(note and note['kind'] == 'note' and note['data'].get('recording', 'finished') == 'finished'
+                    and note['data']['status'] == 'active', '请先结束笔记记录；已归档或删除笔记不能自动整理')
+            require(not any(n['kind'] == 'intake' and n['data'].get('note', {}).get('id') == note['id']
+                            and n['data']['status'] in {'pending', 'running'} and n['data'].get('note_mode') == 'format'
+                            for n in nodes.values()), '请等待笔记润色完成')
             node = note_intake(note)
             if node['id'] in nodes:
                 return {'intake': nodes[node['id']], 'replayed': True}
@@ -366,7 +372,7 @@ def apply_intake(store, request):
     require(isinstance(request, dict) and set(request) == {'id', 'claim', 'basis', 'plan'}, 'Invalid reconciliation envelope')
     plan = request['plan']
     require(isinstance(plan, dict) and {'summary', 'questions', 'updates'} <= set(plan)
-            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions', 'reply', 'task_reviews'}, 'Invalid reconciliation plan')
+            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions', 'reply', 'task_reviews', 'note_format'}, 'Invalid reconciliation plan')
     require(isinstance(plan.get('reply', ''), str) and len(plan.get('reply', '')) <= 20000, 'Invalid chat reply')
     require(isinstance(plan['summary'], str) and 0 < len(plan['summary']) <= 4000, 'Receipt summary required')
     require(isinstance(plan['questions'], list) and all(isinstance(q, str) and 0 < len(q) <= 2000 for q in plan['questions']), 'Invalid questions')
@@ -390,12 +396,33 @@ def apply_intake(store, request):
             note_ref = job.get('note')
             source_note = nodes[note_ref['id']] if note_ref else None
             text = note_version(db, note_ref['id'], note_ref['revision'])['data']['body'] if note_ref else job['text']
-        if source_note and (source_note['data']['revision'] != note_ref['revision'] or source_note['data'].get('recording') == 'editing'):
+        if source_note and (source_note['data']['revision'] != note_ref['revision'] or source_note['data'].get('recording') == 'editing'
+                            or source_note['data']['status'] != 'active'):
             node = {**old, 'data': {**job, 'status': 'obsolete', 'summary': '笔记已修改，本次未应用；请结束新版本后整理。',
                                   'revision': job['revision']+1, 'updated_at': now()}}
             commit_tasks(store, nodes, {'reason': 'stale intake source', 'updates': [node]}, old['id'])
             return {'intake': node, 'replayed': False}
         source = {'type': 'agent', 'ref': '自主整理 '+old['id'], 'intake_id': old['id'], 'authorization': POLICY}
+        if job.get('note_mode') == 'format':
+            require(source_note and not (plan['updates'] or plan['questions'] or resolutions), '笔记润色不能修改业务记录或提出主线问题')
+            formatted = plan.get('note_format')
+            require(isinstance(formatted, dict) and set(formatted) == {'title', 'body', 'related_ids'}, 'Invalid note formatting result')
+            refs = formatted['related_ids']
+            scoped = scoped_nodes(nodes, job['workspace'])
+            require(isinstance(refs, list) and len(refs) <= 20 and all(isinstance(i, str) and i in scoped
+                    and scoped[i]['kind'] in {'action', 'mainline'} for i in refs), '笔记关联必须是当前空间的任务或主线')
+            from lumos_notes import validate_note
+            data = {**source_note['data'], 'title': formatted['title'], 'body': formatted['body'], 'suggested_refs': list(dict.fromkeys(refs)),
+                    'revision': source_note['data']['revision']+1, 'checkpoint': True, 'updated_at': now(),
+                    'source': {**source, 'original_revision': note_ref['revision']}}
+            require(isinstance(data['body'], str) and (data['body'].strip() or not text.strip()), '润色结果不能丢弃原正文')
+            validate_note(data)
+            note = {**source_note, 'data': data}
+            receipt = {**old, 'data': {**job, 'status': 'done', 'summary': plan['summary'], 'questions': [],
+                'destinations': [note['id']], 'applied_hash': plan_hash, 'revision': job['revision']+1, 'updated_at': now(), 'error': ''}}
+            commit_tasks(store, nodes, {'reason': 'reconcile:'+old['id']+':'+plan_hash, 'updates': [note, receipt]}, old['id'])
+            return {'intake': receipt, 'replayed': False}
+        require('note_format' not in plan, '只有笔记润色可以改写笔记正文')
         management = management_enabled(nodes, job['workspace'])
         full_review = job.get('task_review', False)
         require('task_reviews' not in plan or full_review, '只有全量复核才能提交逐任务回执')
@@ -546,8 +573,8 @@ def apply_intake(store, request):
         if job.get('chat_id'):
             receipt['data']['reply'] = plan['reply']
         updates.append(receipt)
-        if source_note and not plan['questions']:
-            data = {**source_note['data'], 'status': 'archived', 'archive_reason': plan['summary'][:1000]+'；去向：'+', '.join(receipt['data']['destinations'])[:900],
+        if source_note and (not plan['questions'] or job.get('note_mode') == 'archive'):
+            data = {**source_note['data'], 'status': 'archived', 'archive_mode': 'lumos', 'archive_reason': plan['summary'][:1000]+'；去向：'+', '.join(receipt['data']['destinations'])[:900],
                     'revision': source_note['data']['revision']+1, 'checkpoint': False, 'updated_at': now(), 'source': source}
             updates.append({**source_note, 'data': data})
         commit_tasks(store, nodes, {'reason': 'reconcile:'+old['id']+':'+plan_hash, 'updates': updates}, old['id'])

@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import lumos
 from lumos_intake import (POLICY, save_intake, list_intakes, intake_context, claim_intake,
-                          apply_intake, note_intake_status, today, enqueue_due_reviews)
+                          apply_intake, note_intake, note_intake_status, today, enqueue_due_reviews)
 from lumos_mainlines import save_review, mainline_detail
 from lumos_notes import save_note, note_detail
 from lumos_tasks import task_detail, save_task, list_tasks
@@ -179,8 +179,14 @@ class IntakeTest(BaseStoreCase):
             ident = 'note-'+uuid.uuid4().hex
             first = save_note(self.store, {'id': ident, 'request_id': uuid.uuid4().hex, 'expected_revision': 0,
                 'changes': {'body': text, 'title': '模拟进展'}, 'source': self.source})
-            save_note(self.store, {'id': ident, 'request_id': uuid.uuid4().hex, 'expected_revision': first['note']['data']['revision'],
-                'operation': 'finish', 'changes': {}, 'source': self.source})
+            # Keep these fixtures as pre-upgrade queued notes to test historical compatibility.
+            def legacy_queue(node, mode):
+                job = note_intake(node)
+                job['data'].pop('note_mode')
+                return job
+            with patch('lumos_intake.note_intake', side_effect=legacy_queue):
+                save_note(self.store, {'id': ident, 'request_id': uuid.uuid4().hex, 'expected_revision': first['note']['data']['revision'],
+                    'operation': 'finish', 'changes': {}, 'source': self.source})
         else:
             save_intake(self.store, {'request_id': uuid.uuid4().hex, 'text': text, 'source': self.source})
         job = claim_intake(self.store)
@@ -334,7 +340,9 @@ class IntakeTest(BaseStoreCase):
         save_note(self.store, {'request_id': uuid.uuid4().hex, 'id': note['id'], 'expected_revision': note['revision'],
             'operation': 'edit', 'changes': {'body': '新版内容，旧说法撤回'}, 'source': self.source})
         request['plan']['updates'] = [self.item()]
-        self.assertEqual(apply_intake(self.store, request)['intake']['data']['status'], 'obsolete')
+        with self.assertRaisesRegex(lumos.Error, '换批次'):
+            apply_intake(self.store, request)
+        self.assertEqual(intake_context(self.store, request['id'])['intake']['data']['status'], 'obsolete')
         self.assertNotIn('progress', task_detail(self.store, 'talk')['task']['data'])
 
     def test_task_conflict_refuses_but_unrelated_note_save_does_not(self):
@@ -515,6 +523,82 @@ class IntakeTest(BaseStoreCase):
         self.assertEqual(original['questions'], ['演示是否成功，谁确认发布？'])
         self.assertEqual(task_detail(self.store, 'talk')['task'], task_before)
         self.assertEqual(self.store.verify()['integrity'], 'ok')
+
+    def test_note_polish_then_explicit_archive_updates_work_with_original_preserved(self):
+        ident = 'note-'+uuid.uuid4().hex
+        raw = '同步讨论已完成。下一步由模拟同事检查接口。新结果待验证。'
+        save_note(self.store, {'id': ident, 'request_id': uuid.uuid4().hex, 'expected_revision': 0,
+            'operation': 'finish', 'changes': {'body': raw, 'title': '原题'}, 'source': self.source})
+        job = claim_intake(self.store); ctx = intake_context(self.store, job['id'])
+        self.assertEqual(job['data']['note_mode'], 'format')
+        self.assertEqual(job['data']['model'], 'gpt-6.2-astra')
+        plan = {'summary': '润色并关联', 'questions': [], 'updates': [], 'resolutions': [],
+                'note_format': {'title': '接口讨论', 'body': '# 进展\n'+raw, 'related_ids': ['talk', 'mainline-test']}}
+        request = {'id': job['id'], 'claim': job['data']['claim'], 'basis': ctx['basis'], 'plan': plan}
+        before = task_detail(self.store, 'talk')['task']
+        plan['updates'] = [self.item()]
+        with self.assertRaisesRegex(lumos.Error, '润色不能'):
+            apply_intake(self.store, request)
+        plan['updates'] = []; apply_intake(self.store, request)
+        self.assertTrue(apply_intake(self.store, request)['replayed'])
+        detail = note_detail(self.store, ident)
+        self.assertEqual(detail['note']['data']['status'], 'active')
+        self.assertEqual(len(detail['suggestions']), 2)
+        self.assertEqual(note_detail(self.store, ident, 1)['note']['data']['body'], raw)
+        self.assertEqual(len(detail['history']), 2)
+        self.assertEqual(task_detail(self.store, 'talk')['task'], before)
+        save_note(self.store, {'id': ident, 'request_id': uuid.uuid4().hex, 'expected_revision': 2,
+            'operation': 'process', 'changes': {}, 'source': self.source})
+        job = claim_intake(self.store); ctx = intake_context(self.store, job['id'])
+        self.assertEqual(job['data']['note_mode'], 'archive')
+        self.assertEqual(job['data']['model'], 'gpt-6.2-astra')
+        plan = {'summary': '已承接笔记并保留后续问题', 'questions': ['后续验证结果？'], 'resolutions': [],
+                'updates': [self.item(changes={'progress': '讨论完成，等待验证'}),
+                            self.item('mainline-test', 'mainline', {'summary': '讨论完成，验证仍未知'}),
+                            self.item('note-knowledge', 'evidence', {'context': 'mapping', 'title': '接口讨论依据', 'text': raw})]}
+        apply_intake(self.store, {'id': job['id'], 'claim': job['data']['claim'], 'basis': ctx['basis'], 'plan': plan})
+        self.assertEqual(note_detail(self.store, ident)['note']['data']['status'], 'archived')
+        self.assertEqual(task_detail(self.store, 'talk')['task']['data']['progress'], '讨论完成，等待验证')
+        self.assertEqual(task_detail(self.store, 'talk')['task']['data']['status'], before['data']['status'])
+        self.assertTrue(intake_context(self.store, job['id'])['open_questions'])
+        self.assertEqual(self.store.verify()['integrity'], 'ok')
+
+    def test_manual_archive_delete_cancel_running_note_and_preserve_pinned_source(self):
+        from lumos_notes import list_notes
+        for operation in ('archive', 'delete'):
+            ident = 'note-'+uuid.uuid4().hex
+            save_note(self.store, {'id': ident, 'request_id': uuid.uuid4().hex, 'expected_revision': 0,
+                'operation': 'finish', 'changes': {'body': '模拟原文'}, 'source': self.source})
+            save_task(self.store, {'id': 'talk', 'request_id': uuid.uuid4().hex, 'expected_seq': self.store.status()['seq'],
+                'changes': {}, 'note_refs': [{'id': ident, 'revision': 1, 'excerpt': '模拟原文'}], 'source': self.source})
+            job = claim_intake(self.store); ctx = intake_context(self.store, job['id'])
+            request = {'id': ident, 'request_id': uuid.uuid4().hex, 'expected_revision': 1,
+                       'operation': operation, 'changes': {}, 'source': self.source}
+            with self.assertRaisesRegex(lumos.Error, '确认'):
+                save_note(self.store, request)
+            request['confirmed'] = True
+            save_note(self.store, request)
+            self.assertTrue(save_note(self.store, request)['replayed'])
+            self.assertFalse(any(n['id']==ident for n in list_notes(self.store)['notes']))
+            self.assertEqual(note_detail(self.store, ident, 1)['note']['data']['body'], '模拟原文')
+            self.assertEqual(task_detail(self.store, 'talk')['note_sources'][0]['note']['data']['body'], '模拟原文')
+            self.assertEqual(note_intake_status({n['id']: n for n in list_intakes(self.store)['intakes']}, ident)['data']['status'], 'obsolete')
+            with self.assertRaises(lumos.Error):
+                apply_intake(self.store, {'id': job['id'], 'claim': job['data']['claim'], 'basis': ctx['basis'],
+                    'plan': {'summary': '晚到结果不能应用', 'questions': [], 'updates': [],
+                             'note_format': {'title': '旧结果', 'body': '不应写入', 'related_ids': []}}})
+            with self.assertRaises(lumos.Error):
+                save_intake(self.store, {'request_id': uuid.uuid4().hex, 'note_id': ident, 'source': self.source})
+        self.assertEqual(self.store.verify()['integrity'], 'ok')
+
+    def test_ordinary_archive_during_writing_never_queues_an_agent(self):
+        ident = 'note-'+uuid.uuid4().hex
+        save_note(self.store, {'id': ident, 'request_id': uuid.uuid4().hex, 'expected_revision': 0,
+            'changes': {'body': '普通临时笔记'}, 'source': self.source})
+        save_note(self.store, {'id': ident, 'request_id': uuid.uuid4().hex, 'expected_revision': 1,
+            'operation': 'archive', 'confirmed': True, 'changes': {}, 'source': self.source})
+        self.assertIsNone(note_detail(self.store, ident)['intake'])
+        self.assertEqual(note_detail(self.store, ident)['note']['data']['status'], 'archived')
 
     def test_followup_answers_close_questions_atomically_and_archive_original_note(self):
         first = self.job(note=True); first['plan']['questions'] = ['归属哪个项目？', '由谁负责？']

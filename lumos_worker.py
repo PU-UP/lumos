@@ -77,6 +77,12 @@ def plan_with_codex(context, root):
         schema, output = directory / 'schema.json', directory / 'result.json'
         response_schema = SCHEMA
         prompt = (ENGINE / 'docs/agent-planner.md').read_text(encoding='utf-8')
+        if context['intake']['data'].get('note_mode') == 'format':
+            response_schema = {'type': 'object', 'additionalProperties': False, 'required': ['summary', 'note_format'],
+                'properties': {'summary': {'type': 'string'}, 'note_format': {'type': 'object', 'additionalProperties': False,
+                    'required': ['title', 'body', 'related_ids'], 'properties': {'title': {'type': 'string'}, 'body': {'type': 'string'},
+                        'related_ids': {'type': 'array', 'items': {'type': 'string'}}}}}}
+            prompt = (ENGINE / 'docs/note-format-planner.md').read_text(encoding='utf-8')
         if context['intake']['data'].get('chat_id'):
             response_schema = {**SCHEMA, 'required': [*SCHEMA['required'], 'reply'],
                                'properties': {**SCHEMA['properties'], 'reply': {'type': 'string'}}}
@@ -109,6 +115,8 @@ def plan_with_codex(context, root):
             require(item.get('type', 'agent_message') in {'agent_message', 'reasoning', 'plan'},
                     '整理执行器调用了计划外工具，结果未应用。')
         plan = json.loads(output.read_text(encoding='utf-8'))
+        if context['intake']['data'].get('note_mode') == 'format':
+            plan.update(questions=[], updates=[], resolutions=[])
         for item in plan['updates']:
             if item['kind'] == 'action':
                 item['changes'] = {k: v for k, v in item['changes'].items() if v is not None}

@@ -10,9 +10,10 @@ window.LumosIntake = (() => {
         const response=await fetch('/api/intakes?workspace='+encodeURIComponent(workspace));const data=await response.json();
         if(current!==generation)return;
         if(!response.ok)throw new Error(data.error||'读取失败');
-        if(onUpdate)onUpdate(data);
+        if(onUpdate)await onUpdate(data);
+        if(current!==generation)return;
         host.replaceChildren();
-        host.append(el('p',!data.enabled?'此空间尚未启用自主整理。':data.executor==='offline'?'整理执行器未运行；内容会保留为待整理。':'结束记录后自动整理；任务及原文可追溯。'));
+        host.append(el('p',!data.enabled?'此空间尚未启用自主整理。':data.executor==='offline'?'整理执行器未运行；内容会保留为待整理。':'结束记录只润色笔记；Lumos 归档才更新工作记录。'));
         const all=data.intakes.filter(n=>!noteId || n.data.note?.id===noteId);
         const jobs=noteId?all.slice(0,1):all;
         if(!jobs.length)host.append(el('p','暂无整理记录。'));
@@ -21,13 +22,13 @@ window.LumosIntake = (() => {
           window.LumosDisclosure.remember(fold,key,!!noteId || ['failed','needs_review'].includes(d.status));
           const submitted=d.created_at?new Date(d.created_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'时间未记录';
           const subject=(job.subjects||[]).map(t=>t.title).join('、') || d.title;
-          fold.append(el('summary',subject+(d.review?' · 到期复核':'')+' · '+labels[d.status]+' · '+submitted));
+          fold.append(el('summary',subject+(d.note_mode==='format'?' · 笔记润色':d.note_mode==='archive'?' · Lumos归档':d.review?' · 到期复核':'')+' · '+labels[d.status]+' · '+submitted));
           if(d.text)fold.append(el('p',(d.review?'系统复核说明：':'我的反馈：')+d.text));
           if(d.summary)fold.append(el('p','Lumos 处理结果：'+d.summary));
           if(d.error)fold.append(el('p',d.error));
           for(const [index,q] of (d.questions||[]).entries()){
-            const answer=(d.resolutions||[]).find(r=>r.index===index);
-            fold.append(el('p',answer?'已答复：'+q+' · '+answer.answer:'需核对：'+q));
+            const answer=(d.resolutions||[]).filter(r=>r.index===index).at(-1);
+            fold.append(el('p',!answer?'需核对：'+q:answer.state==='pending'?'剩余待答：'+answer.remaining:answer.state==='waiting'?'等待后续跟进：'+answer.remaining:'原问题已答复：'+answer.answer));
           }
           if(d.status==='needs_review')fold.append(el('p','可在进展反馈或笔记中补充，Lumos 会接续这些问题。'));
           const record=el('details','');record.append(el('summary','来源与处理去向'));
@@ -42,10 +43,6 @@ window.LumosIntake = (() => {
             fold.append(retry);
           }
           host.append(fold);
-        }
-        if(noteId && !jobs.length && data.enabled){
-          const button=el('button','整理这篇笔记');const request={request_id:crypto.randomUUID().replaceAll('-',''),note_id:noteId};
-          button.onclick=async()=>{button.disabled=true;try{const r=await fetch('/api/intakes',{method:'POST',headers:{'Content-Type':'application/json','X-Lumos-Token':data.token},body:JSON.stringify(request)});const result=await r.json();if(!r.ok)throw new Error(result.error);await refresh();}catch(e){host.append(el('p',e.message));button.disabled=false;}};host.append(button);
         }
         const working=jobs.some(n=>['pending','running'].includes(n.data.status));
         if(working)timer=setTimeout(refresh,5000);

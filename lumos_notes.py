@@ -20,11 +20,13 @@ def validate_note(data):
     require(re.fullmatch(r'\d{4}-\d{2}-\d{2}', data['date']), 'Invalid note date')
     date.fromisoformat(data['date'])
     require(data['workspace'] in {'lingguang', 'lumos'}, 'Invalid workspace')
-    require(data['status'] in {'active', 'archived'}, 'Invalid note status')
+    require(data['status'] in {'active', 'archived', 'deleted'}, 'Invalid note status')
     require(data['status'] != 'archived' or data['archive_reason'].strip(), 'Archive reason required')
     require(type(data.get('revision')) is int and data['revision'] > 0, 'Invalid note revision')
     require(data.get('recording', 'finished') in {'editing', 'finished'}, 'Invalid recording state')
     require(type(data.get('checkpoint', True)) is bool, 'Invalid checkpoint')
+    require(isinstance(data.get('suggested_refs', []), list) and len(data.get('suggested_refs', [])) <= 20
+            and all(isinstance(i, str) for i in data.get('suggested_refs', [])), 'Invalid suggested references')
     source = data.get('source', {})
     require(isinstance(source, dict) and source.get('type') in {'user', 'agent', 'source', 'user_report'}
             and isinstance(source.get('ref'), str) and 0 < len(source['ref']) <= 2000, 'Note needs provenance')
@@ -65,6 +67,7 @@ def list_notes(store, workspace='lingguang', archived=False, query=''):
             nodes = store.nodes(db)
         from lumos_intake import note_intake_status
         notes = [n for n in nodes.values() if n['kind'] == 'note' and n['data']['workspace'] == workspace
+                 and n['data']['status'] != 'deleted'
                  and (n['data']['status'] == 'archived') == archived
                  and query.casefold() in (n['data']['title'] + '\n' + n['data']['body']).casefold()]
         notes.sort(key=lambda n: (n['data']['date'], n['data']['created_at'], n['id']), reverse=True)
@@ -87,14 +90,18 @@ def note_detail(store, ident, revision=None):
             tasks = [{'id': n['id'], 'title': n['data']['text']} for n in store.nodes(db).values()
                      if n['kind'] == 'action' and any(r['id'] == ident for r in n['data'].get('note_refs', []))]
             from lumos_intake import note_intake_status
-            intake = note_intake_status(store.nodes(db), ident)
-        return {'note': note, 'history': history, 'tasks': tasks, 'intake': intake}
+            nodes = store.nodes(db)
+            intake = note_intake_status(nodes, ident)
+            suggestions = [{'id': i, 'kind': nodes[i]['kind'], 'title': nodes[i]['data'].get('text') or nodes[i]['data'].get('title', i)}
+                           for i in note['data'].get('suggested_refs', []) if i in nodes]
+        return {'note': note, 'history': history, 'tasks': tasks, 'intake': intake, 'suggestions': suggestions}
 
 
 def save_note(store, request):
-    require(isinstance(request, dict) and set(request) <= {'request_id', 'id', 'expected_revision', 'changes', 'source', 'operation'}, 'Unknown note request field')
+    require(isinstance(request, dict) and set(request) <= {'request_id', 'id', 'expected_revision', 'changes', 'source', 'operation', 'confirmed'}, 'Unknown note request field')
     operation = request.get('operation', 'save')
-    require(operation in {'save', 'edit', 'finish'}, 'Invalid note operation')
+    require(operation in {'save', 'edit', 'finish', 'archive', 'process', 'delete'}, 'Invalid note operation')
+    require(operation not in {'archive', 'delete'} or request.get('confirmed') is True, '请先确认归档或删除笔记')
     key = request.get('request_id')
     require(isinstance(key, str) and re.fullmatch(r'[a-f0-9]{32}', key), 'Invalid request_id')
     ident = request.get('id')
@@ -116,6 +123,9 @@ def save_note(store, request):
             nodes = store.nodes(db)
         old = nodes.get(ident)
         require(old is None or old['kind'] == 'note', 'Invalid note ID')
+        require(not old or old['data']['status'] != 'deleted', '笔记已删除，不能修改；历史引用仍保留。')
+        require(operation not in {'process', 'delete'} or old, '请先保存笔记')
+        require(operation != 'process' or not changes, 'Lumos归档不能同时修改正文')
         require(request['expected_revision'] == (old['data']['revision'] if old else 0),
                 '笔记已被其他页面或 Agent 修改；草稿已保留，请查看最新版本后合并。')
         data = dict(old['data']) if old else {'title': '未命名笔记', 'body': '', 'workspace': 'lingguang',
@@ -130,18 +140,35 @@ def save_note(store, request):
                 or (operation != 'edit' and ('recording' not in data or recording == 'finished')),
                 '请先结束记录，再归档已处理的笔记。')
         data.update(changes)
+        require(data['status'] != 'deleted', '删除须使用确认后的删除操作')
+        if operation == 'archive':
+            data.update(status='archived', archive_reason='王牧楠确认普通归档，无需Agent处理。', archive_mode='manual')
+        if operation == 'delete':
+            data.update(status='deleted')
         if isinstance(data['title'], str):
             data['title'] = data['title'].strip() or '未命名笔记'
         data.update(revision=request['expected_revision'] + 1, updated_at=now(), source=request.get('source'))
-        # Keep audit revisions immutable for pinned task sources; only finishes enter reading history.
-        data.update(recording='finished' if operation == 'finish' else 'editing' if operation == 'edit' else recording,
-                    checkpoint=operation == 'finish')
+        # Keep raw checkpoints and audit revisions immutable for pinned task sources.
+        data.update(recording='finished' if operation in {'finish', 'archive', 'delete'} else 'editing' if operation == 'edit' else recording,
+                    checkpoint=operation == 'finish' or (operation == 'archive' and recording == 'editing'))
         validate_note(data)
         node = {'id': ident, 'kind': 'note', 'data': data}
         batch_request = {'reason': reason, 'updates': [node]}
         from lumos_intake import enabled, note_intake
-        if operation == 'finish' and enabled(nodes, data['workspace']):
-            batch_request['updates'].append(note_intake(node))
+        if operation == 'process':
+            require(recording == 'finished' and data['status'] == 'active', '请先结束记录，已归档笔记请先恢复')
+            require(enabled(nodes, data['workspace']), '此空间尚未启用自主整理')
+            require(not any(n['kind'] == 'intake' and n['data'].get('note', {}).get('id') == ident
+                            and n['data']['status'] in {'pending', 'running'} for n in nodes.values()), '笔记正在整理，请完成后再归档')
+            batch_request['updates'].append(note_intake(node, 'archive'))
+        if operation == 'finish' and data['status'] == 'active' and enabled(nodes, data['workspace']):
+            batch_request['updates'].append(note_intake(node, 'format'))
+        # A withdrawn note must not be applied by an already-running planner.
+        if data['status'] in {'archived', 'deleted'} or operation == 'edit':
+            for n in nodes.values():
+                if n['kind'] == 'intake' and n['data'].get('note', {}).get('id') == ident and n['data']['status'] in {'pending', 'running', 'failed'}:
+                    batch_request['updates'].append({**n, 'data': {**n['data'], 'status': 'obsolete',
+                        'summary': '笔记已归档、删除或重新编辑，本次整理已停止。', 'revision': n['data']['revision']+1, 'updated_at': now()}})
         with store.db() as db:
             links = set(db.execute('SELECT src,dst,relation FROM links'))
         store.validate(nodes, {**nodes, **{n['id']: n for n in batch_request['updates']}}, batch_request, links, links)

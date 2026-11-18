@@ -20,14 +20,14 @@ async function page(){
  get('note-workspace').value='lingguang';get('note-status').value='false';
  const listing={notes:[],store_id:'fixture',writable:true,token:'test',today:'2026-10-26'};
  const world={document:{getElementById:get,createElement:()=>new Element(),createTextNode:text=>({textContent:text})},
-  window:{addEventListener(){}},history:{replaceState(){}},location:{search:''},URLSearchParams,crypto,
+  window:{addEventListener(){},confirm:()=>true},history:{replaceState(){}},location:{search:''},URLSearchParams,crypto,
   sessionStorage:storage(),localStorage:storage(),setTimeout:()=>1,clearTimeout(){},fetch:async()=>response(listing)};
  vm.createContext(world);vm.runInContext(fs.readFileSync('web/notes.js','utf8'),world);await tick();
  await get('new-note').onclick();
  return {world,get,listing};
 }
 function edit(p,text){p.get('note-body').value=text;p.get('note-body').events.input();}
-function saved(req){return {note:{id:req.id,kind:'note',data:{...req.changes,recording:req.operation==='finish'?'finished':req.operation==='edit'?'editing':req.recording || 'editing',revision:req.expected_revision+1}}};}
+function saved(req){return {note:{id:req.id,kind:'note',data:{...req.changes,...(req.operation==='archive'?{status:'archived',archive_reason:'普通归档'}:req.operation==='delete'?{status:'deleted'}:{}),recording:['finish','archive','delete'].includes(req.operation)?'finished':req.operation==='edit'?'editing':req.recording || 'editing',revision:req.expected_revision+1}}};}
 
 test('archived note edits, autosaves and finishes without restoring or losing its reason',async()=>{
  const p=await page();let latest={id:'note-archived',data:{title:'归档笔记',body:'错名',date:'2026-11-09',workspace:'lingguang',status:'archived',archive_reason:'已整理',recording:'finished',revision:3}};
@@ -148,13 +148,31 @@ test('safe reading renders raw HTML as text and allows only http links',async()=
  assert.ok(all.some(n=>n.textContent?.includes('<script>')));
  assert.equal(all.filter(n=>n.href).length,1);assert.equal(all.find(n=>n.href).href,'https://example.com');
 });
-test('archive and restore use explicit inline controls and preserve body',async()=>{
+test('ordinary archive requires confirmation and preserves body without a finish request',async()=>{
  const p=await page();edit(p,'keep original');let req;
  p.world.fetch=async(url,opt)=>{if(!opt)return response(p.listing);req=JSON.parse(opt.body);return response(saved(req));};
- await p.get('archive-note').onclick();assert.equal(p.get('archive-panel').hidden,false);
- p.get('archive-reason').value='reviewed';await p.get('confirm-archive').onclick();
- assert.equal(req.changes.status,'archived');assert.equal(req.changes.body,'keep original');
+ p.world.window.confirm=()=>false;await p.get('archive-note').onclick();assert.equal(req.operation,'save');
+ p.world.window.confirm=()=>true;await p.get('archive-note').onclick();
+ assert.equal(req.operation,'archive');assert.equal(req.confirmed,true);assert.equal(req.changes.body,'keep original');
  await p.get('archive-note').onclick();assert.equal(req.changes.status,'active');
+});
+
+test('deleting a note requires confirmation and removes the editor only after save',async()=>{
+ const p=await page();edit(p,'keep original');const requests=[];
+ p.world.fetch=async(url,opt)=>{if(!opt)return response(p.listing);const req=JSON.parse(opt.body);requests.push(req);return response(saved(req));};
+ p.world.window.confirm=()=>false;await p.get('delete-note').onclick();assert.equal(requests.length,1);
+ assert.equal(p.get('note-editor').hidden,false);
+ p.world.window.confirm=()=>true;await p.get('delete-note').onclick();
+ assert.equal(requests.at(-1).operation,'delete');assert.equal(requests.at(-1).confirmed,true);
+ assert.equal(p.get('note-editor').hidden,true);assert.equal(p.get('welcome').hidden,false);
+});
+
+test('retrying an uncertain archive never restores the note or submits a second action',async()=>{
+ const p=await page();edit(p,'ordinary note');const requests=[];let lost=false;
+ p.world.fetch=async(url,opt)=>{if(!opt)return response(p.listing);const req=JSON.parse(opt.body);requests.push(req);if(req.operation==='archive'&&!lost){lost=true;throw new Error('response lost');}return response(saved(req));};
+ await p.get('archive-note').onclick();await p.get('archive-note').onclick();
+ assert.equal(requests.length,3);assert.deepEqual(requests[1],requests[2]);
+ assert.equal(p.get('archive-note').textContent,'恢复至未处理');
 });
 
 test('recovered draft waits for explicit save and then clears its recovery copy',async()=>{

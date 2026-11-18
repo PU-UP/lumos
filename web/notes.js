@@ -54,7 +54,7 @@ async function refreshList() {
   for (const n of state.notes) {
     if (day !== n.data.date) {$('note-list').append(node('h2', n.data.date)); $('note-list').lastChild.className='note-day'; day=n.data.date;}
     const button = node('button', n.data.title); button.className='note-item' + (current?.id === n.id ? ' selected' : '');
-    button.append(node('small', (n.data.status === 'archived' ? '已归档' + (n.data.recording === 'editing' ? ' · 编辑中' : '') : n.data.recording === 'editing' ? '记录中' : window.LumosIntake?.labels[n.intake?.data.status] || '待处理') + ' · 修改于 ' + new Date(n.data.updated_at).toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:'Asia/Shanghai'})));
+    button.append(node('small', (n.data.status === 'archived' ? '已归档' + (n.data.recording === 'editing' ? ' · 编辑中' : '') : n.data.recording === 'editing' ? '记录中' : n.intake?.data.note_mode==='format' && n.intake.data.status==='done' ? '已润色 · 待归档' : window.LumosIntake?.labels[n.intake?.data.status] || '待处理') + ' · 修改于 ' + new Date(n.data.updated_at).toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:'Asia/Shanghai'})));
     button.onclick = () => navigate(() => openNote(n.id)); $('note-list').append(button);
   }
   if (!state.notes.length) $('note-list').append(node('p', '这里还没有笔记。'));
@@ -62,18 +62,22 @@ async function refreshList() {
 }
 function isReading() {return !dirty && (current?.data.recording === 'finished' || (current?.data.revision > 0 && !current?.data.recording));}
 function controls() {
-  for (const id of Object.values(fieldIds)) $(id).disabled = historical || !state.writable || transitioning || isReading();
+  const deleted=current?.data.status==='deleted';
+  for (const id of Object.values(fieldIds)) $(id).disabled = deleted || historical || !state.writable || transitioning || isReading();
   $('save-note').disabled = historical || !state.writable || !!remote;
   $('archive-note').disabled = historical || !state.writable || !!remote;
   $('archive-note').textContent = current?.data.status === 'archived' ? '恢复至未处理' : '归档';
-  $('archive-note').disabled ||= transitioning || (!isReading() && current?.data.status !== 'archived');
-  $('preview-note').disabled = historical || !state.writable || transitioning || !!remote;
+  $('archive-note').disabled ||= transitioning || deleted;
+  $('lumos-archive').disabled = historical || deleted || !state.writable || !!remote || transitioning || !isReading() || current?.data.status !== 'active';
+  $('delete-note').disabled = historical || deleted || !state.writable || !!remote || transitioning;
+  $('preview-note').disabled = deleted || historical || !state.writable || transitioning || !!remote;
   $('preview-note').textContent = paused && pending?.operation === 'edit' ? '重试进入编辑' : paused && pending?.operation === 'finish' ? '重试结束记录' : isReading() ? '编辑' : '结束记录';
   $('save-note').hidden = isReading();
-  $('save-note').disabled ||= transitioning;
+  $('save-note').disabled ||= transitioning || deleted;
 }
 function fill(data) {
-  remote = null; $('conflict').hidden = true; $('archive-panel').hidden=true;
+  remote = null; $('conflict').hidden = true;
+  $('note-related').replaceChildren();
   for (const [k,id] of Object.entries(fieldIds)) $(id).value = data[k] || '';
   $('welcome').hidden=true; $('note-editor').hidden=false;
   const reading = historical || isReading();
@@ -82,24 +86,32 @@ function fill(data) {
   $('save-state').textContent = historical ? '历史版本 · 只读' : dirty ? '未保存草稿' : savedState();
   $('note-id').textContent = '笔记：' + current.id;
   $('history-content').replaceChildren(); controls();
-  if(window.LumosIntake && !historical && data.recording !== 'editing')window.LumosIntake.watch($('note-intake'),data.workspace,current.id,async()=>{
+  const readProcessed=async()=>{
     const id=current.id, revision=current.data.revision;
     const detail=await api('/api/note?id='+encodeURIComponent(id));
     if(current?.id!==id || current.data.revision!==revision || dirty || historical || transitioning || !isReading())return;
     current=detail.note;fill(current.data);renderHistory(detail);await refreshList();
+  };
+  if(window.LumosIntake && !historical && (data.status==='active' || (data.status==='archived' && data.archive_mode!=='manual')) && data.recording !== 'editing')window.LumosIntake.watch($('note-intake'),data.workspace,current.id,readProcessed,async listing=>{
+    if(!listing)return;const job=listing.intakes.find(n=>n.data.note?.id===current?.id);controls();
+    $('lumos-archive').disabled ||= ['pending','running'].includes(job?.data.status);
+    if(job?.data.note_mode && ['done','needs_review'].includes(job.data.status) && job.data.note.revision===current?.data.revision)await readProcessed();
   });
   else {window.LumosIntake?.stop();$('note-intake').replaceChildren();}
 }
 function savedState() {
+  if(current.data.status==='deleted')return '已删除 · 历史只读';
   if (current.data.status === 'archived') return isReading() ? '已归档 · 阅读模式' : '已归档 · 编辑中 · 自动保存当前内容';
   return isReading() ? '已结束记录 · 待处理 · 阅读模式' : '记录中 · 已自动保存';
 }
 function renderHistory(detail) {
+  $('note-related').replaceChildren();
+  for(const ref of detail.suggestions||[]){const a=node('a',ref.title);a.href=ref.kind==='action'?'/tasks?task='+encodeURIComponent(ref.id):'/?line='+encodeURIComponent(ref.id);const row=node('p','相关'+(ref.kind==='action'?'任务：':'主线：'));row.append(a);$('note-related').append(row);}
   $('history-content').replaceChildren();
   for (const t of detail.tasks) $('history-content').append(node('p', '关联任务：' + t.title));
   for (const h of detail.history) {
     const fold = document.createElement('details');
-    fold.append(node('summary', (h.data.checkpoint === undefined ? '已有历史 · 修订 ' + h.data.revision : '结束记录') + ' · ' + new Date(h.at).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai'}) + ' · ' + (h.data.source.type === 'agent' ? 'Agent' : '用户/来源')),
+    fold.append(node('summary', (h.data.checkpoint === undefined ? '已有历史 · 修订 ' + h.data.revision : h.data.source.type === 'agent' ? 'Lumos润色' : '原始记录') + ' · ' + new Date(h.at).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai'}) + ' · ' + (h.data.source.type === 'agent' ? 'Agent' : '用户/来源')),
       node('p', h.data.source.ref), node('p', h.data.archive_reason || ''), node('pre', h.data.title + '\n' + h.data.body));
     $('history-content').append(fold);
   }
@@ -119,8 +131,8 @@ async function navigate(action) {
     await action();
   } catch(e) {message(e.message);} finally {navigating=false;}
 }
-async function save(operation = 'save') {
-  if (saving) {await saving; if (paused) return false; return save(operation);}
+async function save(operation = 'save', confirmed = false) {
+  if (saving) {await saving; if (paused) return false; return save(operation, confirmed);}
   if (!current || (!dirty && operation === 'save')) return true;
   if (remote || historical || !state.writable) return false;
   paused=false;
@@ -130,12 +142,12 @@ async function save(operation = 'save') {
   if (!pending && operation === 'save' && current.data.revision > 0 && current.data.recording !== 'editing'
       && Object.entries(fieldIds).some(([k,id])=>$(id).value !== current.data[k])) operation='edit';
   if (!pending) pending={operation, id:current.id, request_id:uid(), expected_revision:current.data.revision,
-    changes:Object.fromEntries(['title','body','date','workspace','status','archive_reason'].map(k=>[k,snapshot[k]]))};
+    ...(confirmed?{confirmed:true}:{}),changes:operation==='process'?{}:Object.fromEntries(['title','body','date','workspace','status','archive_reason'].map(k=>[k,snapshot[k]]))};
   stash(); $('save-state').textContent='保存中…';
   saving=(async () => {
     try {
       const result=await api('/api/notes',{method:'POST',headers:{'Content-Type':'application/json','X-Lumos-Token':state.token},body:JSON.stringify(pending)});
-      const sent=pending.changes, savedOperation=pending.operation, recoveryKey=current.recoveryKey;
+      const sent={...current.data,...pending.changes}, savedOperation=pending.operation, recoveryKey=current.recoveryKey;
       current=result.note; pending=null;
       // Input remains editable while a request is in flight; never replace newer text with its response.
       dirty=Object.entries(fieldIds).some(([k,id])=>$(id).value !== sent[k]);
@@ -143,9 +155,14 @@ async function save(operation = 'save') {
         for (const [k,id] of Object.entries(fieldIds)) $(id).value=current.data[k];
         try {localStorage.removeItem(draftKey()); if(recoveryKey) localStorage.removeItem(recoveryKey);} catch {}
       }
+      if(current.data.status==='deleted'){
+        window.LumosIntake?.stop();current=null;dirty=false;$('note-editor').hidden=true;$('welcome').hidden=false;
+        history.replaceState(null,'','/notes');message('笔记已删除，已引用原文和历史保留。');
+        try{await refreshList();}catch(e){message('笔记已删除，列表刷新失败：'+e.message);}return true;
+      }
       $('save-state').textContent=dirty?'尚有新内容待保存':savedState();
       $('note-id').textContent='笔记：'+current.id;
-      if(!dirty && ['edit','finish'].includes(savedOperation)) fill(current.data);
+      if(!dirty && ['edit','finish','archive','process'].includes(savedOperation)) fill(current.data);
       controls(); message();
       history.replaceState(null,'','/notes?id='+encodeURIComponent(current.id));
       try {await refreshList();} catch(e) {message('内容已保存，列表刷新失败：'+e.message);}
@@ -227,18 +244,22 @@ $('preview-note').onclick=()=> {
     } finally {transitioning=false; controls();}
   });
 };
-$('archive-note').onclick=()=>navigate(async()=> {
+$('archive-note').onclick=()=>pending?.operation==='archive'?navigate(async()=>{}):navigate(async()=> {
   const archive=current.data.status!=='archived';
-  if(archive) {$('archive-panel').hidden=false; $('archive-reason').focus(); return;}
+  if(archive) {
+    if(!window.confirm('普通归档这篇笔记？\n不会交给Agent更新知识库、主线或任务；尚未完成的整理将停止。重要笔记请使用“Lumos 归档”。'))return;
+    transitioning=true;controls();try{dirty=true;await save('archive',true);}finally{transitioning=false;controls();}return;
+  }
   current.data.status='active'; current.data.archive_reason='';
   dirty=true; stash(); if(await save()) fill(current.data);
 });
-$('cancel-archive').onclick=()=>{$('archive-panel').hidden=true;};
-$('confirm-archive').onclick=()=>navigate(async()=> {
-  const reason=$('archive-reason').value.trim();
-  if(!reason) {message('请填写归档原因。'); return;}
-  current.data.status='archived'; current.data.archive_reason=reason;
-  dirty=true; stash(); if(await save()) fill(current.data);
+$('delete-note').onclick=()=>pending?.operation==='delete'?navigate(async()=>{}):navigate(async()=> {
+  if(!window.confirm('删除这篇笔记？\n将从笔记列表移除并停止尚未完成的整理；已被任务引用的原文及历史仍保留用于追溯。'))return;
+  if(!current.data.revision){current=null;$('note-editor').hidden=true;$('welcome').hidden=false;return;}
+  transitioning=true;controls();try{dirty=true;await save('delete',true);}finally{transitioning=false;controls();}
+});
+$('lumos-archive').onclick=()=>pending?.operation==='process'?navigate(async()=>{}):navigate(async()=> {
+  transitioning=true;controls();try{dirty=true;if(await save('process'))message('已交给 Codex Astra 整理，完成后更新工作记录并归档。');}finally{transitioning=false;controls();}
 });
 $('merge-note').onclick=async()=> {
   if(!remote) return;

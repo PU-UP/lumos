@@ -9,6 +9,21 @@ from lumos_worker import codex_models, plan_with_codex, SCHEMA
 
 
 class WorkerTest(unittest.TestCase):
+    def test_note_format_uses_astra_and_cannot_request_business_updates(self):
+        def run(command, **kwargs):
+            self.assertEqual(command[2:4], ['--model', 'gpt-6.2-astra'])
+            schema = json.loads(Path(command[command.index('--output-schema')+1]).read_text())
+            self.assertEqual(schema['required'], ['summary', 'note_format'])
+            self.assertNotIn('updates', schema['properties'])
+            self.assertIn('不更新知识库', kwargs['input'])
+            Path(command[command.index('--output-last-message')+1]).write_text(json.dumps({
+                'summary': '润色', 'note_format': {'title': '记录', 'body': '# 记录\n原文', 'related_ids': []}}), encoding='utf-8')
+            return SimpleNamespace(returncode=0, stdout='')
+        with tempfile.TemporaryDirectory() as folder, patch('lumos_worker.executable', return_value='codex'), patch('lumos_worker.subprocess.run', side_effect=run):
+            plan = plan_with_codex({'intake': {'data': {'note_mode': 'format', 'model': 'gpt-6.2-astra'}}}, Path(folder))
+        self.assertEqual(plan['updates'], [])
+        self.assertEqual(plan['questions'], [])
+
     def test_task_review_uses_complete_coverage_schema_and_management_prompt(self):
         def run(command, **kwargs):
             schema = json.loads(Path(command[command.index('--output-schema')+1]).read_text())

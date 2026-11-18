@@ -49,7 +49,7 @@ test('answered questions keep their receipt and unanswered ones request new feed
   item.data.resolutions=[{index:0,answer:'模拟项目'}];
   const p=page(async()=>response(data([item])));await p.api.watch(p.host,'lingguang');
   const elements=flatten(p.host);
-  assert.ok(elements.some(n=>n.textContent==='已答复：项目？ · 模拟项目'));
+  assert.ok(elements.some(n=>n.textContent==='原问题已答复：模拟项目'));
   assert.ok(elements.some(n=>n.textContent==='需核对：负责人？'));
   assert.equal(elements.filter(n=>n.tag==='button').length,0);
 });
