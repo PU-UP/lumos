@@ -88,7 +88,8 @@ test('search finds short id, progress and owner regardless of collapse and statu
 test('Agent targets appear on the timeline without replacing promises or becoming overdue commitments',()=>{
   const a=task('a',{planned_due:'2026-11-13'}),b=task('b',{due:'2026-11-20',planned_due:'2026-11-18'});
   assert.equal(targetDate(a),'2026-11-13');assert.equal(deliveryDate(a),'');
-  assert.equal(targetDate(b),'2026-11-20');
+  assert.equal(targetDate(b),'2026-11-18');
+  assert.equal(deliveryDate(b),'2026-11-20');
   const view=managementModel(state([a],[line('m',['a'])]),'lingguang');
   assert.equal(view.issues.length,1);assert.doesNotMatch(view.issues[0].reason,/交付已过/);
 });
@@ -298,8 +299,8 @@ test('future followups stay out of current questions even when delivery is overd
   const s=state([task('001',{due:'2026-11-01',follow_up:'2026-12-01',status:'blocked'}),task('002',{follow_up:'2026-11-14'}),task('003',{due:'2026-11-14',follow_up:'2026-11-20'}),task('004',{status:'done',follow_up:'2026-11-01'}),task('005')],[]);
   s.open_questions=s.tasks.map((t,index)=>({workspace:'lingguang',intake_id:'old',index,question:t.short_id+'的结果？'}));
   const original=JSON.stringify(s),view=managementModel(s,'lingguang'),inbox=questionInbox(view.questions,[],'lingguang');
-  assert.deepEqual(inbox.primary.map(q=>q.index),[1]);
-  assert.deepEqual(inbox.rest.map(q=>q.index),[2]);
+  assert.deepEqual(inbox.primary.map(q=>q.index),[1,2]);
+  assert.deepEqual(inbox.rest.map(q=>q.index),[]);
   assert.deepEqual(inbox.later.map(q=>q.index).sort(),[0,3,4]);
   assert.match(inbox.later.find(q=>q.index===0).timingReason,/2026-12-01/);
   assert.equal(JSON.stringify(s),original);
@@ -312,4 +313,33 @@ test('failed submissions keep the answer dialog open with its draft',async()=>{
   p.get('open-feedback').onclick({});p.get('feedback-text').value='保留的答复';
   await p.get('feedback-form').onsubmit({preventDefault(){}});
   assert.equal(p.get('answer-dialog').open,true);assert.equal(p.get('feedback-text').value,'保留的答复');
+});
+
+test('review question maps to its exact mainline and needs an answer even with future followup',()=>{
+ const a=task('a',{due:'2026-11-01',planned_due:'2026-11-25',follow_up:'2026-11-20'});
+ a.management_question={intake_id:'review',index:0};
+ const s=state([a],[line('m',['a'])]);
+ s.open_questions=[{workspace:'lingguang',intake_id:'review',index:0,question:'验证是否通过？',related_ids:[]}];
+ const view=managementModel(s,'lingguang');
+ assert.equal(view.questions[0].line.id,'m');assert.equal(view.questions[0].needsAnswer,true);
+ assert.equal(view.issues.length,0);assert.equal(view.upcoming[0].id,'a');
+});
+
+test('shared tasks do not obscure the single mainline covering the question',()=>{
+ const s=state([task('015'),task('041'),task('052')],[line('camera',['015','041','052']),line('lidar',['015'])]);
+ s.open_questions=[{workspace:'lingguang',intake_id:'q',index:0,question:'T-015/T-041/T-052 样品到了吗？'}];
+ let q=managementModel(s,'lingguang').questions[0];assert.equal(q.title,'camera');assert.equal(q.line.id,'camera');
+ s.open_questions[0].question='T-015 安装角度是否确定？';q=managementModel(s,'lingguang').questions[0];
+ assert.equal(q.line,undefined);assert.equal(q.title,'camera / lidar');
+});
+
+test('closed tasks keep review history without requesting another answer',()=>{
+ for(const status of ['done','cancelled']){
+  const a=task('a',{status,follow_up:'2026-11-01'});
+  a.management_question={intake_id:'review',index:0};
+  const s=state([a],[line('m',['a'])]);
+  s.open_questions=[{workspace:'lingguang',intake_id:'review',index:0,question:'历史验证结果？'}];
+  const q=managementModel(s,'lingguang').questions[0];
+  assert.equal(q.needsAnswer,false);assert.equal(q.line.id,'m');
+ }
 });

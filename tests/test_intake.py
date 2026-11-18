@@ -273,6 +273,35 @@ class IntakeTest(BaseStoreCase):
         self.assertEqual(list_intakes(self.store)['intakes'][0]['data']['status'], 'running')
         self.assertIsNone(self.store.status()['session'])
 
+    def test_current_plan_replaces_old_deadline_without_losing_promise(self):
+        from lumos_task_review import task_issues
+        self.enable_management()
+        request = self.job()
+        request['plan']['updates'] = [self.item(changes={'due': '2020-01-01'})]
+        apply_intake(self.store, request)
+        request = self.job()
+        request['plan']['updates'] = [self.item(changes={'planned_due': '2099-01-10', 'follow_up': '2099-01-09'}, mode='planned')]
+        apply_intake(self.store, request)
+        data = task_detail(self.store, 'talk')['task']['data']
+        self.assertEqual(data['due'], '2020-01-01')
+        self.assertEqual(data['planned_due'], '2099-01-10')
+        self.assertFalse(any('交付' in issue for issue in task_issues(data, today())))
+        request = self.job()
+        request['plan']['updates'] = [self.item(changes={'planned_due': '2099-01-08'}, mode='planned')]
+        with self.assertRaisesRegex(lumos.Error, '不能晚于'):
+            apply_intake(self.store, request)
+        request['plan']['updates'] = [self.item(changes={'due': '2099-01-12'})]
+        apply_intake(self.store, request)
+        self.assertFalse(task_detail(self.store, 'talk')['task']['data'].get('planned_due'))
+
+    def test_server_review_metadata_is_rejected_without_partial_task_write(self):
+        request = self.job()
+        before = task_detail(self.store, 'talk')
+        request['plan']['updates'] = [self.item(changes={'progress': 'must not save', 'task_review': {}})]
+        with self.assertRaisesRegex(lumos.Error, 'task_review.*任务未更新'):
+            apply_intake(self.store, request)
+        self.assertEqual(task_detail(self.store, 'talk'), before)
+
     def test_agent_followup_cannot_skip_future_delivery_but_can_check_past_outcome(self):
         request = self.job()
         request['plan']['updates'] = [self.item(changes={'due': '2099-01-10'})]

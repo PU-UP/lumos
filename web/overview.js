@@ -80,6 +80,7 @@ if (typeof document !== 'undefined') {
   }
   function latestAnswer(){return activeQuestion?questionInbox([],receipts,feedbackWorkspace).latest.get(activeQuestion.key):receipts.find(n=>n.id===generalReceipt);}
   function answerStatus(job){
+    if(job.data.status==='failed' && job.data.error)return '整理未保存：'+(job.data.error==='Invalid task fields'?'方案包含不允许修改的任务字段；原答复已保留，需修正后重试。':job.data.error);
     return answerStates[job.data.status]||'状态待核对';
   }
   function updateAnswerStatus(){
@@ -170,7 +171,7 @@ if (typeof document !== 'undefined') {
       const jobs=[...inbox.latest.values()],working=jobs.filter(job=>['pending','running','failed'].includes(job.data.status)).length;
       const section=fold('答复处理进度 · '+inbox.latest.size+(working?' · '+working+' 件待处理或重试':' · 处理回执可查看'),progress,'answers',working>0);
       for(const [key,job] of inbox.latest){
-        const row=el('div',undefined,'answer-progress-row');row.append(el('span',job.data.title),el('span',answerStatus(job),'answer-state'));
+        const row=el('div',undefined,'answer-progress-row');row.append(el('span',model.questions.find(q=>q.key===key)?.title || (job.data.title==='跨事项待确认' ? job.data.question_text || job.data.text.split('\n\n王牧楠答复：')[0] : job.data.title)),el('span',answerStatus(job),'answer-state'));
         const view=el('button','查看答复与结果');view.onclick=()=>openFeedback(model.questions.find(q=>q.key===key)||{key,title:job.data.title,text:'这份答复的原文与处理结果如下。可继续补充新情况。',tasks:[],line:job.data.related_ids?.length===1?model.entries.find(e=>e.line.id===job.data.related_ids[0])?.line:null},view);row.append(view);section.append(row);
       }
     }
@@ -183,9 +184,9 @@ if (typeof document !== 'undefined') {
     if(projects.length)link.append(el('span',projects.join(' / '),'task-meta'));
     if(task.data.priority==='P3')link.append(el('span','P3 · 非项目事务','task-meta'));
     const due=task.data.due==='long_term'?'长期':task.data.due || '未约定';
-    const overdue=isOpenTask(task) && deliveryDate(task) && deliveryDate(task)<state.today;
-    if(task.data.planned_due)link.append(el('span','Lumos目标 '+task.data.planned_due,'task-meta'));
-    link.append(el('span', `${mainlineLabels[task.data.status]} · ${task.data.owner || '王牧楠'}${task.data.owner_basis==='agent'?'（Lumos安排）':''} · 原交付 ${due}${overdue?' · 已过计划日期，结果待核对':''}`, 'task-meta'));
+    const overdue=isOpenTask(task) && targetDate(task) && targetDate(task)<state.today;
+    if(task.data.planned_due)link.append(el('span','当前计划交付 '+task.data.planned_due,'task-meta'));
+    link.append(el('span', `${mainlineLabels[task.data.status]} · ${task.data.owner || '王牧楠'}${task.data.owner_basis==='agent'?'（Lumos安排）':''} · 原交付 ${due}${overdue?' · 当前计划需重新安排或确认关键结果':''}`, 'task-meta'));
     if(progress && task.data.progress) link.append(el('p',task.data.progress,'task-progress'));
     return link;
   }
@@ -230,7 +231,7 @@ if (typeof document !== 'undefined') {
     if(deliveryView){
       const tasks=[...new Map(entries.flatMap(milestoneTasks).map(t=>[t.id,t])).values()];
       const overdue=tasks.filter(t=>targetDate(t) && targetDate(t)<state.today);
-      if(overdue.length){const past=fold('已过原节点，结果待核对 · '+overdue.length,$('mainlines'),'delivery:past');dateGroups(overdue,past,'delivery:past');}
+      if(overdue.length){const past=fold('当前计划已过，待Lumos处理 · '+overdue.length,$('mainlines'),'delivery:past');dateGroups(overdue,past,'delivery:past');}
       dateGroups(tasks.filter(t=>!targetDate(t) || targetDate(t)>=state.today),$('mainlines'),'delivery:current');
     }
     for(const entry of deliveryView?[]:entries) {
@@ -273,7 +274,13 @@ if (typeof document !== 'undefined') {
       if(!Array.isArray(fresh.mainlines))throw new Error('当前服务尚未加载主线功能，请重启 Lumos 服务后刷新。');
       state=fresh;render(); watchAnswers();
       $('message').textContent=state.integrity?.drafts_or_missing_working_copies?.length?'存在未吸收的工作文档改动，当前展示正式保存记录。':'';
-      const id=new URLSearchParams(window.location.search).get('line');
+      const params=new URLSearchParams(window.location.search);
+      const question=model.questions.find(q=>q.key===params.get('question'));
+      if(question && !$('answer-dialog').open){
+        openFeedback(question);
+        const url=new URL(window.location.href);url.searchParams.delete('question');history.replaceState(null,'',url);
+      }
+      const id=params.get('line');
       if(id && model.entries.some(e=>e.line.id===id))await openLine(id);
     }catch(e){$('message').textContent='未能刷新：'+e.message+(state?'。下方仍为上次读取的内容。':'');}
     finally{$('refresh').disabled=writing;}

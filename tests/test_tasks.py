@@ -1,3 +1,4 @@
+import unittest
 import copy
 import http.client
 import json
@@ -250,7 +251,7 @@ class TaskTest(BaseStoreCase):
         tasks = list_tasks(self.store, "2026-10-21")
         self.assertEqual(set(tasks["attention"]), {overdue, near, later, "talk"})
         self.assertEqual(next(t for t in tasks["tasks"] if t["id"] == overdue)["attention"],
-                         ["原交付已过，待核对结果", "已逾期", "到跟进日", "有阻塞", "重要事项"])
+                         ["当前计划已过，Lumos需重新安排或提出具体问题", "已逾期", "到跟进日", "有阻塞", "重要事项"])
         self.assertTrue({"talk", later, done} <= {t["id"] for t in tasks["tasks"]})
         ctx = next(n for n in self.store.context("mapping")["nodes"] if n["id"] == "mapping")
         ctx["data"]["status"] = "archived"
@@ -490,3 +491,11 @@ class TaskTest(BaseStoreCase):
         req.update(id=other, before_id=ident, changes={"status": "done", "completed_on": "2026-10-25"})
         save_task(self.store, req)
         self.assertEqual(task_detail(self.store, other)["task"]["data"]["completed_on"], "2026-10-25")
+
+
+class ScheduleIssueTest(unittest.TestCase):
+    def test_expired_delivery_keeps_schedule_conflict_until_replanned(self):
+        from lumos_task_review import task_issues
+        data = {'status': 'doing', 'owner': '王牧楠', 'due': '2026-11-13', 'follow_up': '2026-11-21'}
+        self.assertIn('跟进晚于交付', task_issues(data, '2026-11-18'))
+        self.assertNotIn('跟进晚于交付', task_issues({**data, 'planned_due': '2026-11-25'}, '2026-11-18'))

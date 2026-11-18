@@ -50,19 +50,23 @@ def task_defaults(data):
             "priority": data.get("priority", "normal"), "group": data.get("group", "").strip()}
 
 
+def current_due(data):
+    return data.get("planned_due") or data.get("due", "")
+
+
 def attention(data, today):
     if data["status"] in {"done", "cancelled"}:
         return []
     reasons = []
     if not data.get("follow_up"):
         reasons.append("待设置关心时间")
-    due = data.get("due")
+    due = current_due(data)
     if not due and not data.get('planned_due'):
         reasons.append("未约定交付时间")
     if due == "long_term":
         due = None
     if due and data.get("follow_up", "") > due:
-        reasons.append("原交付已过，待核对结果" if due < today.isoformat() else "关心时间晚于交付日期")
+        reasons.append("当前计划已过，Lumos需重新安排或提出具体问题" if due < today.isoformat() else "关心时间晚于交付日期")
     if due and due < today.isoformat():
         reasons.append("已逾期")
     elif due and due <= (today + timedelta(days=7)).isoformat():
@@ -110,7 +114,7 @@ def list_tasks(store, today=None):
                               "attention": attention(node["data"], today)})
         tasks.sort(key=lambda n: (not bool(n["attention"]),
                                  "已逾期" not in n["attention"],
-                                 n["data"].get("due") or "9999", n["id"]))
+                                 current_due(n["data"]) or "9999", n["id"]))
         board_order = [n["id"] for n in sorted(tasks, key=board_key)]
         ctl = store.control()
         from lumos_people import list_people
@@ -285,6 +289,9 @@ def commit_tasks(store, nodes, batch_request, ident):
 def prepare_task(store, nodes, old, changes, source, note_refs=None, reviewed=False):
     data = dict(old["data"]) if old else {"status": "todo", "priority": "normal", "source": source}
     data.update(changes)
+    if old and "due" in changes and changes["due"] != old["data"].get("due", "") and "planned_due" not in changes:
+        data.pop("planned_due", None)
+        data.pop("planning_reason", None)
     if (old and old["data"]["status"] in {"done", "cancelled"} and data["status"] not in {"done", "cancelled"}
             and "follow_up" not in changes):
         data["follow_up"] = ""

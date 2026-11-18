@@ -393,7 +393,7 @@ def apply_intake(store, request):
                 if kind == 'mainline':
                     require(not (set(changes) & {'as_of', 'phase', 'goal'}), '复核时间不能冒充主线新进展')
             if kind == 'action':
-                require(set(changes) <= FIELDS, 'Invalid task fields')
+                require(set(changes) <= FIELDS, '整理方案包含不允许修改的任务字段：' + '、'.join(sorted(set(changes) - FIELDS)) + '；任务未更新，原答复已保留。需修正整理方案后重试。')
                 changes = dict(changes)
                 if item['mode'] == 'planned':
                     allowed = not (set(changes) & {'due', 'completed_on', 'status', 'condition'}) if previous else not changes.get('due') and changes.get('status', 'todo') == 'todo'
@@ -427,8 +427,9 @@ def apply_intake(store, request):
                 data = prepare_task(store, nodes, previous, changes, changes_source, refs)
                 from lumos_task_review import acknowledge_edits
                 acknowledge_edits(data)
-                if 'follow_up' in changes and data.get('review_basis') == 'agent':
-                    due = data.get('due', '')
+                if {'follow_up', 'planned_due'} & changes.keys() and data.get('review_basis') == 'agent':
+                    from lumos_tasks import current_due
+                    due = current_due(data)
                     if due and due != 'long_term' and due >= today():
                         require(not data.get('follow_up') or data['follow_up'] <= due,
                                 'Lumos的跟进安排不能晚于尚未到期的交付日期')

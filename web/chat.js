@@ -62,7 +62,7 @@ if(typeof document!=='undefined'){
     $('subject-count').textContent='找到 '+options.length+' 项 · 已选 '+selected.length+' 项';
     if(!options.length)host.append(el('p','没有匹配的当前事项，试试其他关键词或切换查看范围。','muted'));
     for(const n of options){const b=el('button',undefined,'task-prompt');b.type='button';b.setAttribute('aria-pressed',String(selected.some(t=>t.id===n.id)));b.disabled=busy||!!pending;
-      b.append(el('span',subjectTitle(n)),el('small',n.kind==='mainline'?(n.data.phase||n.data.summary||'主线'):[chatWorkModel.mainlineLabels[n.data.status],n.data.owner||'负责人待定',n.data.due&&n.data.due!=='long_term'?'约定交付 '+n.data.due:n.data.planned_due?'Lumos目标 '+n.data.planned_due:n.data.due==='long_term'?'长期':'未约定交付'].join(' · ')));
+      b.append(el('span',subjectTitle(n)),el('small',n.kind==='mainline'?(n.data.phase||n.data.summary||'主线'):[chatWorkModel.mainlineLabels[n.data.status],n.data.owner||'负责人待定',n.data.planned_due?'当前计划交付 '+n.data.planned_due:n.data.due&&n.data.due!=='long_term'?'约定交付 '+n.data.due:n.data.due==='long_term'?'长期':'未约定交付'].join(' · ')));
       b.onclick=()=>chooseTask(n);host.append(b);
     }
   }

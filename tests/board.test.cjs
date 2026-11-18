@@ -169,6 +169,8 @@ test('full task review ignores task filters, disables duplicate requests and sho
   const completed={id:'review-1',data:{status:'done',completed_at:'2026-11-17T10:00:00Z',task_reviews:[{id:'a'}],summary:'已检查'}};
   p.board.task_reviews.lingguang={enabled:true,latest:completed,completed};await p.world.refresh();
   assert.match(p.get('task-review-time').textContent,/1 项任务/);assert.equal(p.get('review-tasks').disabled,false);
+  p.board.tasks=[{id:'closed',data:{context:'work-current',status:'done'},management_question:{intake_id:'old',index:0,question:'旧问题'}}];
+  p.world.renderTaskReview();assert.equal(p.get('task-review-content').children.length,1);
 });
 
 test('manual edit markers retain original values and distinguish acknowledgement', async () => {
@@ -176,7 +178,7 @@ test('manual edit markers retain original values and distinguish acknowledgement
   const task={data:{manual_edits:{owner:{value:'王牧楠',at:'2026-11-17T10:00:00Z'}}}};
   assert.match(p.world.manualBadge(task,['owner']).textContent,/待复核/);
   task.data.manual_edits.owner.seen_at='2026-11-17T11:00:00Z';
-  assert.match(p.world.manualBadge(task,['owner']).textContent,/已接续/);
+  assert.match(p.world.manualBadge(task,['owner']).textContent,/已看过/);
   assert.match(p.world.manualBadge(task,['owner']).title,/王牧楠/);
 });
 
@@ -741,7 +743,7 @@ test('delivery dates are visible and sortable independently of follow-up dates',
   rows[0].children[6].onclick();
   assert.equal(p.get('task-list').children[2].dataset.id, 'b');
   p.world.renderTask(p.board.tasks[1].data);
-  assert.match(textOf(p.get('task-view')), /交付日期：未约定/);
+  assert.match(textOf(p.get('task-view')), /当前交付：未约定/);
 });
 
 test('summary formats bullets safely and folds uncurated long progress without losing text', async () => {
@@ -1145,6 +1147,45 @@ test('new and existing task forms stage joint owners until save and preserve own
 test('internal targets avoid false unscheduled warnings and expired promises remain visible as outcome checks',async()=>{
   const p=await page();p.board.today='2026-11-17';
   assert.equal(p.world.dueHint({status:'doing',planned_due:'2026-11-27'}).text,'');
-  assert.equal(p.world.followUpHint({status:'doing',due:'2026-11-13',follow_up:'2026-11-18'}).text,'原交付已过 · 待核对结果');
+  assert.equal(p.world.followUpHint({status:'doing',due:'2026-11-13',follow_up:'2026-11-18'}).text,'关心时间晚于当前交付 · Lumos需协调排期');
   assert.equal(p.world.followUpHint({status:'doing',due:'2026-11-20',follow_up:'2026-11-21'}).cls,'date-conflict');
+});
+
+ test('current plan replaces old date in editor and followup hints',async()=>{
+  const p=await page();p.board.today='2026-11-18';
+  const data={status:'doing',due:'2026-11-13',planned_due:'2026-11-27',follow_up:'2026-11-20'};
+  assert.equal(p.world.followUpHint(data).text,'');
+  const host=p.get('due-editor');host.replaceChildren();
+  p.world.renderDueEditor(host,data.due,false,()=>{},data.planned_due);
+  assert.match(host.children[0]['aria-label'],/2026-11-27/);
+  assert.equal(host.children[1].children[0].value,'2026-11-27');
+  assert.equal(p.world.followUpHint(data,{question:'验证是否通过？'}).text,'待你回答主线问题');
+ });
+
+test('schedule conflict stays orange even with a question or an expired delivery',async()=>{
+ const p=await page();p.board.today='2026-11-18';const question={question:'阶段成果是否就绪？'};
+ for(const due of ['2026-11-13','2026-11-20']){
+  const d={status:'doing',due,follow_up:'2026-11-21'};
+  assert.equal(p.world.followUpHint(d,question).cls,'date-conflict');
+  assert.match(p.world.followUpHint(d,question).text,/待你回答主线问题/);
+  assert.equal(p.world.followUpHint({...d,planned_due:'2026-11-25'},question).cls,'follow-up-pending');
+ }
+ for(const d of [{due:'2026-11-21'},{due:'long_term'},{due:'2026-11-13',status:'done'},{due:'2026-11-13',status:'cancelled'}])
+  assert.notEqual(p.world.followUpHint({status:'doing',follow_up:'2026-11-21',...d},question).cls,'date-conflict');
+});
+
+test('undo restores a superseded plan when selecting the unchanged original promise',async()=>{
+ const p=await page();
+ const task={id:'a',data:{text:'计划验证',status:'doing',context:'work-current',due:'2026-11-20',planned_due:'2026-11-27',planning_reason:'等待样品'},attention:[]};
+ p.board.tasks=[task];const writes=[];
+ p.world.fetch=async(_,options)=>{
+  if(!options)return response(p.board);
+  const req=JSON.parse(options.body);writes.push(req);Object.assign(task.data,req.changes);
+  return response({seq:++p.board.seq});
+ };
+ await p.world.quickSave('a',{due:'2026-11-20',planned_due:'',planning_reason:''});
+ assert.match(p.get('save-summary').textContent,/2026-11-27 → 2026-11-20/);
+ assert.equal(p.get('undo-save').hidden,false);
+ await p.get('undo-save').onclick();
+ assert.deepEqual(writes[1].changes,{due:'2026-11-20',planned_due:'2026-11-27',planning_reason:'等待样品'});
 });

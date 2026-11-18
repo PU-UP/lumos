@@ -45,3 +45,23 @@ class WorkerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, patch('lumos_worker.executable', return_value='codex'), patch('lumos_worker.subprocess.run', side_effect=run):
             self.assertEqual(plan_with_codex(context, Path(folder))['reply'], 'answer')
         self.assertNotIn('reply', SCHEMA['required'])
+
+    def test_task_output_schema_excludes_review_metadata_and_preserves_clear_values(self):
+        from lumos_tasks import FIELDS
+        def run(command, **kwargs):
+            schema = json.loads(Path(command[command.index('--output-schema')+1]).read_text())
+            action = schema['properties']['updates']['items']['anyOf'][0]
+            fields = action['properties']['changes']
+            self.assertEqual(set(fields['properties']), FIELDS)
+            self.assertFalse(fields['additionalProperties'])
+            self.assertNotIn('task_review', fields['properties'])
+            self.assertNotIn('task_reviews', schema['properties'])
+            changes = {k: None for k in FIELDS}
+            changes.update(progress='New report', follow_up='')
+            Path(command[command.index('--output-last-message')+1]).write_text(json.dumps({
+                'summary': 'updated', 'questions': [], 'resolutions': [], 'updates': [
+                    {'id': 'task', 'kind': 'action', 'changes': changes, 'reason': 'report', 'excerpt': 'report', 'mode': 'reported'}]}), encoding='utf-8')
+            return SimpleNamespace(returncode=0, stdout='')
+        with tempfile.TemporaryDirectory() as folder, patch('lumos_worker.executable', return_value='codex'), patch('lumos_worker.subprocess.run', side_effect=run):
+            result = plan_with_codex({'intake': {'data': {}}}, Path(folder))
+        self.assertEqual(result['updates'][0]['changes'], {'progress': 'New report', 'follow_up': ''})

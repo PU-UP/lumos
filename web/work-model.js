@@ -3,12 +3,12 @@
 const mainlineLabels = {todo:'待处理', doing:'进行中', blocked:'受阻', done:'已完成', cancelled:'已取消'};
 const isOpenTask = t => !['done', 'cancelled'].includes(t.data.status);
 const deliveryDate = t => /^\d{4}-\d{2}-\d{2}$/.test(t.data.due || '') ? t.data.due : '';
-const targetDate = t => deliveryDate(t) || t.data.planned_due || '';
+const targetDate = t => t.data.planned_due || deliveryDate(t) || '';
 const deliverySort = (a, b) => (targetDate(a) || '9999').localeCompare(targetDate(b) || '9999') || a.id.localeCompare(b.id);
 const mainlineSort = (a, b) => (a.data.priority || 'P4').localeCompare(b.data.priority || 'P4') || (a.data.order || 0)-(b.data.order || 0) || a.id.localeCompare(b.id);
 function taskQuestionTiming(task,today){
   const d=task.data;if(!isOpenTask(task))return {needed:false,reason:'相关任务已结束，历史问题待复核'};
-  if(deliveryDate(task)===today)return {needed:true,reason:'交付节点 '+today};
+  if(targetDate(task)===today)return {needed:true,reason:'交付节点 '+today};
   if(d.follow_up)return {needed:d.follow_up<=today,reason:(d.follow_up<=today?'已到跟进日 ':'下次跟进 ')+d.follow_up};
   const due=targetDate(task);
   if(due && due<=today)return {needed:true,reason:'阶段节点 '+due+'，结果待核对'};
@@ -41,10 +41,13 @@ function managementModel(state, workspace) {
   issues.sort((a,b) => a.severity-b.severity || a.date.localeCompare(b.date) || a.title.localeCompare(b.title));
   const questions=(state.open_questions || []).filter(q=>q.workspace===workspace).map(q=>{
     const mentioned=tasks.filter(t=>t.short_id && (q.question.match(/T-\d+/g)||[]).includes(t.short_id));
-    const refs=mentioned.length?mentioned.map(t=>t.id):(q.related_ids||[]);
+    const reviewed=tasks.filter(t=>t.management_question && t.management_question.intake_id===q.intake_id && t.management_question?.index===q.index);
+    const refs=[...new Set([...mentioned.map(t=>t.id),...reviewed.map(t=>t.id),...(mentioned.length ? [] : (q.related_ids||[]))])];
     const matches=entries.filter(e=>refs.includes(e.line.id) || e.tasks.some(t=>refs.includes(t.id)));
-    const entry=matches.length===1?matches[0]:null;
-    return {...q, key:`question:${q.intake_id}:${q.index}`, title:entry?.line.data.title || '跨事项待确认', line:entry?.line, tasks:tasks.filter(t=>refs.includes(t.id)), text:q.question};
+    const taskRefs=tasks.filter(t=>refs.includes(t.id));
+    const covering=matches.filter(e=>taskRefs.length && taskRefs.every(t=>e.tasks.some(other=>other.id===t.id)));
+    const entry=matches.length===1?matches[0]:covering.length===1?covering[0]:null;
+    return {...q, key:`question:${q.intake_id}:${q.index}`, title:entry?.line.data.title || matches.map(e=>e.line.data.title).join(' / ') || taskRefs.map(t=>t.data.text).join(' / ') || q.question, line:entry?.line, tasks:tasks.filter(t=>refs.includes(t.id)), text:q.question};
   });
   questions.sort((a,b)=>Number(b.tasks.some(t=>t.data.follow_up && t.data.follow_up<=state.today))-Number(a.tasks.some(t=>t.data.follow_up && t.data.follow_up<=state.today)));
   for(const issue of issues) {
@@ -56,8 +59,8 @@ function managementModel(state, workspace) {
   for(const q of questions){
     const timing=q.tasks.map(t=>taskQuestionTiming(t,state.today));
     if(!timing.length && q.line?.data.review_on)timing.push({needed:q.line.data.review_on<=state.today,reason:'主线复核 '+q.line.data.review_on});
-    q.needsAnswer=timing.some(t=>t.needed);
-    q.timingReason=[...new Set(timing.filter(t=>t.needed===q.needsAnswer).map(t=>t.reason))].join('；')||'尚未安排提问时间，由Lumos接续';
+    q.needsAnswer=q.tasks.some(t=>isOpenTask(t) && t.management_question && t.management_question.intake_id===q.intake_id && t.management_question?.index===q.index) || timing.some(t=>t.needed);
+    q.timingReason=q.needsAnswer && !timing.some(t=>t.needed) ? '当前安排需要你的答复' : [...new Set(timing.filter(t=>t.needed===q.needsAnswer).map(t=>t.reason))].join('；')||'尚未安排提问时间，由Lumos接续';
   }
   const milestones=[...new Map(entries.flatMap(e=>milestoneTasks(e)).map(t=>[t.id,t])).values()].sort(deliverySort);
   const horizon=new Date(state.today+'T00:00:00Z');horizon.setUTCDate(horizon.getUTCDate()+14);

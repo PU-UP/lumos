@@ -9,6 +9,7 @@ import tempfile
 import threading
 
 from lumos import ENGINE, Error, require, write_json
+from lumos_tasks import FIELDS
 from lumos_intake import claim_intake, intake_context, apply_intake, fail_intake, enqueue_due_reviews
 
 SCHEMA = {
@@ -23,6 +24,20 @@ SCHEMA = {
                 'id': {'type': 'string'}, 'kind': {'type': 'string', 'enum': ['action', 'mainline', 'person', 'evidence']},
                 'changes_json': {'type': 'string'}, 'reason': {'type': 'string'}, 'excerpt': {'type': 'string'},
                 'mode': {'type': 'string', 'enum': ['reported', 'planned']}}}}}}
+
+
+# Tasks use explicit fields so the model cannot write server-owned review metadata.
+_update_schema = SCHEMA['properties']['updates']['items']
+SCHEMA['properties']['updates']['items'] = {'anyOf': [
+    {**_update_schema, 'required': ['id', 'kind', 'changes', 'reason', 'excerpt', 'mode'],
+     'properties': {**{k: v for k, v in _update_schema['properties'].items() if k != 'changes_json'},
+                    'kind': {'type': 'string', 'enum': ['action']},
+                    'changes': {'type': 'object', 'additionalProperties': False,
+                                'required': sorted(FIELDS),
+                                'properties': {k: {'type': ['string', 'null']} for k in sorted(FIELDS)}}}},
+    {**_update_schema, 'properties': {**_update_schema['properties'],
+                                    'kind': {'type': 'string', 'enum': ['mainline', 'person', 'evidence']}}}
+]}
 
 
 def executable():
@@ -89,7 +104,10 @@ def plan_with_codex(context, root):
                     '整理执行器调用了计划外工具，结果未应用。')
         plan = json.loads(output.read_text(encoding='utf-8'))
         for item in plan['updates']:
-            item['changes'] = json.loads(item.pop('changes_json'))
+            if item['kind'] == 'action':
+                item['changes'] = {k: v for k, v in item['changes'].items() if v is not None}
+            else:
+                item['changes'] = json.loads(item.pop('changes_json'))
         return plan
 
 

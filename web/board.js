@@ -31,10 +31,10 @@ function renderTaskReview() {
   const host=$('task-review-content');host.replaceChildren();
   $('task-review-result').hidden=!completed;
   if(completed){host.append(element('p',completed.summary));
-    const waiting=state.tasks.filter(t=>workspaceOf(t.data.context)===$('workspace').value && t.management_question);
+    const waiting=state.tasks.filter(t=>workspaceOf(t.data.context)===$('workspace').value && !isClosed(t.data) && t.management_question);
     const groups=new Map();
-    for(const t of waiting){const q=t.management_question,key=q.intake_id+':'+q.index;if(!groups.has(key))groups.set(key,{question:q.question,tasks:[]});groups.get(key).tasks.push(t.short_id||t.data.text);}
-    for(const group of groups.values()){const a=element('a',group.tasks.join('、')+'：'+group.question);a.href='/?workspace='+$('workspace').value;host.append(a);}
+    for(const t of waiting){const q=t.management_question,key=q.intake_id+':'+q.index;if(!groups.has(key))groups.set(key,{question:q.question,key:'question:'+q.intake_id+':'+q.index,tasks:[]});groups.get(key).tasks.push(t.short_id||t.data.text);}
+    for(const group of groups.values()){const a=element('a',group.tasks.join('、')+'：'+group.question);a.href='/?workspace='+$('workspace').value+'&question='+encodeURIComponent(group.key);host.append(a);}
   }
   if(running)reviewTimer=setTimeout(()=>refresh(),4000);
 }
@@ -59,7 +59,7 @@ $('review-tasks').onclick=async()=>{
 function manualBadge(task, fields) {
   const edits=fields.map(k=>[k,task.data.manual_edits?.[k]]).filter(([,v])=>v);
   if(!edits.length)return null;
-  const badge=element('small',edits.some(([,v])=>!v.seen_at)?'你改过 · 待复核':'你改过 · 已接续','manual-edit');
+  const badge=element('small',edits.some(([,v])=>!v.seen_at)?'你改过 · 待复核':'你的修改 · Lumos已看过','manual-edit');
   const names={text:'标题',owner:'负责人',follow_up:'关心时间',due:'约定交付',planned_due:'计划交付',completed_on:'完成日期',status:'状态',priority:'优先级',group:'项目标签',context:'关联背景',progress:'进展',next_step:'下一步',details:'背景',condition:'完成条件'};
   badge.title=edits.map(([k,v])=>(names[k]||k)+'：'+(v.value||'已清空')+' · '+reviewTime(v.at)).join('\n');
   return badge;
@@ -308,10 +308,14 @@ function filtered() {
     && [t.short_id, t.data.text, t.data.details, t.data.next_step].join(' ').toLowerCase().includes(query));
 }
 
-function followUpHint(data) {
+const currentDue = data => data.planned_due || data.due || '';
+function followUpHint(data, question = null) {
   if (['done', 'cancelled'].includes(data.status)) return {text: '', cls: ''};
+  const due = currentDue(data);
+  if (due && due !== 'long_term' && data.follow_up > due) return {
+    text: '关心时间晚于当前交付 · Lumos需协调排期' + (question ? ' · 待你回答主线问题' : ''), cls: 'date-conflict'};
+  if (question) return {text: '待你回答主线问题', cls: 'follow-up-pending'};
   if (!data.follow_up) return {text: '待设置关心时间', cls: 'follow-up-pending'};
-  if (data.due && data.due !== 'long_term' && data.follow_up > data.due) return data.due < state.today ? {text: '原交付已过 · 待核对结果', cls: 'follow-up-overdue'} : {text: '跟进应提前至交付前', cls: 'date-conflict'};
   if (data.follow_up === state.today) return {text: '今天', cls: 'follow-up-today'};
   if (data.follow_up && data.follow_up < state.today) {
     const days = Math.round((Date.parse(state.today + 'T00:00:00Z') - Date.parse(data.follow_up + 'T00:00:00Z')) / 86400000);
@@ -331,7 +335,7 @@ function render() {
     $('status-' + status).textContent = (selected ? '✓ ' : '') + labels[status];
   }
   for (const name of ['list', 'schedule']) $('view-' + name).setAttribute('aria-pressed', String(taskView === name));
-  $('view-hint').textContent = taskView === 'list' ? '点击标题查看详情；可在列表中修改负责人、项目标签、优先级、状态和日期。'
+  $('view-hint').textContent = taskView === 'list' ? '点击任务标题查看详情或回答标注的问题；可直接修改负责人、项目标签、优先级、状态和日期。'
     : '近期安排按下次关心时间分组，沿用上方全部筛选；点击任务查看详情。';
   renderList(tasks);
   renderSchedule(tasks);
@@ -343,6 +347,7 @@ function sortedTasks(tasks) {
     : sortKey === 'priority' ? ({P3: -1, low: 0, normal: 1, high: 2}[t.data.priority || 'normal'])
     : sortKey === 'follow_up' && isClosed(t.data) ? ''
     : sortKey === 'due' && t.data.status === 'done' ? t.data.completed_on || ''
+    : sortKey === 'due' ? currentDue(t.data)
     : sortKey === 'status' ? Object.keys(labels).indexOf(t.data.status) : t.data[sortKey] || '';
   return [...tasks].sort((a, b) => {
     const original = order.indexOf(a.id) - order.indexOf(b.id);
@@ -377,7 +382,7 @@ function renderSchedule(tasks) {
       const row = element('div', undefined, 'schedule-task'), button = element('button', task.data.text, 'row-title');
       button.type = 'button'; button.onclick = () => openTask(task.id);
       row.append(button, element('span', ownerName(task.data) + ' · ' + labels[task.data.status] + ' · ' + (task.data.follow_up || '未设关心时间'), 'muted'));
-      const hint = followUpHint(task.data);
+      const hint = followUpHint(task.data, task.management_question);
       if (hint.text) row.append(element('span', hint.text, 'follow-up-label ' + hint.cls));
       const deliveryHint = dueHint(task.data);
       row.append(element('span', ' · ' + taskDate(task.data), 'muted'));
@@ -392,7 +397,7 @@ function renderSchedule(tasks) {
 function dueLabel(value) { return value === 'long_term' ? '长期' : value || '未约定'; }
 
 function taskDate(data) {
-  return data.status === 'done' ? '完成日期：' + (data.completed_on || '未记录') : '交付日期：' + dueLabel(data.due);
+  return data.status === 'done' ? '完成日期：' + (data.completed_on || '未记录') : '当前交付：' + dueLabel(currentDue(data));
 }
 
 function chooseCompletionDate(data) {
@@ -425,15 +430,15 @@ function renderDueEditor(parent, value, disabled, onChange, planned = '') {
   trigger.type = 'button';
   trigger.disabled = disabled;
   trigger.setAttribute('aria-expanded', 'false');
-  const label = element('span', dueLabel(value || planned).replaceAll('-', '/'));
+  const label = element('span', dueLabel(planned || value).replaceAll('-', '/'));
   trigger.append(label);
-  trigger.setAttribute('aria-label', (value || !planned ? '交付时间：' : '计划交付：') + dueLabel(value || planned) + '，点击修改');
+  trigger.setAttribute('aria-label', (planned ? '当前计划交付：' : '交付时间：') + dueLabel(planned || value) + '，点击修改');
   const panel = element('div', undefined, 'due-popover');
   panel.setAttribute('popover', 'auto');
   panel.setAttribute('aria-label', '选择交付时间');
   const date = element('input');
   date.type = 'date';
-  date.value = value && value !== 'long_term' ? value : '';
+  date.value = planned || (value && value !== 'long_term' ? value : '');
   date.setAttribute('aria-label', '交付日期');
   date.disabled = disabled;
   const choose = next => {
@@ -501,7 +506,7 @@ function renderList(tasks) {
     title.type = 'button';
     title.title = [t.data.next_step, ...t.attention, t.data.due ? '交付 ' + dueLabel(t.data.due) : ''].filter(Boolean).join('\n');
     title.onclick = () => openTask(t.id);
-    if(t.management_question){const note=element('small','待你回答','task-stewardship');note.title=t.management_question.question;title.append(note);}
+    if(!isClosed(t.data) && t.management_question){const q=t.management_question,note=element('small','待你回答：'+q.question,'task-stewardship');title.append(note);title.onclick=()=>{window.location.href='/?workspace='+workspaceOf(t.data.context)+'&question='+encodeURIComponent('question:'+q.intake_id+':'+q.index);};}
     else if(t.management_issues?.length){const note=element('small','Lumos 待复核','task-stewardship');note.title=t.management_issues.join('；');title.append(note);}
     const changed=manualBadge(t,['text','status','priority','group','context','progress','next_step','details','condition']);if(changed)title.append(changed);
     const priority = element('select', undefined, 'row-priority priority-' + (t.data.priority || 'normal'));
@@ -513,7 +518,7 @@ function renderList(tasks) {
     const date = element('input', undefined, 'row-date');
     date.type = 'date';
     date.value = t.data.follow_up || '';
-    const hint = followUpHint(t.data);
+    const hint = followUpHint(t.data, t.management_question);
     const dateCell = element('div', undefined, 'follow-up-cell ' + hint.cls);
     dateCell.append(date);
     if (isClosed(t.data)) {
@@ -537,8 +542,8 @@ function renderList(tasks) {
       completed.disabled = !state.writable || saving || !!quickPending;
       completed.onchange = () => quickSave(t.id, {completed_on: completed.value});
       dueCell.append(completed, element('small', t.data.completed_on ? '完成日期' : '完成日期未记录'));
-    } else renderDueEditor(dueCell, t.data.due, !state.writable || saving || !!quickPending, value => quickSave(t.id, {due: value}), t.data.planned_due);
-    if (!t.data.due && t.data.planned_due) dueCell.append(element('small', '计划交付', 'planned-target'));
+    } else renderDueEditor(dueCell, t.data.due, !state.writable || saving || !!quickPending, value => quickSave(t.id, {due: value, ...(t.data.planned_due ? {planned_due: '', planning_reason: ''} : {})}), t.data.planned_due);
+    if (!isClosed(t.data) && t.data.planned_due) dueCell.append(element('small', '计划交付', 'planned-target'));
     if (deliveryHint.text) dueCell.append(element('small', '待约定交付时间'));
     dueCell.title = '原交付日期：' + dueLabel(t.data.due) + '；完成日期独立记录';
     const workspace = workspaceOf(t.data.context);
@@ -607,9 +612,9 @@ async function quickSave(id, changes, undoSeq = null, renameGroup = null) {
     const field = Object.keys(changes)[0];
     const before = task?.data[field] ?? (field === 'priority' ? 'normal' : '');
     const summary = renameGroup ? '项目标签已改名：' + renameGroup + ' → ' + changes.group : task ? task.data.text + ' · ' + (quickFields[field] || '状态') + '：'
-      + quickValue(field, before) + ' → ' + quickValue(field, changes[field]) : '修改已保存。';
+      + quickValue(field, field === 'due' ? currentDue(task.data) : before) + ' → ' + quickValue(field, field === 'due' ? currentDue({...task.data, ...changes}) : changes[field]) : '修改已保存。';
     quickFeedback = {text: (undoSeq === null ? '' : '已撤回 · ') + summary,
-      inverse: !renameGroup && undoSeq === null && quickFields[field] && before !== changes[field] ? {[field]: before} : null};
+      inverse: !renameGroup && undoSeq === null && quickFields[field] && Object.entries(changes).some(([key,value])=>(task.data[key] ?? '')!==value) ? {[field]: before, ...(field === 'due' && task.data.planned_due ? {planned_due: task.data.planned_due || '', planning_reason: task.data.planning_reason || ''} : {})} : null};
     quickPending = {request_id: crypto.randomUUID().replaceAll('-', ''), expected_seq: undoSeq ?? state.seq, id, changes,
       ...(renameGroup ? {rename_group: renameGroup} : {})};
   }
@@ -768,7 +773,7 @@ function renderHistory(detail) {
     link.target = '_blank'; link.rel = 'noopener'; fold.append(link);
   }
   sources.append(element('h4', '最初来源'), element('p', sourceText(detail.task.data.source)));
-  if(detail.task.data.planned_due)sources.append(element('p','Lumos目标：'+detail.task.data.planned_due+' · '+(detail.task.data.planning_reason||'')));
+  if(detail.task.data.planned_due)sources.append(element('p','当前计划交付：'+detail.task.data.planned_due+' · '+(detail.task.data.planning_reason||'')));
   if(detail.task.data.owner_basis==='agent')sources.append(element('p','负责人由Lumos安排：'+detail.task.data.owner+' · '+(detail.task.data.owner_reason||'')));
   if(detail.task.data.review_basis==='agent')sources.append(element('p','关心时间由Lumos安排：'+detail.task.data.follow_up+' · '+(detail.task.data.review_reason||'')));
   if (detail.task.data.last_source) sources.append(element('h4', '最近修改来源'), element('p', sourceText(detail.task.data.last_source)));
@@ -847,7 +852,7 @@ function renderTask(data) {
   const badges = tags(meta);
   badges.append(priorityTag(data));
   view.append(badges);
-  if(data.planned_due)view.append(element('p','Lumos目标：'+data.planned_due+' · '+(data.planning_reason||''),'muted'));
+  if(data.planned_due)view.append(element('p','当前计划交付：'+data.planned_due+' · '+(data.planning_reason||''),'muted'));
   if(data.owner_basis==='agent')view.append(element('p','负责人由Lumos安排 · '+(data.owner_reason||''),'muted'));
   const hint = followUpHint(data);
   if (hint.text) view.append(element('p', hint.text, 'follow-up-label ' + hint.cls));

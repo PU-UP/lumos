@@ -1,6 +1,6 @@
 """Task stewardship: exact review coverage, manual edits and unresolved questions."""
 from lumos import now, require
-from lumos_tasks import FIELDS
+from lumos_tasks import FIELDS, current_due
 
 MANUAL_FIELDS = FIELDS - {'owner_basis', 'owner_reason', 'review_basis', 'review_reason', 'planning_reason'}
 
@@ -24,7 +24,7 @@ def task_issues(data, today):
     if data['status'] in {'done', 'cancelled'}:
         return []
     issues = []
-    due, follow, target = data.get('due', ''), data.get('follow_up', ''), data.get('planned_due', '')
+    due, follow = current_due(data), data.get('follow_up', '')
     if not data.get('owner') or data['owner'] == '待分配':
         issues.append('负责人待落实')
     if not follow:
@@ -33,15 +33,11 @@ def task_issues(data, today):
         issues.append('跟进结果待核对')
     if due and due != 'long_term':
         if due < today:
-            issues.append('原交付结果待核对')
-        elif follow and follow > due:
+            issues.append('当前交付计划已过，需重新安排或确认关键结果')
+        if follow and follow > due:
             issues.append('跟进晚于交付')
-    if not due and not target:
+    if not due:
         issues.append('交付计划待安排')
-    if target and target < today:
-        issues.append('计划节点结果待核对')
-    elif target and follow and follow > target:
-        issues.append('跟进晚于计划节点')
     if data['status'] == 'blocked':
         issues.append('阻塞待处理')
     return issues
@@ -80,4 +76,4 @@ def request_task_review(store, request):
     from lumos_intake import save_intake
     require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'source'}, 'Invalid review request')
     return save_intake(store, {**request, 'task_review': True, 'title': 'Lumos 全部任务复核',
-        'text': '全面复核当前空间全部未结束任务与关联主线。接续王牧楠的手动修改，主动维护排期、跟进、负责人和下一步；没有新结果不得编造进展。可自行处理的异常直接处理，仍需确认的异常关联真实待答问题。逐项返回复核结果。'})
+        'text': '从主线阶段成果拆解当前空间全部未结束任务的合理排期，核对前置依赖、执行顺序、负责人协作和下游节点影响。接续王牧楠的手动修改，主动维护排期、跟进、负责人和下一步；没有新结果不得编造进展。可自行处理的异常直接协调交付和跟进计划，不能只为消除颜色而顺延；仍需确认的异常在主页关联具体主线问题。逐项返回复核结果。'})

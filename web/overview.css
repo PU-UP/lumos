@@ -46,6 +46,7 @@
 #answer-progress summary{padding:8px 0;font-weight:600}
 .answer-progress-row{display:flex;align-items:center;gap:16px;padding:10px 0;border-top:1px solid var(--line)}
 .answer-progress-row>span:first-child{flex:1;overflow-wrap:anywhere}
+.answer-progress-row>.answer-state{flex-shrink:1;min-width:0;max-width:100%;overflow-wrap:anywhere}
 .answer-progress-row button{font-size:12px;min-height:36px}
 #answer-dialog{position:fixed;inset:0;margin:auto;width:min(760px,calc(100vw - 32px));max-width:none;max-height:90dvh;padding:28px;border:1px solid var(--line);border-radius:14px;overflow:auto;background:var(--white);color:var(--ink)}
 #answer-dialog::backdrop{background:#152f3b80}
