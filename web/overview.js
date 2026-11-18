@@ -19,7 +19,7 @@ if (typeof document !== 'undefined') {
   const deliveryView = window.location.pathname === '/delivery' || new URLSearchParams(window.location.search).get('view') === 'delivery';
   const preferencesKey = 'lumos.management.v1';
   let state, model, pinned=[], detailRequest=0, attentionOpen=true, writing=false;
-  const reviews=new Map(), reviewDrafts=new Map(), folds=new Map();
+  const reviews=new Map(), reviewDrafts=new Map();
   function remember() {
     try {localStorage.setItem(preferencesKey, JSON.stringify({workspace:$('workspace').value,pinned,attentionOpen:$('attention').open}));}
     catch {$('preference-message').textContent='无法保存浏览器偏好；本次查看仍有效。';}
@@ -191,11 +191,7 @@ if (typeof document !== 'undefined') {
   }
   function fold(title, parent, key='', initiallyOpen=false) {
     const d=el('details');
-    if(key){
-      key=$('workspace').value+':'+key;
-      // Read the live element: a native toggle event may still be queued when polling finishes.
-      d.open=folds.get(key)?.open ?? initiallyOpen;folds.set(key,d);
-    }
+    if(key)window.LumosDisclosure.remember(d,'overview:'+$('workspace').value+':'+key,initiallyOpen);
     d.append(el('summary',title));parent.append(d);return d;
   }
   function lineButton(line, text='查看主线', cls='details-button') {const b=el('button',text,cls);b.onclick=()=>openLine(line.id);return b;}
@@ -213,6 +209,8 @@ if (typeof document !== 'undefined') {
   }
   function render() {
     model=managementModel(state,$('workspace').value);
+    for(const id of ['attention','intake-panel','independent'])window.LumosDisclosure.remember($(id),'overview:'+$('workspace').value+':'+id,id==='attention'?attentionOpen:false);
+    document.querySelector('.attention-toggle').textContent=$('attention').open?'收起':'展开';
     const target=$('feedback-target'),selected=target.value;target.replaceChildren(new Option('综合反馈',''));
     for(const e of model.entries)target.append(new Option(e.line.data.title,e.line.id));
     for(const issue of model.issues.filter(i=>!i.line))target.append(new Option(issue.title,issue.tasks[0].id));
@@ -295,14 +293,14 @@ if (typeof document !== 'undefined') {
       body.append(el('h3','阶段交付'));dateGroups(milestoneTasks({line:detail.mainline,tasks:live}),body,'detail:'+id);
       body.append(el('h3','风险与下一步'),el('p',d.risk || '暂无已记录风险；不代表已经验证正常。'),el('p',d.next_step || '下一步待明确'));
       const related=el('div',undefined,'detail-links');for(const other of d.related_mainlines || []){const l=model.entries.find(e=>e.line.id===other)?.line;if(l)related.append(lineButton(l,l.data.title));}body.append(related);
-      const tasks=fold('执行细项 · '+live.filter(isOpenTask).length,body);
+      const tasks=fold('执行细项 · '+live.filter(isOpenTask).length,body,'detail:'+id+':tasks');
       for(const t of live.filter(isOpenTask).sort((a,b)=>Number(b.data.status==='blocked')-Number(a.data.status==='blocked') || deliverySort(a,b)))tasks.append(taskLink(t,true));
       const past=detail.tasks.filter(t=>!isOpenTask(t)||['archived','retained'].includes(t.context_status));
-      if(past.length){const closed=fold('已结束 / 历史脉络任务 · '+past.length,body);for(const t of past)closed.append(taskLink(t,true));}
-      const sources=fold('依据与原文 · '+detail.sources.length,body);
-      sources.append(el('p',d.source.ref,'source-text'));if(d.source.quote)sources.append(el('p',d.source.quote,'source-text'));if(d.source.reason)sources.append(el('p',d.source.reason,'source-text'));for(const source of detail.sources){const doc=fold(source.title,sources);doc.append(el('p',source.text,'source-text'));}
-      const versions=fold('主线历史 · '+detail.history.length,body);
-      for(const h of detail.history){const entry=fold(h.at.slice(0,10)+' · '+h.reason,versions);entry.append(el('p',h.after?.data?.summary || ''));}
+      if(past.length){const closed=fold('已结束 / 历史脉络任务 · '+past.length,body,'detail:'+id+':past');for(const t of past)closed.append(taskLink(t,true));}
+      const sources=fold('依据与原文 · '+detail.sources.length,body,'detail:'+id+':sources');
+      sources.append(el('p',d.source.ref,'source-text'));if(d.source.quote)sources.append(el('p',d.source.quote,'source-text'));if(d.source.reason)sources.append(el('p',d.source.reason,'source-text'));for(const source of detail.sources){const doc=fold(source.title,sources,'detail:'+id+':source:'+source.id);doc.append(el('p',source.text,'source-text'));}
+      const versions=fold('主线历史 · '+detail.history.length,body,'detail:'+id+':history');
+      for(const h of detail.history){const entry=fold(h.at.slice(0,10)+' · '+h.reason,versions,'detail:'+id+':history:'+h.at);entry.append(el('p',h.after?.data?.summary || ''));}
     }catch(e){if(request===detailRequest && dialog.open)body.replaceChildren(el('p','读取失败：'+e.message));}
   }
   function closed(){detailRequest++;const url=new URL(window.location.href);url.searchParams.delete('line');history.replaceState(null,'',url);}

@@ -3,7 +3,6 @@ window.LumosIntake = (() => {
   const labels={pending:'待整理',running:'正在整理',failed:'整理失败，原文保留',needs_review:'已整理，有待核对事项',done:'已整理',obsolete:'原文已更新，请整理新版本'};
   const el=(tag,text)=>{const n=document.createElement(tag);n.textContent=text;return n;};
   let timer,generation=0;
-  const folds=new Map();
   async function watch(host,workspace,noteId=null,onFinished=null,onUpdate=null) {
     clearTimeout(timer);const current=++generation;let wasWorking=false;
     async function refresh() {
@@ -18,8 +17,8 @@ window.LumosIntake = (() => {
         const jobs=noteId?all.slice(0,1):all;
         if(!jobs.length)host.append(el('p','暂无整理记录。'));
         for(const job of jobs){
-          const d=job.data,fold=el('details',''),key=workspace+':'+(noteId||'')+':'+job.id,previous=folds.get(key);
-          fold.open=previous?.fold.open ?? (!!noteId || ['failed','needs_review'].includes(d.status));
+          const d=job.data,fold=el('details',''),key='intake:'+workspace+':'+(noteId||'')+':'+job.id;
+          window.LumosDisclosure.remember(fold,key,!!noteId || ['failed','needs_review'].includes(d.status));
           const submitted=d.created_at?new Date(d.created_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'时间未记录';
           const subject=(job.subjects||[]).map(t=>t.title).join('、') || d.title;
           fold.append(el('summary',subject+(d.review?' · 到期复核':'')+' · '+labels[d.status]+' · '+submitted));
@@ -32,7 +31,7 @@ window.LumosIntake = (() => {
           }
           if(d.status==='needs_review')fold.append(el('p','可在进展反馈或笔记中补充，Lumos 会接续这些问题。'));
           const record=el('details','');record.append(el('summary','来源与处理去向'));
-          record.open=previous?.record.open ?? false;folds.set(key,{fold,record});
+          window.LumosDisclosure.remember(record,key+':source');
           if(d.note){const a=el('a','查看原笔记');a.href='/notes?id='+encodeURIComponent(d.note.id)+'&revision='+d.note.revision;record.append(a);}
           else record.append(el('p',d.text));
           for(const target of job.targets||[]){const row=el('p','');if(['action','mainline'].includes(target.kind)){const a=el('a',target.title);a.href=target.kind==='action'?'/tasks?task='+encodeURIComponent(target.id):'/?line='+encodeURIComponent(target.id);row.append(a);}else row.textContent=target.title;record.append(row);}fold.append(record);

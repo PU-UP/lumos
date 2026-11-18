@@ -142,6 +142,7 @@ class MainlineTest(BaseStoreCase):
         self.assertEqual(get('/overview.js')[0], 200)
         self.assertEqual(get('/overview.css')[0], 200)
         self.assertEqual(get('/intake.js')[0], 200)
+        self.assertEqual(get('/disclosure.js')[0], 200)
         receipts = json.loads(get('/api/intakes')[1])
         self.assertEqual(receipts['intakes'], [])
         self.assertEqual(receipts['executor'], 'offline')

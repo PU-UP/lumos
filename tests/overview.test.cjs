@@ -110,18 +110,31 @@ function reviewPage(post,navigation={}){
   const ids=new Map(),get=id=>{if(!ids.has(id))ids.set(id,new Control());return ids.get(id);};
   get('workspace').value='lingguang';
   const snapshot=state([],[line('m',[])]);snapshot.seq=1;snapshot.writable=true;
-  const drafts=new Map([['lumos.management.v1',JSON.stringify({workspace:navigation.workspace})]]);let onUpdate;
+  const drafts=navigation.storage||new Map([['lumos.management.v1',JSON.stringify({workspace:navigation.workspace})]]);let onUpdate;
+  const events={};
   const location=new URL('http://localhost/'+(navigation.search||''));
   const world={document:{getElementById:get,createElement:t=>new Control(t),querySelector:()=>new Control()},
-    window:{location,LumosIntake:{watch:(host,workspace,note,finished,update)=>{onUpdate=update;}}},URL,URLSearchParams,history:{replaceState:(_state,_title,url)=>{location.href=url.href;}},localStorage:{getItem:k=>drafts.get(k)||null,setItem:(k,v)=>drafts.set(k,v)},
+    window:{location,addEventListener:(name,fn)=>events[name]=fn,LumosIntake:{watch:(host,workspace,note,finished,update)=>{onUpdate=update;}}},URL,URLSearchParams,history:{replaceState:(_state,_title,url)=>{location.href=url.href;}},localStorage:{getItem:k=>drafts.get(k)||null,setItem:(k,v)=>drafts.set(k,v)},
     Option:function(text,value){this.textContent=text;this.value=value;},crypto:{randomUUID:()=> 'a'.repeat(32)},
     fetch:async(url,options)=>{if(options)return post(JSON.parse(options.body),snapshot);return {ok:true,json:async()=>snapshot};}};
   world.Event = Event;
-  vm.createContext(world);vm.runInContext(fs.readFileSync('web/dialog.js','utf8'),world);vm.runInContext(fs.readFileSync('web/work-model.js','utf8'),world);vm.runInContext(fs.readFileSync('web/overview.js','utf8'),world);
+  vm.createContext(world);vm.runInContext(fs.readFileSync('web/disclosure.js','utf8'),world);vm.runInContext(fs.readFileSync('web/dialog.js','utf8'),world);vm.runInContext(fs.readFileSync('web/work-model.js','utf8'),world);vm.runInContext(fs.readFileSync('web/overview.js','utf8'),world);
   const controls=()=>{const walk=n=>[n,...n.children.flatMap(walk)];const form=walk(get('mainlines')).find(n=>n.tag==='form');return {form,date:form.children[0].children[0],save:form.children[1],message:form.children[2]};};
-  return {get,controls,snapshot,location,receipts:data=>onUpdate(data)};
+  return {get,controls,snapshot,location,events,receipts:data=>onUpdate(data)};
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('reopening overview restores disclosure choices including closed defaults and workspace isolation',async()=>{
+  const storage=new Map();
+  const first=reviewPage(undefined,{storage});await settle();
+  first.get('attention').open=false;first.get('intake-panel').open=true;first.events.pagehide();
+  const reopened=reviewPage(undefined,{storage});await settle();
+  assert.equal(reopened.get('attention').open,false);assert.equal(reopened.get('intake-panel').open,true);
+  reopened.get('workspace').value='lumos';reopened.get('workspace').onchange();
+  assert.equal(reopened.get('intake-panel').open,false);
+  reopened.get('workspace').value='lingguang';reopened.get('workspace').onchange();
+  assert.equal(reopened.get('attention').open,false);assert.equal(reopened.get('intake-panel').open,true);
+});
 
 test('review links open the requested workspace and subsequent switches keep the URL consistent',async()=>{
   const p=reviewPage(undefined,{workspace:'lingguang',search:'?workspace=lumos'});await settle();

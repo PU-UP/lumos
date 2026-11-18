@@ -3,18 +3,28 @@ class Element {
   constructor(tag='div'){this.tag=tag;this.children=[];this.textContent='';}
   append(...items){this.children.push(...items);}
   replaceChildren(...items){this.children=items;}
+  addEventListener(name,fn){this['on'+name]=fn;}
 }
-function page(fetch){
+function page(fetch,storage=new Map()){
   const timers=new Map();let timer=0;
-  const world={window:{},document:{createElement:tag=>new Element(tag)},fetch,crypto:{randomUUID:()=> '1'.repeat(32)},
+  const world={window:{addEventListener(){}},localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},document:{createElement:tag=>new Element(tag)},fetch,crypto:{randomUUID:()=> '1'.repeat(32)},
     setTimeout:fn=>{timers.set(++timer,fn);return timer;},clearTimeout:id=>timers.delete(id)};
-  vm.createContext(world);vm.runInContext(fs.readFileSync('web/intake.js','utf8'),world);
+  vm.createContext(world);vm.runInContext(fs.readFileSync('web/disclosure.js','utf8'),world);vm.runInContext(fs.readFileSync('web/intake.js','utf8'),world);
   return {api:world.window.LumosIntake,host:new Element(),timers};
 }
 const response=data=>({ok:true,json:async()=>data});
 const data=jobs=>({enabled:true,executor:'available',token:'test',intakes:jobs});
 const job=(status='failed')=>({id:'intake-test',data:{title:'<script>text only</script>',status,revision:2,questions:[]}});
 const flatten=n=>[n,...n.children.flatMap(flatten)];
+
+test('reopened receipts restore both explicit closing and expanded sources',async()=>{
+  const storage=new Map(),fetch=async()=>response(data([job('needs_review')]));
+  const first=page(fetch,storage);await first.api.watch(first.host,'lingguang');
+  const folds=flatten(first.host).filter(n=>n.tag==='details');
+  folds[0].open=false;folds[0].ontoggle();folds[1].open=true;folds[1].ontoggle();
+  const reopened=page(fetch,storage);await reopened.api.watch(reopened.host,'lingguang');
+  assert.deepEqual(flatten(reopened.host).filter(n=>n.tag==='details').map(n=>n.open),[false,true]);
+});
 
 test('receipt and source disclosures retain open and closed choices across polls and watcher restarts',async()=>{
   const item=job('running');item.data.note={id:'note'};let fail=false;
