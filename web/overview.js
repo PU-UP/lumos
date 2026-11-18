@@ -30,6 +30,8 @@ if (typeof document !== 'undefined') {
     if(Array.isArray(p?.pinned)) pinned=p.pinned.filter(x=>typeof x==='string');
     if(typeof p?.attentionOpen==='boolean')attentionOpen=p.attentionOpen;
   } catch {$('preference-message').textContent='未能读取查看偏好，使用默认设置。';}
+  const linkedWorkspace=new URLSearchParams(window.location.search).get('workspace');
+  if(['lingguang','lumos'].includes(linkedWorkspace))$('workspace').value=linkedWorkspace;
   $('attention').open=attentionOpen;
   document.querySelector('.attention-toggle').textContent=attentionOpen?'收起':'展开';
   $('attention').ontoggle=()=>{document.querySelector('.attention-toggle').textContent=$('attention').open?'收起':'展开';remember();};
@@ -305,7 +307,7 @@ if (typeof document !== 'undefined') {
   }
   function closed(){detailRequest++;const url=new URL(window.location.href);url.searchParams.delete('line');history.replaceState(null,'',url);}
   $('close-detail').onclick=()=>$('mainline-detail').close();$('mainline-detail').addEventListener('close',closed);
-  $('workspace').onchange=()=>{if($('answer-dialog').open)$('answer-dialog').close();activeQuestion=null;if($('mainline-detail').open)$('mainline-detail').close();const url=new URL(window.location.href);url.searchParams.delete('line');history.replaceState(null,'',url);remember();if(state)render();receipts=[];receiptState='loading';renderQuestions();watchAnswers();};
+  $('workspace').onchange=()=>{if($('answer-dialog').open)$('answer-dialog').close();activeQuestion=null;if($('mainline-detail').open)$('mainline-detail').close();const url=new URL(window.location.href);url.searchParams.delete('line');url.searchParams.set('workspace',$('workspace').value);history.replaceState(null,'',url);remember();if(state)render();receipts=[];receiptState='loading';renderQuestions();watchAnswers();};
   $('refresh').onclick=load;$('search').oninput=()=>{if(state)render();};$('clear-search').onclick=()=>{$('search').value='';render();$('search').focus();};
   $(deliveryView?'nav-delivery':'view-summary').setAttribute('aria-current','page');
   if(deliveryView){$('page-title').textContent='阶段交付';document.title='Lumos · 主线交付';$('page-description').textContent='跨主线按日期查看阶段成果；已过节点单独核对，原计划始终保留。';}

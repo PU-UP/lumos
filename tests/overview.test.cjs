@@ -106,21 +106,32 @@ class Control {
   get options(){return this.children;}
   requestSubmit(){this.saving=this.onsubmit({preventDefault(){}});}
 }
-function reviewPage(post){
+function reviewPage(post,navigation={}){
   const ids=new Map(),get=id=>{if(!ids.has(id))ids.set(id,new Control());return ids.get(id);};
   get('workspace').value='lingguang';
   const snapshot=state([],[line('m',[])]);snapshot.seq=1;snapshot.writable=true;
-  const drafts=new Map();let onUpdate;
+  const drafts=new Map([['lumos.management.v1',JSON.stringify({workspace:navigation.workspace})]]);let onUpdate;
+  const location=new URL('http://localhost/'+(navigation.search||''));
   const world={document:{getElementById:get,createElement:t=>new Control(t),querySelector:()=>new Control()},
-    window:{location:{pathname:'/',search:''},LumosIntake:{watch:(host,workspace,note,finished,update)=>{onUpdate=update;}}},URLSearchParams,localStorage:{getItem:k=>drafts.get(k)||null,setItem:(k,v)=>drafts.set(k,v)},
+    window:{location,LumosIntake:{watch:(host,workspace,note,finished,update)=>{onUpdate=update;}}},URL,URLSearchParams,history:{replaceState:(_state,_title,url)=>{location.href=url.href;}},localStorage:{getItem:k=>drafts.get(k)||null,setItem:(k,v)=>drafts.set(k,v)},
     Option:function(text,value){this.textContent=text;this.value=value;},crypto:{randomUUID:()=> 'a'.repeat(32)},
     fetch:async(url,options)=>{if(options)return post(JSON.parse(options.body),snapshot);return {ok:true,json:async()=>snapshot};}};
   world.Event = Event;
   vm.createContext(world);vm.runInContext(fs.readFileSync('web/dialog.js','utf8'),world);vm.runInContext(fs.readFileSync('web/work-model.js','utf8'),world);vm.runInContext(fs.readFileSync('web/overview.js','utf8'),world);
   const controls=()=>{const walk=n=>[n,...n.children.flatMap(walk)];const form=walk(get('mainlines')).find(n=>n.tag==='form');return {form,date:form.children[0].children[0],save:form.children[1],message:form.children[2]};};
-  return {get,controls,snapshot,receipts:data=>onUpdate(data)};
+  return {get,controls,snapshot,location,receipts:data=>onUpdate(data)};
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('review links open the requested workspace and subsequent switches keep the URL consistent',async()=>{
+  const p=reviewPage(undefined,{workspace:'lingguang',search:'?workspace=lumos'});await settle();
+  assert.equal(p.get('workspace').value,'lumos');
+  assert.equal(p.get('mainlines').children[0].textContent,'此空间尚未建立主线，独立事项仍可在下方查看。');
+  p.get('workspace').value='lingguang';p.get('workspace').onchange();
+  assert.equal(p.location.search,'?workspace=lingguang');
+  const invalid=reviewPage(undefined,{workspace:'lumos',search:'?workspace=unknown'});await settle();
+  assert.equal(invalid.get('workspace').value,'lumos');
+});
 
 test('question and receipt disclosures keep live state through polling, count changes and refreshes',async()=>{
   const p=reviewPage();await settle();
