@@ -15,6 +15,25 @@ const response=data=>({ok:true,json:async()=>data});
 const data=jobs=>({enabled:true,executor:'available',token:'test',intakes:jobs});
 const job=(status='failed')=>({id:'intake-test',data:{title:'<script>text only</script>',status,revision:2,questions:[]}});
 const flatten=n=>[n,...n.children.flatMap(flatten)];
+
+test('receipt and source disclosures retain open and closed choices across polls and watcher restarts',async()=>{
+  const item=job('running');item.data.note={id:'note'};let fail=false;
+  const p=page(async()=>{if(fail)throw new Error('offline');return response(data([item]));});
+  const folds=()=>flatten(p.host).filter(n=>n.tag==='details');
+  await p.api.watch(p.host,'lingguang');
+  assert.equal(folds()[0].open,false);
+  folds().forEach(n=>n.open=true);
+  await [...p.timers.values()].at(-1)();
+  assert.deepEqual(folds().map(n=>n.open),[true,true]);
+  fail=true;await [...p.timers.values()].at(-1)();fail=false;
+  item.data.status='needs_review';await [...p.timers.values()].at(-1)();
+  assert.deepEqual(folds().map(n=>n.open),[true,true]);
+  folds().forEach(n=>n.open=false);await p.api.watch(p.host,'lingguang');
+  assert.deepEqual(folds().map(n=>n.open),[false,false]);
+  await p.api.watch(p.host,'lingguang','note');
+  assert.equal(folds()[0].open,true);
+  await p.api.watch(p.host,'lingguang');assert.equal(folds()[0].open,false);
+});
 test('answered questions keep their receipt and unanswered ones request new feedback',async()=>{
   const item=job('needs_review');item.data.questions=['项目？','负责人？'];
   item.data.resolutions=[{index:0,answer:'模拟项目'}];

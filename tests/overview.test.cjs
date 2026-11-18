@@ -121,6 +121,45 @@ function reviewPage(post){
   return {get,controls,snapshot,receipts:data=>onUpdate(data)};
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('question and receipt disclosures keep live state through polling, count changes and refreshes',async()=>{
+  const p=reviewPage();await settle();
+  p.snapshot.mainlines[0].data.review_on=p.snapshot.today;
+  p.snapshot.open_questions=Array.from({length:4},(_,index)=>({intake_id:'old',index,workspace:'lingguang',question:'阶段结果 '+index,related_ids:['m']}));
+  p.get('search').oninput();
+  const find=(id,title)=>p.get(id).children.find(n=>n.tag==='details' && n.children[0].textContent.startsWith(title));
+  find('attention-items','其他当前问题').open=true;
+  const reply={id:'reply',data:{workspace:'lingguang',question_key:'question:old:0',status:'running',title:'结果',text:'已答复'}};
+  p.receipts({intakes:[reply]});
+  assert.equal(find('attention-items','其他当前问题').open,true);
+  assert.equal(find('answer-progress','答复处理进度').open,true);
+  find('answer-progress','答复处理进度').open=false;
+  p.receipts({intakes:[reply]});
+  assert.equal(find('answer-progress','答复处理进度').open,false);
+  find('answer-progress','答复处理进度').open=true;
+  reply.data.status='done';p.receipts({intakes:[reply]});
+  assert.equal(find('answer-progress','答复处理进度').open,true);
+  p.snapshot.mainlines[0].data.review_on='2026-12-01';p.get('search').oninput();
+  find('attention-items','后续再跟进').open=true;
+  p.receipts(null);p.receipts({intakes:[reply]});await p.get('refresh').onclick();
+  assert.equal(find('attention-items','后续再跟进').open,true);
+  p.snapshot.mainlines[0].data.review_on=p.snapshot.today;p.get('search').oninput();
+  assert.equal(find('attention-items','其他当前问题').open,true);
+  p.get('workspace').value='lumos';p.snapshot.mainlines[0].data.context='maintenance';
+  p.snapshot.open_questions.forEach(q=>q.workspace='lumos');p.get('search').oninput();
+  assert.equal(find('attention-items','其他当前问题').open,false);
+});
+
+test('mainline disclosures survive full rerenders without sharing state between lines',async()=>{
+  const p=reviewPage();await settle();
+  p.snapshot.mainlines.push(line('other',[]));p.get('search').oninput();
+  const schedules=()=>p.get('mainlines').children.map(row=>row.children.find(n=>n.tag==='details'));
+  schedules()[0].open=true;
+  await p.get('refresh').onclick();
+  assert.deepEqual(schedules().map(n=>n.open),[true,false]);
+  schedules()[0].open=false;p.get('search').oninput();
+  assert.equal(schedules()[0].open,false);
+});
 test('date change saves automatically and survives a reload including explicit clearing',async()=>{
   const posts=[];const p=reviewPage(async(request,s)=>{posts.push(request);s.mainlines[0].data.review_on=request.review_on;return {ok:true,json:async()=>({seq:++s.seq})};});
   await settle();let c=p.controls();c.date.value='2026-11-20';c.date.onchange();await c.form.saving;

@@ -19,7 +19,7 @@ if (typeof document !== 'undefined') {
   const deliveryView = window.location.pathname === '/delivery' || new URLSearchParams(window.location.search).get('view') === 'delivery';
   const preferencesKey = 'lumos.management.v1';
   let state, model, pinned=[], detailRequest=0, attentionOpen=true, writing=false;
-  const reviews=new Map(), reviewDrafts=new Map();
+  const reviews=new Map(), reviewDrafts=new Map(), folds=new Map();
   function remember() {
     try {localStorage.setItem(preferencesKey, JSON.stringify({workspace:$('workspace').value,pinned,attentionOpen:$('attention').open}));}
     catch {$('preference-message').textContent='无法保存浏览器偏好；本次查看仍有效。';}
@@ -95,7 +95,7 @@ if (typeof document !== 'undefined') {
       if(job.data.summary)host.append(el('p',job.data.summary));
       if(['done','needs_review'].includes(job.data.status) && model.questions.some(q=>q.key===job.data.question_key))host.append(el('p','这次答复已保存到工作记录；原问题还有未确认的部分，按后续节点跟进，不要求立即补答。','muted'));
       if(job.data.error)host.append(el('p',job.data.error));
-      const original=fold('已提交的答复',host);original.append(el('p',job.data.text));
+      const original=fold('已提交的答复',host,'answer:'+job.id);original.append(el('p',job.data.text));
       if(job.data.status==='failed'){
         const retry=el('button','重试Lumos处理');retry.type='button';retry.disabled=writing || !!pending;
         retry.onclick=()=>sendFeedback({request_id:crypto.randomUUID().replaceAll('-',''),id:job.id,expected_revision:job.data.revision});host.append(retry);
@@ -159,14 +159,14 @@ if (typeof document !== 'undefined') {
       const answer=el('button','打开回答','answer-button');answer.onclick=()=>openFeedback(question,answer);row.append(answer);parent.append(row);
     };
     for(const q of inbox.primary)add(q,host);
-    if(inbox.rest.length){const more=fold('其他当前问题 · '+inbox.rest.length,host);for(const q of inbox.rest)add(q,more);}
-    if(inbox.later.length){const later=fold('后续再跟进 · '+inbox.later.length+'（无需现在回答）',host);for(const q of inbox.later)add(q,later);}
+    if(inbox.rest.length){const more=fold('其他当前问题 · '+inbox.rest.length,host,'questions:rest');for(const q of inbox.rest)add(q,more);}
+    if(inbox.later.length){const later=fold('后续再跟进 · '+inbox.later.length+'（无需现在回答）',host,'questions:later');for(const q of inbox.later)add(q,later);}
     const progress=$('answer-progress');progress.replaceChildren();
     if(receiptState==='error')progress.append(el('p','处理状态读取失败，正在重试；请勿重复提交。','muted'));
     else if(receiptState==='loading')progress.append(el('p','正在核对已提交的答复…','muted'));
     if(inbox.latest.size){
       const jobs=[...inbox.latest.values()],working=jobs.filter(job=>['pending','running','failed'].includes(job.data.status)).length;
-      const section=fold('答复处理进度 · '+inbox.latest.size+(working?' · '+working+' 件待处理或重试':' · 处理回执可查看'),progress);section.open=working>0;
+      const section=fold('答复处理进度 · '+inbox.latest.size+(working?' · '+working+' 件待处理或重试':' · 处理回执可查看'),progress,'answers',working>0);
       for(const [key,job] of inbox.latest){
         const row=el('div',undefined,'answer-progress-row');row.append(el('span',job.data.title),el('span',answerStatus(job),'answer-state'));
         const view=el('button','查看答复与结果');view.onclick=()=>openFeedback(model.questions.find(q=>q.key===key)||{key,title:job.data.title,text:'这份答复的原文与处理结果如下。可继续补充新情况。',tasks:[],line:job.data.related_ids?.length===1?model.entries.find(e=>e.line.id===job.data.related_ids[0])?.line:null},view);row.append(view);section.append(row);
@@ -187,9 +187,17 @@ if (typeof document !== 'undefined') {
     if(progress && task.data.progress) link.append(el('p',task.data.progress,'task-progress'));
     return link;
   }
-  function fold(title, parent) {const d=el('details');d.append(el('summary',title));parent.append(d);return d;}
+  function fold(title, parent, key='', initiallyOpen=false) {
+    const d=el('details');
+    if(key){
+      key=$('workspace').value+':'+key;
+      // Read the live element: a native toggle event may still be queued when polling finishes.
+      d.open=folds.get(key)?.open ?? initiallyOpen;folds.set(key,d);
+    }
+    d.append(el('summary',title));parent.append(d);return d;
+  }
   function lineButton(line, text='查看主线', cls='details-button') {const b=el('button',text,cls);b.onclick=()=>openLine(line.id);return b;}
-  function dateGroups(tasks, parent) {
+  function dateGroups(tasks, parent, key) {
     const dated=tasks.filter(targetDate);
     if(!tasks.length) parent.append(el('p','尚无当前阶段交付。','muted'));
     for(const day of [...new Set(dated.map(targetDate))].sort()) {
@@ -198,7 +206,7 @@ if (typeof document !== 'undefined') {
       parent.append(section);
     }
     for(const [label,items] of [['长期',tasks.filter(t=>t.data.due==='long_term'&&!targetDate(t))],['未约定交付时间',tasks.filter(t=>!t.data.due&&!targetDate(t))]]) {
-      if(items.length){const d=fold(label+' · '+items.length,parent);d.className='delivery-extra';for(const t of items)d.append(taskLink(t));}
+      if(items.length){const d=fold(label+' · '+items.length,parent,key+':'+label);d.className='delivery-extra';for(const t of items)d.append(taskLink(t));}
     }
   }
   function render() {
@@ -214,7 +222,7 @@ if (typeof document !== 'undefined') {
     renderQuestions();
     const near=$('near-term');near.replaceChildren();near.hidden=deliveryView || !!query;
     near.append(el('h2','未来两周的阶段节点'),el('p',state.today+' 起 · 明确约定与Lumos目标分别标注','muted'));
-    if(model.upcoming.length)dateGroups(model.upcoming,near);else near.append(el('p','暂无已排定的阶段节点；需要明确的关键时间会在问题中提出。','muted'));
+    if(model.upcoming.length)dateGroups(model.upcoming,near,'upcoming');else near.append(el('p','暂无已排定的阶段节点；需要明确的关键时间会在问题中提出。','muted'));
     $('mainlines').replaceChildren();
     const entries=model.entries.filter(e=>!query || [e.line.data.title,e.line.data.summary,e.line.data.goal].join(' ').toLowerCase().includes(query.toLowerCase()) || (deliveryView?milestoneTasks(e):e.tasks).some(t=>matchesTask(t,query)));
     entries.sort((a,b)=>Number(pinned.includes(b.line.id))-Number(pinned.includes(a.line.id)) || mainlineSort(a.line,b.line));
@@ -222,8 +230,8 @@ if (typeof document !== 'undefined') {
     if(deliveryView){
       const tasks=[...new Map(entries.flatMap(milestoneTasks).map(t=>[t.id,t])).values()];
       const overdue=tasks.filter(t=>targetDate(t) && targetDate(t)<state.today);
-      if(overdue.length){const past=fold('已过原节点，结果待核对 · '+overdue.length,$('mainlines'));dateGroups(overdue,past);}
-      dateGroups(tasks.filter(t=>!targetDate(t) || targetDate(t)>=state.today),$('mainlines'));
+      if(overdue.length){const past=fold('已过原节点，结果待核对 · '+overdue.length,$('mainlines'),'delivery:past');dateGroups(overdue,past,'delivery:past');}
+      dateGroups(tasks.filter(t=>!targetDate(t) || targetDate(t)>=state.today),$('mainlines'),'delivery:current');
     }
     for(const entry of deliveryView?[]:entries) {
       const {line}=entry,d=line.data;
@@ -236,11 +244,11 @@ if (typeof document !== 'undefined') {
       actions.append(pin,lineButton(line));heading.append(title,actions);row.append(heading);
       row.append(el('p',d.summary,'mainline-summary'));
       const action=el('div',undefined,'mainline-action');action.append(el('h3','接下来'),el('p',d.next_step || 'Lumos待明确下一步'));row.append(action);
-      if(d.risk){const risk=fold('风险与待验证',row);risk.append(el('p',d.risk,'mainline-risk'));}
+      if(d.risk){const risk=fold('风险与待验证',row,'risk:'+line.id);risk.append(el('p',d.risk,'mainline-risk'));}
       const meta=el('div',undefined,'mainline-meta'),next=milestoneTasks(entry).filter(targetDate)[0];
       if(next){const label=deliveryDate(next)?(deliveryDate(next)<state.today?'待核对交付':'下一交付'):'Lumos目标';const a=el('a',`${label}：${targetDate(next)} · ${next.data.text}`);a.href='/tasks?task='+encodeURIComponent(next.id)+'&return='+encodeURIComponent('/?line='+line.id);meta.append(a);}
       else meta.append(el('span','阶段节点由Lumos接续安排'));
-      meta.append(el('span','摘要依据 '+(d.as_of || '日期未记录')));row.append(meta);const schedule=fold('跟进安排',row);schedule.append(reviewControl(line));
+      meta.append(el('span','摘要依据 '+(d.as_of || '日期未记录')));row.append(meta);const schedule=fold('跟进安排',row,'schedule:'+line.id);schedule.append(reviewControl(line));
       $('mainlines').append(row);
     }
     const result=$('search-results');result.replaceChildren();result.hidden=deliveryView || !query;
@@ -252,7 +260,7 @@ if (typeof document !== 'undefined') {
     for(const task of independent)$('independent-items').append(taskLink(task));
     $('independent').hidden=deliveryView || !!query;
     const past=model.independent.filter(t=>!isOpenTask(t));
-    if(past.length){const closed=fold('已结束独立事项 · '+past.length,$('independent-items'));for(const t of past)closed.append(taskLink(t));}
+    if(past.length){const closed=fold('已结束独立事项 · '+past.length,$('independent-items'),'independent:past');for(const t of past)closed.append(taskLink(t));}
     $('overview-date').textContent=state.today;
     $('sync').textContent='记录日期 '+state.today+' · 已读取最新版本';
     updateAnswerStatus();
@@ -282,7 +290,7 @@ if (typeof document !== 'undefined') {
       if(d.priority)body.append(el('p',`优先级 ${d.priority}${d.priority_basis==='agent'?' · Lumos安排':''}${d.priority_reason?'：'+d.priority_reason:''}`));
       body.append(el('h3','目标'),el('p',d.goal),el('h3','当前结论'),el('p',d.summary),el('p','摘要依据 '+(d.as_of||'日期未记录'),'muted'),reviewControl(detail.mainline));
       const live=detail.tasks.filter(t=>!['archived','retained'].includes(t.context_status));
-      body.append(el('h3','阶段交付'));dateGroups(milestoneTasks({line:detail.mainline,tasks:live}),body);
+      body.append(el('h3','阶段交付'));dateGroups(milestoneTasks({line:detail.mainline,tasks:live}),body,'detail:'+id);
       body.append(el('h3','风险与下一步'),el('p',d.risk || '暂无已记录风险；不代表已经验证正常。'),el('p',d.next_step || '下一步待明确'));
       const related=el('div',undefined,'detail-links');for(const other of d.related_mainlines || []){const l=model.entries.find(e=>e.line.id===other)?.line;if(l)related.append(lineButton(l,l.data.title));}body.append(related);
       const tasks=fold('执行细项 · '+live.filter(isOpenTask).length,body);
