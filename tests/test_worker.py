@@ -39,6 +39,11 @@ class WorkerTest(unittest.TestCase):
             self.assertIn('prior answer', kwargs['input'])
             schema = json.loads(Path(command[command.index('--output-schema')+1]).read_text())
             self.assertIn('reply', schema['required'])
+            resolution = schema['properties']['resolutions']['items']
+            self.assertEqual(set(resolution['required']), set(resolution['properties']))
+            self.assertEqual(resolution['properties']['state']['enum'], ['resolved', 'pending', 'waiting'])
+            self.assertIn('remaining', resolution['properties'])
+            self.assertIn('waiting_for', resolution['properties'])
             Path(command[command.index('--output-last-message')+1]).write_text(json.dumps({
                 'summary': 'discussion', 'reply': 'answer', 'questions': [], 'updates': [], 'resolutions': []}), encoding='utf-8')
             return SimpleNamespace(returncode=0, stdout='')

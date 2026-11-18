@@ -26,6 +26,12 @@ SCHEMA = {
                 'mode': {'type': 'string', 'enum': ['reported', 'planned']}}}}}}
 
 
+# Partial answers keep the same question identity and retain the answer history.
+_resolution = SCHEMA['properties']['resolutions']['items']
+_resolution['required'] += ['state', 'remaining', 'review_on', 'waiting_for']
+_resolution['properties'].update(state={'type': 'string', 'enum': ['resolved', 'pending', 'waiting']},
+                                 **{k: {'type': 'string'} for k in ('remaining', 'review_on', 'waiting_for')})
+
 # Tasks use explicit fields so the model cannot write server-owned review metadata.
 _update_schema = SCHEMA['properties']['updates']['items']
 SCHEMA['properties']['updates']['items'] = {'anyOf': [

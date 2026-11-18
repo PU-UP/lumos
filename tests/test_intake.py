@@ -204,8 +204,14 @@ class IntakeTest(BaseStoreCase):
         evidence = {'id': job['id']+'-basis', 'kind': 'evidence', 'mode': 'reported',
                     'changes': {'context': 'mapping', 'title': '模拟阶段答复', 'text': request['text']},
                     'excerpt': request['text'], 'reason': '仅保存答复，旧问题未解决'}
-        apply_intake(self.store, {'id': job['id'], 'claim': job['data']['claim'], 'basis': context['basis'],
-                                 'plan': {'summary': '仍需核对', 'questions': [], 'updates': [evidence], 'resolutions': []}})
+        apply_request = {'id': job['id'], 'claim': job['data']['claim'], 'basis': context['basis'],
+                         'plan': {'summary': '仍需核对', 'questions': [], 'updates': [evidence], 'resolutions': []}}
+        with self.assertRaisesRegex(lumos.Error, '尚未接续'):
+            apply_intake(self.store, apply_request)
+        apply_request['plan']['resolutions'] = [{'intake_id': first['id'], 'index': 0,
+            'answer': '阶段结果仍待核对', 'excerpt': request['text'], 'state': 'waiting',
+            'remaining': '阶段核对结果是什么？', 'review_on': '', 'waiting_for': '阶段结果产生'}]
+        apply_intake(self.store, apply_request)
         self.assertEqual(len(intake_context(self.store, job['id'])['open_questions']), 1)
         result = next(n for n in list_intakes(self.store)['intakes'] if n['id'] == job['id'])
         self.assertEqual(result['data']['status'], 'done')
@@ -474,6 +480,41 @@ class IntakeTest(BaseStoreCase):
         self.assertEqual(data['review_basis'], 'user')
         self.assertEqual(data['review_source']['quote'], context['text'])
         self.assertEqual(data['review_on'], '2099-01-01')
+
+    def test_partial_answers_wait_then_resolve_preserve_identity_history_and_task(self):
+        first = self.job(); first['plan']['questions'] = ['演示是否成功，谁确认发布？']
+        apply_intake(self.store, first)
+        task_before = task_detail(self.store, 'talk')['task']
+        second = self.job(); second['plan']['updates'] = []
+        answer = {'intake_id': first['id'], 'index': 0, 'answer': '演示成功，发布人待定',
+                  'excerpt': '下一步由模拟同事检查接口。', 'state': 'pending',
+                  'remaining': '谁确认发布？', 'review_on': '', 'waiting_for': ''}
+        second['plan']['resolutions'] = [answer]
+        apply_intake(self.store, second)
+        self.assertTrue(apply_intake(self.store, second)['replayed'])
+        q = intake_context(self.store, second['id'])['open_questions'][0]
+        self.assertEqual(q['question'], '谁确认发布？')
+        self.assertEqual(q['original_question'], '演示是否成功，谁确认发布？')
+        self.assertEqual(q['answer_state'], 'pending')
+        third = self.job(); third['plan']['updates'] = []
+        third['plan']['resolutions'] = [{**answer, 'state': 'waiting', 'answer': '暂不确定'}]
+        with self.assertRaisesRegex(lumos.Error, '触发条件'):
+            apply_intake(self.store, third)
+        self.assertEqual(len(intake_context(self.store, third['id'])['open_questions'][0]['answers']), 1)
+        third['plan']['resolutions'][0]['waiting_for'] = '发布准备时再核对'
+        apply_intake(self.store, third)
+        q = intake_context(self.store, third['id'])['open_questions'][0]
+        self.assertEqual(q['answer_state'], 'waiting')
+        self.assertEqual(len(q['answers']), 2)
+        fourth = self.job(); fourth['plan']['updates'] = []
+        fourth['plan']['resolutions'] = [{**answer, 'state': 'resolved', 'remaining': '', 'answer': '不再需要确认此事项'}]
+        apply_intake(self.store, fourth)
+        self.assertFalse(intake_context(self.store, fourth['id'])['open_questions'])
+        original = intake_context(self.store, first['id'])['intake']['data']
+        self.assertEqual(len(original['resolutions']), 3)
+        self.assertEqual(original['questions'], ['演示是否成功，谁确认发布？'])
+        self.assertEqual(task_detail(self.store, 'talk')['task'], task_before)
+        self.assertEqual(self.store.verify()['integrity'], 'ok')
 
     def test_followup_answers_close_questions_atomically_and_archive_original_note(self):
         first = self.job(note=True); first['plan']['questions'] = ['归属哪个项目？', '由谁负责？']

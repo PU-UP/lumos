@@ -343,3 +343,20 @@ test('closed tasks keep review history without requesting another answer',()=>{
   assert.equal(q.needsAnswer,false);assert.equal(q.line.id,'m');
  }
 });
+
+test('partial answers stay actionable while event waits override task alarms',()=>{
+ const {questionInbox}=require('../web/overview.js');
+ const a=task('a',{status:'blocked',due:'2026-11-01',follow_up:'2026-11-01'});
+ a.management_question={intake_id:'old',index:0};
+ const s=state([a],[line('m',['a'])]);
+ s.open_questions=[{workspace:'lingguang',intake_id:'old',index:0,question:'谁确认发布？',answer_state:'waiting',waiting_for:'联调后确认',review_on:''}];
+ const receipt={id:'reply',data:{workspace:'lingguang',question_key:'question:old:0',status:'done'}};
+ let q=managementModel(s,'lingguang').questions;let box=questionInbox(q,[receipt],'lingguang');
+ assert.equal(box.primary.length,0);assert.equal(box.later.length,1);assert.match(box.later[0].timingReason,/联调后确认/);
+ s.open_questions[0].review_on=s.today;
+ q=managementModel(s,'lingguang').questions;assert.equal(questionInbox(q,[receipt],'lingguang').primary.length,1);
+ s.open_questions[0].answer_state='pending';
+ q=managementModel(s,'lingguang').questions;box=questionInbox(q,[receipt],'lingguang');
+ assert.equal(box.primary[0].text,'谁确认发布？');
+ assert.equal(questionInbox(q,[{...receipt,data:{...receipt.data,status:'running'}}],'lingguang').primary.length,0);
+});

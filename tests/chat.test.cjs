@@ -57,6 +57,16 @@ test('returning through navigation restores the current unsent conversation',asy
 const task=(id,data={})=>({id,short_id:'T-'+id,data:{context:'work',text:'任务'+id,status:'doing',due:'2026-11-18',...data}});
 const board=tasks=>({today:'2026-11-17',contexts:[{id:'work',data:{workspace:'lingguang'}},{id:'maintenance',data:{workspace:'lumos'}},{id:'archive',data:{status:'archived'}}],tasks,mainlines:[{id:'line',data:{context:'work',title:'测试主线',task_ids:tasks.map(t=>t.id),milestone_ids:['stage']}}]});
 const descendants=n=>[n,...n.children.flatMap(descendants)];
+test('question receipts show remaining content and keep original in history',async()=>{
+  for(const state of ['pending','waiting','resolved']){
+    const job={id:'asked',data:{chat_id:'a'.repeat(32),workspace:'lingguang',status:'needs_review',created_at:'2026-11-18T00:00:00Z',text:'原输入',questions:['已答部分和未答部分'],resolutions:[{index:0,state,remaining:state==='resolved'?'':'未答部分',answer:'已收到答复',excerpt:'目前无进展'}]}};
+    const p=await page(new Map(),undefined,[job]);
+    const receipt=descendants(p.get('messages')).find(n=>n.className==='chat-receipt');
+    assert.ok(receipt.children.some(n=>n.textContent===(state==='pending'?'剩余待答：未答部分':state==='waiting'?'等待后续跟进：未答部分':'原问题已答')));
+    assert.ok(!receipt.children.some(n=>n.textContent?.includes('已答部分和未答部分')));
+    assert.ok(descendants(receipt).some(n=>n.textContent==='已答部分和未答部分'));
+  }
+});
 test('discussion search includes undated and distant tasks and mainlines but excludes closed or foreign work',()=>{
   const data=board([task('one'),task('undated',{due:'',owner:'甲'}),task('future',{due:'2027-12-02'}),task('done',{status:'done'}),task('cancelled',{status:'cancelled'}),task('other',{context:'maintenance'}),task('archived',{context:'archive'})]);
   const before=JSON.stringify(data);

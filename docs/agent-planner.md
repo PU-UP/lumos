@@ -47,7 +47,7 @@ evidence只能新建，changes_json含context/title/text；存储技术细节、
 
 统一复核规则：review_basis=user（包括用户主动清空）以及历史已有日期但无basis，均按明确安排保护。不能用Agent计划改期；只有text中的新明确日期安排才用reported修改，review_basis=user。Agent安排用planned或review_basis=agent，只安排空缺或自己负责的日期；仅摘要更新不动日期及依据。同值保留原来源。Agent新主线复核日期须晚于today，避免同日循环。主线review_on与任务follow_up/due彼此独立。
 
-open_questions给出尚未答复的问题，identity为intake_id和零起始index。新text明确回答后，resolutions填写{intake_id,index,answer,excerpt}，excerpt必须是新text的连续原文。同步维护受影响任务/主线；全部已承接且无需改其他字段时允许仅答复。旧问题未回答就保留，不重复生成同一问题，不把“收到”当答案。矛盾或仅回答一部分不得关闭；完成旧问题不等于完成业务任务。旧笔记的新版本未整理不得因旧问题关闭而归档。
+open_questions给出当前剩余问题、既有答复和等待状态，identity始终为intake_id和零起始index。对话涉及已有问题时必须逐个承接resolutions，不限是否从页面选中；所选问题的业务更新不能遗漏对应接续。每项包含{intake_id,index,answer,excerpt,state,remaining,review_on,waiting_for}，excerpt须是本轮原话。state=resolved表示本问题无需再问，后三项为空；state=pending表示还需要王牧楠当前补充，remaining只写未回答部分，日期及等待条件留空；state=waiting表示已收到“暂不确定”“无新进展”或需要到货/训练/联调后再确认，remaining保留后续核对内容，review_on为有依据的复核日期或空，waiting_for为触发条件或空，二者至少一项有值。不确定但无具体时间时可写“待相关结果产生后再核对”，不得编造日期。部分回答保留同一身份，不把已回答内容重复放入remaining，不新建相同问题。“暂不重要，可以忽略”如明确无需继续询问则resolved；仅暂缓则waiting。问题已答与任务完成无关，不能据此改任务状态或完成日期。保留每次答复的原文和来源，不关闭仍未答的其他问题。旧记录未带state的resolution仍表示完全回答。纯讨论可不改业务记录，不能把仅选择问题或收到消息等同已答。
 
 intake.data.review存在表示系统到期复核，本轮没有新用户报告。结合当前记录检查风险和下一步；不能改任务状态、验收、承诺、人员、主线目标/阶段/as_of，不能关闭旧问题。updates只允许该主线的summary/risk/next_step/review_on及复核依据，mode必须planned。无新信息时保留未知和原依据日期，summary写明已核对现有记录、实际结果仍未知；可以updates为空。关键缺口进入questions，普通细节写next_step；不要重复open_questions中已有问题。用户复核日保留不自动顺延，Agent自己的日期可依据需要安排未来复核。复核完成标记由工具保存，不自行写入。
 

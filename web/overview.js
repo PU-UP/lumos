@@ -93,10 +93,21 @@ if (typeof document !== 'undefined') {
     $('feedback-submit').textContent=pending?'重试提交':job?'提交补充':'提交答复';
     $('feedback-status').textContent=feedbackError || (pending?'上次提交结果未确认，请重试核对同一份答复。':receiptState==='error'?'暂时无法读取处理状态；正文保留，可刷新重试。':busy?(executor==='offline'?'答复已保存；Lumos执行器未运行，恢复后接续。':answerStates[job.data.status]):'填写已知情况即可，Lumos会接续任务和安排。');
     const host=$('answer-receipt');host.replaceChildren();
+    if(activeQuestion?.answers?.length){
+      const history=fold('原问题与答复历史',host,'question-history:'+activeQuestion.key);
+      history.append(el('p',activeQuestion.original_question));
+      for(const answer of activeQuestion.answers){
+        history.append(el('p',answer.at+' · '+answer.answer),el('p','答复原文：'+answer.excerpt));
+        if(answer.remaining)history.append(el('p','当时剩余问题：'+answer.remaining));
+      }
+    }
     if(job){
       host.append(el('strong',answerStatus(job)));
       if(job.data.summary)host.append(el('p',job.data.summary));
-      if(['done','needs_review'].includes(job.data.status) && model.questions.some(q=>q.key===job.data.question_key))host.append(el('p','这次答复已保存到工作记录；原问题还有未确认的部分，按后续节点跟进，不要求立即补答。','muted'));
+      if(['done','needs_review'].includes(job.data.status)){
+        const remaining=model.questions.find(q=>q.key===job.data.question_key);
+        if(remaining)host.append(el('p',remaining.answer_state==='pending'?'已答内容已记录；当前只需补充页面显示的剩余问题。':remaining.answer_state?remaining.timingReason:'已收到答复，剩余事项待Lumos接续；不要求立即补答。','muted'));
+      }
       if(job.data.error)host.append(el('p',job.data.error));
       const original=fold('已提交的答复',host,'answer:'+job.id);original.append(el('p',job.data.text));
       if(job.data.status==='failed'){
@@ -147,7 +158,7 @@ if (typeof document !== 'undefined') {
     const text=$('feedback-text').value.trim();if(!text && !feedbackSender.pending){$('feedback-status').textContent='请先填写答复。';$('feedback-text').focus();return;}
     const target=$('feedback-target').value;
     const request=feedbackSender.pending||{request_id:crypto.randomUUID().replaceAll('-',''),workspace:feedbackWorkspace,
-      text:activeQuestion?activeQuestion.text+'\n\n王牧楠答复：\n'+text:text,title:activeQuestion?.title.slice(0,300)||'主线页反馈',related_ids:target?[target]:[],...(activeQuestion?{question_key:activeQuestion.key}:{})};
+      text:activeQuestion?activeQuestion.text+'\n\n王牧楠答复：\n'+text:text,title:activeQuestion?.title.slice(0,300)||'主线页反馈',related_ids:target?[target]:[],...(activeQuestion?{question_key:activeQuestion.key,question_text:activeQuestion.text}:{})};
     await sendFeedback(request,request.id?undefined:text);
   };
   function renderQuestions(){
@@ -157,7 +168,7 @@ if (typeof document !== 'undefined') {
     if(!inbox.primary.length)host.append(el('p','当前没有需要立即回答的问题。后续事项按跟进日再出现。','attention-empty'));
     const add=(question,parent)=>{
       const row=el('article',undefined,'attention-item'),heading=el('div',undefined,'question-heading');
-      heading.append(el('h3',question.title),el('span',question.needsAnswer===false?'后续跟进':'当前待答','answer-state'));
+      heading.append(el('h3',question.title),el('span',question.needsAnswer===false?'等待后续跟进':question.answer_state==='pending'?'剩余待答':question.answer_state==='waiting'?'后续核对':'当前待答','answer-state'));
       row.append(heading,el('p',question.text,'question-preview'),el('p',question.timingReason,'question-timing'));
       const answer=el('button','打开回答','answer-button');answer.onclick=()=>openFeedback(question,answer);row.append(answer);parent.append(row);
     };

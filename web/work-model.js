@@ -61,6 +61,13 @@ function managementModel(state, workspace) {
     if(!timing.length && q.line?.data.review_on)timing.push({needed:q.line.data.review_on<=state.today,reason:'主线复核 '+q.line.data.review_on});
     q.needsAnswer=q.tasks.some(t=>isOpenTask(t) && t.management_question && t.management_question.intake_id===q.intake_id && t.management_question?.index===q.index) || timing.some(t=>t.needed);
     q.timingReason=q.needsAnswer && !timing.some(t=>t.needed) ? '当前安排需要你的答复' : [...new Set(timing.filter(t=>t.needed===q.needsAnswer).map(t=>t.reason))].join('；')||'尚未安排提问时间，由Lumos接续';
+    if(q.answer_state==='pending'){
+      q.needsAnswer=true;q.timingReason='已收到部分答复，仅需补充剩余问题';
+    }else if(q.answer_state==='waiting'){
+      q.needsAnswer=!!q.review_on && q.review_on<=state.today;
+      q.timingReason=(q.needsAnswer?'已到后续核对日期 ':'已收到答复，等待后续跟进 ')+(q.review_on||'')+(q.waiting_for?' · '+q.waiting_for:'');
+    }
+
   }
   const milestones=[...new Map(entries.flatMap(e=>milestoneTasks(e)).map(t=>[t.id,t])).values()].sort(deliverySort);
   const horizon=new Date(state.today+'T00:00:00Z');horizon.setUTCDate(horizon.getUTCDate()+14);
@@ -78,7 +85,10 @@ function questionInbox(questions, receipts, workspace) {
   for(const job of [...receipts].sort((a,b)=>(b.data.created_at||'').localeCompare(a.data.created_at||''))) {
     if(job.data.workspace===workspace && job.data.question_key && !latest.has(job.data.question_key))latest.set(job.data.question_key,job);
   }
-  const unanswered=questions.filter(q=>!latest.has(q.key)),waiting=unanswered.filter(q=>q.needsAnswer!==false),later=unanswered.filter(q=>q.needsAnswer===false),primary=[], rest=[], seen=new Set();
+  const settled=q=>['done','needs_review'].includes(latest.get(q.key)?.data.status);
+  const unanswered=questions.filter(q=>!latest.has(q.key) || (settled(q) && q.answer_state));
+  const acknowledged=questions.filter(q=>settled(q) && !q.answer_state).map(q=>({...q,needsAnswer:false,timingReason:'已收到答复，剩余事项待Lumos接续'}));
+  const waiting=unanswered.filter(q=>q.needsAnswer!==false),later=[...unanswered.filter(q=>q.needsAnswer===false),...acknowledged],primary=[], rest=[], seen=new Set();
   for(const q of waiting){const group=q.line?.id||q.title;if(primary.length<3 && !seen.has(group)){primary.push(q);seen.add(group);}else rest.push(q);}
   return {primary,rest,later,latest};
 }

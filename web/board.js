@@ -309,12 +309,13 @@ function filtered() {
 }
 
 const currentDue = data => data.planned_due || data.due || '';
+const questionLabel = q => q?.answer_state === 'waiting' && (!q.review_on || q.review_on > state.today) ? '已收到答复 · 等待后续跟进' : '待你回答主线问题';
 function followUpHint(data, question = null) {
   if (['done', 'cancelled'].includes(data.status)) return {text: '', cls: ''};
   const due = currentDue(data);
   if (due && due !== 'long_term' && data.follow_up > due) return {
-    text: '关心时间晚于当前交付 · Lumos需协调排期' + (question ? ' · 待你回答主线问题' : ''), cls: 'date-conflict'};
-  if (question) return {text: '待你回答主线问题', cls: 'follow-up-pending'};
+    text: '关心时间晚于当前交付 · Lumos需协调排期' + (question ? ' · '+questionLabel(question) : ''), cls: 'date-conflict'};
+  if (question) return {text: questionLabel(question), cls: 'follow-up-pending'};
   if (!data.follow_up) return {text: '待设置关心时间', cls: 'follow-up-pending'};
   if (data.follow_up === state.today) return {text: '今天', cls: 'follow-up-today'};
   if (data.follow_up && data.follow_up < state.today) {
@@ -506,7 +507,7 @@ function renderList(tasks) {
     title.type = 'button';
     title.title = [t.data.next_step, ...t.attention, t.data.due ? '交付 ' + dueLabel(t.data.due) : ''].filter(Boolean).join('\n');
     title.onclick = () => openTask(t.id);
-    if(!isClosed(t.data) && t.management_question){const q=t.management_question,note=element('small','待你回答：'+q.question,'task-stewardship');title.append(note);title.onclick=()=>{window.location.href='/?workspace='+workspaceOf(t.data.context)+'&question='+encodeURIComponent('question:'+q.intake_id+':'+q.index);};}
+    if(!isClosed(t.data) && t.management_question){const q=t.management_question,note=element('small',questionLabel(q)+'：'+q.question,'task-stewardship');title.append(note);title.onclick=()=>{window.location.href='/?workspace='+workspaceOf(t.data.context)+'&question='+encodeURIComponent('question:'+q.intake_id+':'+q.index);};}
     else if(t.management_issues?.length){const note=element('small','Lumos 待复核','task-stewardship');note.title=t.management_issues.join('；');title.append(note);}
     const changed=manualBadge(t,['text','status','priority','group','context','progress','next_step','details','condition']);if(changed)title.append(changed);
     const priority = element('select', undefined, 'row-priority priority-' + (t.data.priority || 'normal'));

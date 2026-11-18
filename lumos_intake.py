@@ -2,7 +2,7 @@
 import json
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from lumos import digest, now, process_lock, require, safe_path
 from lumos_tasks import FIELDS, context_workspace, prepare_task, commit_tasks, task_numbers
@@ -61,7 +61,9 @@ def validate_intake(data, nodes):
                 and 0 <= answer['index'] < len(data.get('questions', [])) and answer['index'] not in indices, 'Invalid resolved question')
         require(all(isinstance(answer.get(k), str) and answer[k] for k in ('answer', 'excerpt', 'source_intake', 'at')), 'Resolution source required')
         require(nodes.get(answer['source_intake'], {}).get('kind') == 'intake', 'Resolution intake missing')
-        indices.add(answer['index'])
+        validate_answer_state(answer)
+        if answer.get('state', 'resolved') == 'resolved':
+            indices.add(answer['index'])
     require(type(data.get('task_review', False)) is bool, 'Invalid task review flag')
     review = data.get('review')
     if review:
@@ -181,13 +183,47 @@ def fingerprint(nodes):
     return digest(json.dumps(nodes, ensure_ascii=False, sort_keys=True).encode())
 
 
+def validate_answer_state(answer):
+    state = answer.get('state', 'resolved')
+    require(state in {'resolved', 'pending', 'waiting'}, 'Invalid question state')
+    for field in ('remaining', 'review_on', 'waiting_for'):
+        require(isinstance(answer.get(field, ''), str) and len(answer.get(field, '')) <= 2000, 'Invalid question '+field)
+    remaining, review, trigger = (answer.get(k, '') for k in ('remaining', 'review_on', 'waiting_for'))
+    if state == 'resolved':
+        require(not (remaining or review or trigger), '已答问题不能带剩余问题或跟进条件')
+    else:
+        require(remaining.strip(), '部分答复必须写明剩余问题')
+        if state == 'waiting':
+            require(review or trigger.strip(), '后续跟进必须有日期或触发条件')
+        else:
+            require(not review and not trigger, '当前待答不能带等待条件')
+    if review:
+        require(bool(re.fullmatch(r'\d{4}-\d{2}-\d{2}', review)), '问题跟进日期格式错误')
+        try:
+            date.fromisoformat(review)
+        except ValueError:
+            require(False, '问题跟进日期无效')
+
+
 def open_questions(nodes, workspace):
-    return [{'intake_id': n['id'], 'index': index, 'question': question,
-             'related_ids': list(dict.fromkeys(n['data'].get('related_ids', []) + [r['id'] for r in n['data'].get('task_reviews', []) if r['question'] == f'new:{index}'])), 'destinations': n['data'].get('destinations', [])}
-            for n in nodes.values() if n['kind'] == 'intake' and n['data']['workspace'] == workspace
-            and n['data']['status'] == 'needs_review'
-            for index, question in enumerate(n['data'].get('questions', []))
-            if index not in {r['index'] for r in n['data'].get('resolutions', [])}]
+    result = []
+    for n in nodes.values():
+        data = n['data']
+        if n['kind'] != 'intake' or data['workspace'] != workspace or data['status'] != 'needs_review':
+            continue
+        for index, question in enumerate(data.get('questions', [])):
+            answers = [r for r in data.get('resolutions', []) if r['index'] == index]
+            last = answers[-1] if answers else {}
+            if answers and last.get('state', 'resolved') == 'resolved':
+                continue
+            original = next((r['previous'] for r in data.get('question_revisions', []) if r['index'] == index), question)
+            result.append({'intake_id': n['id'], 'index': index,
+                'question': last.get('remaining') or question, 'original_question': original,
+                'answer_state': last.get('state', ''), 'answers': answers,
+                'review_on': last.get('review_on', ''), 'waiting_for': last.get('waiting_for', ''),
+                'related_ids': list(dict.fromkeys(data.get('related_ids', []) + [r['id'] for r in data.get('task_reviews', []) if r['question'] == f'new:{index}'])),
+                'destinations': data.get('destinations', [])})
+    return result
 
 
 def context_basis(nodes, workspace):
@@ -461,7 +497,7 @@ def apply_intake(store, request):
         resolved = {}
         available = {(q['intake_id'], q['index']) for q in open_questions(nodes, job['workspace'])}
         for answer in resolutions:
-            require(isinstance(answer, dict) and set(answer) == {'intake_id', 'index', 'answer', 'excerpt'}, 'Invalid question resolution')
+            require(isinstance(answer, dict) and {'intake_id', 'index', 'answer', 'excerpt'} <= set(answer) <= {'intake_id', 'index', 'answer', 'excerpt', 'state', 'remaining', 'review_on', 'waiting_for'}, 'Invalid question resolution')
             require(isinstance(answer['intake_id'], str) and type(answer['index']) is int, 'Invalid question identity')
             key = (answer['intake_id'], answer['index'])
             require(key in available and key[0] != old['id'], '问题已处理或不属于当前空间')
@@ -469,12 +505,19 @@ def apply_intake(store, request):
             require(isinstance(answer['answer'], str) and 0 < len(answer['answer']) <= 2000, 'Answer required')
             require(isinstance(answer['excerpt'], str) and answer['excerpt'].strip() and len(answer['excerpt']) <= 20000
                     and answer['excerpt'] in text, 'Answer excerpt must match input')
+            validate_answer_state(answer)
             prior = resolved.setdefault(key[0], {**nodes[key[0]], 'data': {**nodes[key[0]]['data'],
                 'resolutions': list(nodes[key[0]]['data'].get('resolutions', []))}})
             prior['data']['resolutions'].append({**answer, 'source_intake': old['id'], 'at': now()})
+        question_key = job.get('question_key', '')
+        if updates and question_key.startswith('question:'):
+            selected = next((q for q in open_questions(nodes, job['workspace']) if f"question:{q['intake_id']}:{q['index']}" == question_key), None)
+            require(not selected or any(a['intake_id'] == selected['intake_id'] and a['index'] == selected['index'] for a in resolutions),
+                    '答复尚未接续所选问题：请记录已答内容、剩余问题或后续跟进；任务未更新。')
         for prior in resolved.values():
             data = prior['data']
-            data.update(status='done' if len(data['resolutions']) == len(data['questions']) else 'needs_review',
+            latest = {r['index']: r for r in data['resolutions']}
+            data.update(status='done' if all(i in latest and latest[i].get('state', 'resolved') == 'resolved' for i in range(len(data['questions']))) else 'needs_review',
                         revision=data['revision']+1, updated_at=now())
             updates.append(prior)
             note = data.get('note')

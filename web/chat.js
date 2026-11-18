@@ -118,7 +118,11 @@ if(typeof document!=='undefined'){
         const receipt=el('div',undefined,'chat-receipt');receipt.append(el('p',chatReceipt(job)));
         if(d.summary)receipt.append(el('p',d.summary));
         for(const target of job.targets||[])if(['action','mainline'].includes(target.kind)){const a=el('a',target.title);a.href=target.kind==='action'?'/tasks?task='+encodeURIComponent(target.id):'/?line='+encodeURIComponent(target.id);receipt.append(a);}
-        for(const [index,q] of (d.questions||[]).entries())receipt.append(el('p',((d.resolutions||[]).some(r=>r.index===index)?'已承接：':'待确认：')+q));
+        for(const [index,q] of (d.questions||[]).entries()){
+          const answers=(d.resolutions||[]).filter(r=>r.index===index),last=answers.at(-1);
+          receipt.append(el('p',!last?'待确认：'+q:last.state==='pending'?'剩余待答：'+last.remaining:last.state==='waiting'?'等待后续跟进：'+last.remaining:'原问题已答'));
+          if(last){const history=el('details');history.append(el('summary','原问题与答复历史'),el('p',q));for(const a of answers)history.append(el('p',a.answer),el('p','答复原文：'+a.excerpt));receipt.append(history);}
+        }
         if(d.error)receipt.append(el('p',d.error,'chat-failed'));
         if(job.id===latest.id && d.status==='failed'){const b=el('button','重试本轮');b.disabled=busy||!!pending;b.onclick=()=>send({request_id:uuid(),id:job.id,expected_revision:d.revision});receipt.append(b);}
         answer.append(receipt);turn.append(answer);host.append(turn);

@@ -77,3 +77,7 @@ intake-context返回同空间open_questions，带intake_id和零起始index。�
 实现依据：已安装CLI的exec帮助及[官方非交互模式说明](https://learn.chatgpt.com/docs/non-interactive-mode)、[配置说明](https://learn.chatgpt.com/docs/config-file/config-reference)。不自动选择或更改模型套餐。
 
 正式文档文件的修改、备份和迁移仍须暂停外部编辑。intake只写版本记录，持锁验证后一起提交，不覆盖工作文档；因此普通笔记整理不需要每次要求用户停止打字。队列源笔记编辑中的版本不会被应用。所有示例和故障测试只在隔离数据执行。
+
+## 2026-11-18 问题部分答复与后续跟进
+
+resolutions可按同一intake_id/index连续保存多次答复，保留原questions、答复原文、来源及历史。state为pending（仅剩余部分当前待答）、waiting（已收到答复，按review_on日期或waiting_for条件后续跟进）、resolved（本问题无需再问）。旧resolution未带state按resolved兼容。remaining只包含未答部分；等待事件不因任务逾期自动改成当前催问。等待日期到达进入后续核对；事件发生须由新输入接续。不从问题关闭推定业务任务完成。主页和对话页共用判断；已提交但尚未结构化接续的旧回执放到已收到答复的后续区，不重新整段催问。人工收窄过的问题保留现状及历史，不批量恢复旧问法。
