@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lumos · 笔记</title><link rel="stylesheet" href="/board.css"><link rel="stylesheet" href="/notes.css"><script src="/disclosure.js" defer></script><script src="/intake.js" defer></script><script src="/notes.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lumos · 笔记</title><link rel="stylesheet" href="/board.css"><link rel="stylesheet" href="/notes.css"><script src="/dialog.js" defer></script><script src="/disclosure.js" defer></script><script src="/intake.js" defer></script><script src="/notes.js" defer></script></head>
 <body>
 <header><div class="brand"><span class="mark">L</span><strong>Lumos</strong><span class="divider">/</span><span>工作分身</span></div><button id="new-note" class="primary" disabled>＋ 新建笔记</button></header>
 <nav aria-label="工作视图" class="view-nav"><a href="/">主线</a><a href="/tasks">全部任务</a><a href="/people">人员</a><a href="/notes" aria-current="page">笔记</a><a href="/chat">对话</a></nav>
@@ -24,4 +24,16 @@
 <p class="note-help">输入时自动保存；结束记录后自动润色，原稿保留在历史中。关联任务只作阅读线索。</p>
 <p class="note-help">Lumos 归档：由 Codex Astra 理解全文，更新知识库、主线或任务后归档。普通归档：无需 Agent 处理。<span id="note-id"></span></p>
 </div></section></main>
+<dialog id="note-confirm" aria-labelledby="note-confirm-title" aria-describedby="note-confirm-subject note-confirm-description note-confirm-hint">
+  <div class="note-confirm-content">
+    <h2 id="note-confirm-title"></h2>
+    <p id="note-confirm-subject"></p>
+    <p id="note-confirm-description"></p>
+    <p id="note-confirm-hint"></p>
+  </div>
+  <form method="dialog" class="note-confirm-actions">
+    <button value="cancel" autofocus>取消</button>
+    <button id="note-confirm-submit" class="primary" value="confirm"></button>
+  </form>
+</dialog>
 </body></html>

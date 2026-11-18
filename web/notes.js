@@ -244,17 +244,32 @@ $('preview-note').onclick=()=> {
     } finally {transitioning=false; controls();}
   });
 };
+function confirmNote(operation) {
+  const deleting=operation==='delete',dialog=$('note-confirm'),trigger=$(operation+'-note');
+  dialog.setAttribute('data-operation',operation);
+  $('note-confirm-title').textContent=deleting?'删除这篇笔记？':'归档这篇笔记？';
+  $('note-confirm-subject').textContent=current.data.title || '未命名笔记';
+  $('note-confirm-description').textContent=deleting?'笔记将从列表移除，尚未完成的整理也会停止。':'归档后可在「已归档」中找回。Lumos 将停止这篇笔记尚未完成的整理。';
+  $('note-confirm-hint').textContent=deleting?'已被任务引用的原文与历史仍会保留。':'需要更新知识库、主线或任务，请使用「Lumos 归档」。';
+  $('note-confirm-submit').textContent=deleting?'确认删除':'确认归档';
+  dialog.returnValue='';
+  return new Promise(resolve=>{
+    dialog.onclose=()=>{trigger.focus();resolve(dialog.returnValue==='confirm');};
+    dialog.showModal();
+  });
+}
+dismissOnBackdrop($('note-confirm'));
 $('archive-note').onclick=()=>pending?.operation==='archive'?navigate(async()=>{}):navigate(async()=> {
   const archive=current.data.status!=='archived';
   if(archive) {
-    if(!window.confirm('普通归档这篇笔记？\n不会交给Agent更新知识库、主线或任务；尚未完成的整理将停止。重要笔记请使用“Lumos 归档”。'))return;
+    if(!await confirmNote('archive'))return;
     transitioning=true;controls();try{dirty=true;await save('archive',true);}finally{transitioning=false;controls();}return;
   }
   current.data.status='active'; current.data.archive_reason='';
   dirty=true; stash(); if(await save()) fill(current.data);
 });
 $('delete-note').onclick=()=>pending?.operation==='delete'?navigate(async()=>{}):navigate(async()=> {
-  if(!window.confirm('删除这篇笔记？\n将从笔记列表移除并停止尚未完成的整理；已被任务引用的原文及历史仍保留用于追溯。'))return;
+  if(!await confirmNote('delete'))return;
   if(!current.data.revision){current=null;$('note-editor').hidden=true;$('welcome').hidden=false;return;}
   transitioning=true;controls();try{dirty=true;await save('delete',true);}finally{transitioning=false;controls();}
 });
