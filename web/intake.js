@@ -13,7 +13,7 @@ window.LumosIntake = (() => {
         if(onUpdate)await onUpdate(data);
         if(current!==generation)return;
         host.replaceChildren();
-        host.append(el('p',!data.enabled?'此空间尚未启用自主整理。':data.executor==='offline'?'整理执行器未运行；内容会保留为待整理。':'结束记录只润色笔记；Lumos 归档才更新工作记录。'));
+        host.append(el('p',!data.enabled?'此空间尚未启用自主整理。':data.executor==='offline'?'整理执行器未运行；内容会保留为待整理。':'自动整理会重写笔记并简短补查疑问；Lumos 归档才更新工作记录。'));
         const all=data.intakes.filter(n=>!noteId || n.data.note?.id===noteId);
         const jobs=noteId?all.slice(0,1):all;
         if(!jobs.length)host.append(el('p','暂无整理记录。'));
@@ -22,7 +22,7 @@ window.LumosIntake = (() => {
           window.LumosDisclosure.remember(fold,key,!!noteId || ['failed','needs_review'].includes(d.status));
           const submitted=d.created_at?new Date(d.created_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'时间未记录';
           const subject=(job.subjects||[]).map(t=>t.title).join('、') || d.title;
-          fold.append(el('summary',subject+(d.note_mode==='format'?' · 笔记润色':d.note_mode==='archive'?' · Lumos归档':d.review?' · 到期复核':'')+' · '+labels[d.status]+' · '+submitted));
+          fold.append(el('summary',subject+(d.note_mode==='format'?' · 笔记自动整理':d.note_mode==='archive'?' · Lumos归档':d.review?' · 到期复核':'')+' · '+labels[d.status]+' · '+submitted));
           if(d.text)fold.append(el('p',(d.review?'系统复核说明：':'我的反馈：')+d.text));
           if(d.summary)fold.append(el('p','Lumos 处理结果：'+d.summary));
           if(d.error)fold.append(el('p',d.error));

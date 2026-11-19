@@ -16,9 +16,11 @@ class WorkerTest(unittest.TestCase):
             self.assertEqual(schema['required'], ['summary', 'note_format'])
             self.assertNotIn('updates', schema['properties'])
             self.assertIn('不更新知识库', kwargs['input'])
+            self.assertIn('web_search="live"', command)
+            self.assertIn('最下方', kwargs['input'])
             Path(command[command.index('--output-last-message')+1]).write_text(json.dumps({
                 'summary': '润色', 'note_format': {'title': '记录', 'body': '# 记录\n原文', 'related_ids': []}}), encoding='utf-8')
-            return SimpleNamespace(returncode=0, stdout='')
+            return SimpleNamespace(returncode=0, stdout=json.dumps({'item': {'type': 'web_search'}}))
         with tempfile.TemporaryDirectory() as folder, patch('lumos_worker.executable', return_value='codex'), patch('lumos_worker.subprocess.run', side_effect=run):
             plan = plan_with_codex({'intake': {'data': {'note_mode': 'format', 'model': 'gpt-6.2-astra'}}}, Path(folder))
         self.assertEqual(plan['updates'], [])
@@ -51,6 +53,7 @@ class WorkerTest(unittest.TestCase):
             self.assertEqual(command[2:4], ['--model', 'test-model'])
             self.assertIn('--ephemeral', command)
             self.assertIn('features.shell_tool=false', command)
+            self.assertIn('web_search="disabled"', command)
             self.assertIn('prior answer', kwargs['input'])
             schema = json.loads(Path(command[command.index('--output-schema')+1]).read_text())
             self.assertIn('reply', schema['required'])

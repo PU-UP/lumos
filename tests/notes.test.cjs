@@ -238,14 +238,14 @@ test('note list shows Shanghai modification date and time, archive button stays 
  await p.world.refreshList();
  const label=p.get('note-list').children[1].children[0].textContent;
  assert.match(label,/2026\/10\/30/);assert.match(label,/11:14/);
- assert.equal(p.get('archive-note').textContent,'归档');
+ assert.equal(p.get('archive-note').textContent,'手动归档');
 });
 
 test('retrying finish or edit keeps the original intent after a lost response',async()=>{
  for(const operation of ['finish','edit']) for(const retryWithSave of [false,true]) {
   const p=await page();edit(p,'正文');let fail=false;const requests=[];
   p.world.fetch=async(url,opt)=>{
-   if(!opt)return response(p.listing);
+   if(!opt)return response(url.startsWith('/api/note?')?{note:saved(requests.at(-1)).note,history:[],tasks:[]}:p.listing);
    const req=JSON.parse(opt.body);requests.push(req);
    if(fail && req.operation===operation){fail=false;throw new Error('lost response');}
    return response(saved(req));
@@ -259,4 +259,30 @@ test('retrying finish or edit keeps the original intent after a lost response',a
   assert.equal(p.get('note-body').disabled,operation==='finish');
   assert.equal(p.get('note-preview').hidden,operation!=='finish');
  }
+});
+
+test('format controls and automatic list continuation preserve selection and limits',async()=>{
+ const p=await page(), body=p.get('note-body');body.maxLength=200000;
+ body.setRangeText=(text,start,end)=>{body.value=body.value.slice(0,start)+text+body.value.slice(end);body.selectionStart=body.selectionEnd=start+text.length;};
+ body.setSelectionRange=(start,end)=>{body.selectionStart=start;body.selectionEnd=end;};
+ edit(p,'重点');body.setSelectionRange(0,2);p.get('format-bold').onclick();assert.equal(body.value,'**重点**');
+ edit(p,'第一项\n第二项');body.setSelectionRange(0,body.value.length);p.get('format-number').onclick();assert.equal(body.value,'1. 第一项\n2. 第二项');
+ body.events.keydown({key:'Enter',preventDefault(){}});assert.equal(body.value,'1. 第一项\n2. 第二项\n3. ');
+ body.events.keydown({key:'Enter',preventDefault(){}});assert.equal(body.value,'1. 第一项\n2. 第二项\n');
+ edit(p,'a. 字母项');body.setSelectionRange(body.value.length,body.value.length);body.events.keydown({key:'Enter',preventDefault(){}});assert.equal(body.value,'a. 字母项\nb. ');
+ for(const [before,after] of [['z. 末项','aa. '],['Z) 末项','AA) '],['az. 末项','ba. ']]) {
+  edit(p,before);body.setSelectionRange(body.value.length,body.value.length);body.events.keydown({key:'Enter',preventDefault(){}});assert.equal(body.value,before+'\n'+after);
+ }
+ edit(p,Array(28).fill('项目').join('\n'));body.setSelectionRange(0,body.value.length);p.get('format-letter').onclick();assert.equal(body.value.split('\n')[26],'aa. 项目');
+ const preview=new Element();p.world.renderMarkdown('aa. 项目\nab. 项目',preview);assert.equal(preview.children[0].start,27);assert.equal(preview.children[0].children.length,2);
+ edit(p,'- 无序项');body.setSelectionRange(body.value.length,body.value.length);body.events.keydown({key:'Enter',preventDefault(){}});assert.equal(body.value,'- 无序项\n- ');
+ body.maxLength=body.value.length;const prior=body.value;body.events.keydown({key:'b',ctrlKey:true,preventDefault(){}});assert.equal(body.value,prior);
+});
+test('editing fetches the rewritten version and changes toggle the organize action',async()=>{
+ const p=await page();let latest={id:'note-fresh',data:{title:'原题',body:'原稿',date:'2026-11-19',workspace:'lingguang',status:'active',archive_reason:'',recording:'finished',revision:2}};
+ p.world.fetch=async(url,opt)=>{if(!opt)return response(url.startsWith('/api/note?')?{note:latest,history:[],tasks:[]}:p.listing);const req=JSON.parse(opt.body);latest={...latest,data:{...latest.data,...req.changes,recording:'editing',revision:latest.data.revision+1}};return response({note:latest});};
+ await p.world.openNote(latest.id);assert.equal(p.get('lumos-archive').disabled,true);
+ latest={...latest,data:{...latest.data,body:'# 整理后的正文',revision:3,formatted_revision:3,original_revision:2}};
+ await p.get('preview-note').onclick();assert.equal(p.get('note-body').value,'# 整理后的正文');assert.equal(p.get('preview-note').textContent,'完成编辑');
+ edit(p,'# 整理后的正文\n新问题');assert.equal(p.get('preview-note').textContent,'自动整理');assert.equal(p.get('lumos-archive').disabled,true);
 });

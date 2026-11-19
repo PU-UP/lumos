@@ -14,3 +14,5 @@
 #note-confirm button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 body:has(#note-confirm[open]){overflow:hidden}
 @media(max-width:480px){.note-confirm-content{padding:24px}.note-confirm-actions{padding:16px 24px}.note-confirm-actions button{flex:1}}
+
+.format-toolbar{display:flex;gap:8px;flex-wrap:wrap;border-block:1px solid var(--line);padding:12px 0;margin-bottom:8px}.format-toolbar[hidden]{display:none}.format-toolbar button{font-size:13px;min-height:36px;padding:6px 10px}#note-preview h3,#note-preview h4{margin:24px 0 8px}#note-preview ul,#note-preview ol{padding-left:28px;margin:8px 0 18px}#note-preview li{padding-left:4px;margin:4px 0}#note-preview strong{font-weight:650}.note-page button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}#note-body:focus-visible{outline:2px solid var(--accent);outline-offset:5px}#note-body::selection,#note-preview ::selection{background:var(--soft);color:var(--ink)}

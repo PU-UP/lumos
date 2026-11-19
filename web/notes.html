@@ -14,14 +14,17 @@
 <p id="note-message" role="status" aria-live="polite"></p>
 <div id="welcome"><h2>把进展写下来。</h2><p>会议要点、问题和临时想法，都可以从这里开始。</p></div>
 <div id="note-editor" hidden>
-<div class="note-toolbar"><label>记录日期<input id="note-date" type="date"></label><span id="save-state" role="status" aria-live="polite"></span><button id="save-note">保存当前内容</button><button id="preview-note">结束记录</button><button id="lumos-archive" class="primary">Lumos 归档</button><button id="archive-note">归档</button><button id="delete-note">删除</button></div>
+<div class="note-toolbar"><label>记录日期<input id="note-date" type="date"></label><span id="save-state" role="status" aria-live="polite"></span><button id="preview-note" class="primary">自动整理</button><button id="restore-note">恢复原样</button><button id="archive-note">手动归档</button><button id="lumos-archive">Lumos 归档</button><button id="delete-note">删除</button></div>
 <label class="title-label"><span class="sr-only">笔记标题</span><input id="note-title" maxlength="300" placeholder="未命名笔记"></label>
+<div id="format-toolbar" class="format-toolbar" role="group" aria-label="正文格式">
+<button id="format-heading">小标题</button><button id="format-subheading">次级标题</button><button id="format-bold"><strong>加粗</strong></button><button id="format-italic"><em>斜体</em></button><button id="format-number">1. 数字列表</button><button id="format-letter">a. 字母列表</button><button id="format-bullet">无序列表</button><button id="save-note">保存当前内容</button>
+</div>
 <label id="body-label"><span class="sr-only">笔记正文</span><textarea id="note-body" maxlength="200000" placeholder="从这里开始写……&#10;&#10;支持 # 小标题、- 列表、[文字](链接)。"></textarea></label>
 <article id="note-preview" hidden></article><div id="note-related"></div>
 <div id="conflict" hidden><h3>最新保存的版本</h3><p>上方保留你的草稿。请对照下方内容在上方合并，再点击“保存合并结果”。</p><pre id="remote-note"></pre><button id="merge-note">保存合并结果</button><button id="use-remote">使用最新版本（放弃本地草稿）</button></div>
 <section id="note-intake" aria-label="Agent整理结果"></section>
 <details id="note-history"><summary>历史版本与关联任务</summary><div id="history-content"></div></details>
-<p class="note-help">输入时自动保存；结束记录后自动润色，原稿保留在历史中。关联任务只作阅读线索。</p>
+<p class="note-help">输入时自动保存；选中文字可设置格式，列表按回车自动续号，空项再按回车退出。Ctrl/Cmd+B 加粗，Ctrl/Cmd+I 斜体。自动整理会通读重写、简短补查疑问；原稿保留，可恢复原样。编辑从整理后的正文继续。</p>
 <p class="note-help">Lumos 归档：由 Codex Astra 理解全文，更新知识库、主线或任务后归档。普通归档：无需 Agent 处理。<span id="note-id"></span></p>
 </div></section></main>
 <dialog id="note-confirm" aria-labelledby="note-confirm-title" aria-describedby="note-confirm-subject note-confirm-description note-confirm-hint">

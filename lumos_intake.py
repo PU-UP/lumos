@@ -130,6 +130,7 @@ def save_intake(store, request):
             note = nodes.get(request['note_id'])
             require(note and note['kind'] == 'note' and note['data'].get('recording', 'finished') == 'finished'
                     and note['data']['status'] == 'active', '请先结束笔记记录；已归档或删除笔记不能自动整理')
+            require(note['data'].get('formatted_revision'), '请先自动整理当前笔记，完成后才能Lumos归档')
             require(not any(n['kind'] == 'intake' and n['data'].get('note', {}).get('id') == note['id']
                             and n['data']['status'] in {'pending', 'running'} and n['data'].get('note_mode') == 'format'
                             for n in nodes.values()), '请等待笔记润色完成')
@@ -413,6 +414,7 @@ def apply_intake(store, request):
                     and scoped[i]['kind'] in {'action', 'mainline'} for i in refs), '笔记关联必须是当前空间的任务或主线')
             from lumos_notes import validate_note
             data = {**source_note['data'], 'title': formatted['title'], 'body': formatted['body'], 'suggested_refs': list(dict.fromkeys(refs)),
+                    'formatted_revision': source_note['data']['revision']+1, 'original_revision': note_ref['revision'],
                     'revision': source_note['data']['revision']+1, 'checkpoint': True, 'updated_at': now(),
                     'source': {**source, 'original_revision': note_ref['revision']}}
             require(isinstance(data['body'], str) and (data['body'].strip() or not text.strip()), '润色结果不能丢弃原正文')

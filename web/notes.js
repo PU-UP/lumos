@@ -66,12 +66,17 @@ function controls() {
   for (const id of Object.values(fieldIds)) $(id).disabled = deleted || historical || !state.writable || transitioning || isReading();
   $('save-note').disabled = historical || !state.writable || !!remote;
   $('archive-note').disabled = historical || !state.writable || !!remote;
-  $('archive-note').textContent = current?.data.status === 'archived' ? '恢复至未处理' : '归档';
+  $('archive-note').textContent = current?.data.status === 'archived' ? '恢复至未处理' : '手动归档';
   $('archive-note').disabled ||= transitioning || deleted;
   $('lumos-archive').disabled = historical || deleted || !state.writable || !!remote || transitioning || !isReading() || current?.data.status !== 'active';
+  $('lumos-archive').disabled ||= !current?.data.formatted_revision;
+  $('lumos-archive').title = current?.data.formatted_revision ? '理解全文，更新工作记录并归档' : '请先自动整理当前正文';
+  $('restore-note').disabled = historical || deleted || !state.writable || !!remote || transitioning || !(current?.data.original_revision || current?.data.source?.original_revision);
   $('delete-note').disabled = historical || deleted || !state.writable || !!remote || transitioning;
   $('preview-note').disabled = deleted || historical || !state.writable || transitioning || !!remote;
-  $('preview-note').textContent = paused && pending?.operation === 'edit' ? '重试进入编辑' : paused && pending?.operation === 'finish' ? '重试结束记录' : isReading() ? '编辑' : '结束记录';
+  $('preview-note').textContent = paused && pending?.operation === 'edit' ? '重试进入编辑' : paused && pending?.operation === 'finish' ? '重试自动整理' : isReading() ? '编辑' : current?.data.formatted_revision && !dirty ? '完成编辑' : '自动整理';
+  $('format-toolbar').hidden = historical || isReading();
+  for (const name of ['heading','subheading','bold','italic','number','letter','bullet']) $('format-'+name).disabled = $('note-body').disabled;
   $('save-note').hidden = isReading();
   $('save-note').disabled ||= transitioning || deleted;
 }
@@ -102,7 +107,7 @@ function fill(data) {
 function savedState() {
   if(current.data.status==='deleted')return '已删除 · 历史只读';
   if (current.data.status === 'archived') return isReading() ? '已归档 · 阅读模式' : '已归档 · 编辑中 · 自动保存当前内容';
-  return isReading() ? '已结束记录 · 待处理 · 阅读模式' : '记录中 · 已自动保存';
+  return isReading() ? current.data.formatted_revision ? '已自动整理 · 待归档' : '已提交自动整理 · 阅读模式' : '记录中 · 已自动保存';
 }
 function renderHistory(detail) {
   $('note-related').replaceChildren();
@@ -142,7 +147,7 @@ async function save(operation = 'save', confirmed = false) {
   if (!pending && operation === 'save' && current.data.revision > 0 && current.data.recording !== 'editing'
       && Object.entries(fieldIds).some(([k,id])=>$(id).value !== current.data[k])) operation='edit';
   if (!pending) pending={operation, id:current.id, request_id:uid(), expected_revision:current.data.revision,
-    ...(confirmed?{confirmed:true}:{}),changes:operation==='process'?{}:Object.fromEntries(['title','body','date','workspace','status','archive_reason'].map(k=>[k,snapshot[k]]))};
+    ...(confirmed?{confirmed:true}:{}),changes:['process','restore'].includes(operation)?{}:Object.fromEntries(['title','body','date','workspace','status','archive_reason'].map(k=>[k,snapshot[k]]))};
   stash(); $('save-state').textContent='保存中…';
   saving=(async () => {
     try {
@@ -162,7 +167,7 @@ async function save(operation = 'save', confirmed = false) {
       }
       $('save-state').textContent=dirty?'尚有新内容待保存':savedState();
       $('note-id').textContent='笔记：'+current.id;
-      if(!dirty && ['edit','finish','archive','process'].includes(savedOperation)) fill(current.data);
+      if(!dirty && ['edit','finish','archive','process','restore'].includes(savedOperation)) fill(current.data);
       controls(); message();
       history.replaceState(null,'','/notes?id='+encodeURIComponent(current.id));
       try {await refreshList();} catch(e) {message('内容已保存，列表刷新失败：'+e.message);}
@@ -195,23 +200,27 @@ async function save(operation = 'save', confirmed = false) {
 function changed() {
   if (!current || historical) return;
   dirty=true; stash(); $('save-state').textContent='尚未保存'; clearTimeout(timer);
+  controls();
   if (!paused && !remote) timer=setTimeout(save,900);
 }
 function inline(text, target) {
-  const re=/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g; let start=0;
+  const re=/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|\*\*([^*]+)\*\*|\*([^*]+)\*/g; let start=0;
   for (const m of text.matchAll(re)) {
     target.append(document.createTextNode(text.slice(start,m.index)));
-    const a=node('a',m[1]); a.href=m[2]; a.target='_blank'; a.rel='noopener noreferrer'; target.append(a); start=m.index+m[0].length;
+    if(m[1]) {const a=node('a',m[1]); a.href=m[2]; a.target='_blank'; a.rel='noopener noreferrer'; target.append(a);}
+    else target.append(node(m[3]?'strong':'em',m[3]||m[4]));
+    start=m.index+m[0].length;
   }
   target.append(document.createTextNode(text.slice(start)));
 }
 function renderMarkdown(text, target) {
-  target.replaceChildren(); let list;
+  target.replaceChildren(); let list, listKind;
   for(const line of text.split('\n')) {
-    const heading=line.match(/^(#{1,3})\s+(.+)$/), bullet=line.match(/^[-*]\s+(.+)$/);
+    const heading=line.match(/^(#{1,3})\s+(.+)$/), bullet=line.match(/^\s*([-*]|\d+[.)]|[a-zA-Z]+[.)])\s+(.+)$/);
     if (bullet) {
-      if(!list) {list=document.createElement('ul'); target.append(list);}
-      const item=document.createElement('li'); inline(bullet[1],item); list.append(item);
+      const kind=/^[-*]$/.test(bullet[1])?'ul':/^\d/.test(bullet[1])?'1':bullet[1][0]===bullet[1][0].toUpperCase()?'A':'a';
+      if(!list || kind!==listKind) {list=document.createElement(kind==='ul'?'ul':'ol'); if(kind!=='ul'){list.type=kind;list.start=kind==='1'?parseInt(bullet[1]):letterNumber(bullet[1].slice(0,-1));} target.append(list);listKind=kind;}
+      const item=document.createElement('li'); inline(bullet[2],item); list.append(item);
     } else {
       list=null; const p=document.createElement(heading?'h'+(Number(heading[1].length)+1):'p');
       inline(heading?heading[2]:line || '\u00a0',p); target.append(p);
@@ -219,6 +228,57 @@ function renderMarkdown(text, target) {
   }
 }
 for (const id of Object.values(fieldIds)) $(id).addEventListener('input',changed);
+function letterNumber(text) {return [...text.toLowerCase()].reduce((n,c)=>n*26+c.charCodeAt(0)-96,0);}
+function letterMarker(number) {
+  if(!Number.isSafeInteger(number) || number<1)return '';
+  let text='';
+  while(number>0){number--;text=String.fromCharCode(97+number%26)+text;number=Math.floor(number/26);}
+  return text;
+}
+function replaceSelection(text, start, end, selectStart, selectEnd) {
+  const input=$('note-body');
+  if(input.disabled || input.value.length-(end-start)+text.length>input.maxLength)return;
+  input.setRangeText(text,start,end,'end');
+  if(selectStart!==undefined)input.setSelectionRange(selectStart,selectEnd);
+  input.focus();changed();
+}
+function formatText(kind) {
+  const input=$('note-body'), start=input.selectionStart, end=input.selectionEnd;
+  if(kind==='bold' || kind==='italic') {
+    const mark=kind==='bold'?'**':'*', text=input.value.slice(start,end)||'文字';
+    replaceSelection(mark+text+mark,start,end,start+mark.length,start+mark.length+text.length);return;
+  }
+  const from=input.value.lastIndexOf('\n',start-1)+1;
+  const tail=input.value.indexOf('\n',Math.max(start,end-1)), to=tail<0?input.value.length:tail;
+  const lines=input.value.slice(from,to).split('\n').map((line,i)=>{
+    const plain=line.replace(/^(?:#{1,3}\s+|(?:[-*]|\d+[.)]|[a-zA-Z]+[.)])\s+)/,'');
+    const prefix=kind==='heading'?'# ':kind==='subheading'?'## ':kind==='number'?(i+1)+'. ':kind==='letter'?letterMarker(i+1)+'. ':'- ';
+    return prefix+plain;
+  }).join('\n');
+  replaceSelection(lines,from,to);
+}
+for(const kind of ['heading','subheading','bold','italic','number','letter','bullet']) $('format-'+kind).onclick=()=>formatText(kind);
+$('note-body').addEventListener('keydown',event=>{
+  if(event.isComposing)return;
+  if((event.ctrlKey || event.metaKey) && ['b','i'].includes(event.key.toLowerCase())) {
+    event.preventDefault();formatText(event.key.toLowerCase()==='b'?'bold':'italic');return;
+  }
+  const input=$('note-body'), pos=input.selectionStart;
+  if(event.key!=='Enter' || event.shiftKey || input.selectionEnd!==pos)return;
+  const start=input.value.lastIndexOf('\n',pos-1)+1, line=input.value.slice(start,pos);
+  const match=line.match(/^(\s*)([-*]|\d+[.)]|[a-zA-Z]+[.)])\s+(.*)$/);
+  if(!match)return;
+  event.preventDefault();
+  if(!match[3].trim()){replaceSelection('',start,pos);return;}
+  const marker=match[2]; let next=marker;
+  if(/^\d/.test(marker))next=(parseInt(marker)+1)+marker.slice(-1);
+  else if(/^[a-zA-Z]/.test(marker)) {
+    next=letterMarker(letterNumber(marker.slice(0,-1))+1);
+    if(marker[0]===marker[0].toUpperCase())next=next.toUpperCase();
+    if(next)next+=marker.slice(-1);
+  }
+  replaceSelection('\n'+match[1]+next+' ',pos,pos);
+});
 $('new-note').onclick=()=>navigate(async()=> {
   current={id:'note-'+uid(),kind:'note',data:{title:'',body:'',date:state.today,workspace:$('note-workspace').value,status:'active',archive_reason:'',revision:0,recording:'editing'}};
   dirty=false; pending=null; paused=false; historical=false; message(); fill(current.data); $('note-body').focus();
@@ -233,6 +293,8 @@ for(const id of ['note-workspace','note-status','note-search']) $(id).addEventLi
 $('preview-note').onclick=()=> {
   const operation = ['edit','finish'].includes(pending?.operation) ? pending.operation : isReading() ? 'edit' : 'finish';
   return navigate(async()=> {
+    // Fetch the completed rewrite before unlocking; never start from an old reading snapshot.
+    if(operation==='edit' && !pending) await openNote(current.id);
     if(current.data.recording === (operation === 'finish' ? 'finished' : 'editing')) {fill(current.data); return;}
     transitioning=true; controls();
     try {
@@ -245,13 +307,13 @@ $('preview-note').onclick=()=> {
   });
 };
 function confirmNote(operation) {
-  const deleting=operation==='delete',dialog=$('note-confirm'),trigger=$(operation+'-note');
+  const deleting=operation==='delete',restoring=operation==='restore',dialog=$('note-confirm'),trigger=$(operation+'-note');
   dialog.setAttribute('data-operation',operation);
-  $('note-confirm-title').textContent=deleting?'删除这篇笔记？':'归档这篇笔记？';
+  $('note-confirm-title').textContent=deleting?'删除这篇笔记？':restoring?'恢复自动整理前的原稿？':'手动归档这篇笔记？';
   $('note-confirm-subject').textContent=current.data.title || '未命名笔记';
-  $('note-confirm-description').textContent=deleting?'笔记将从列表移除，尚未完成的整理也会停止。':'归档后可在「已归档」中找回。Lumos 将停止这篇笔记尚未完成的整理。';
-  $('note-confirm-hint').textContent=deleting?'已被任务引用的原文与历史仍会保留。':'需要更新知识库、主线或任务，请使用「Lumos 归档」。';
-  $('note-confirm-submit').textContent=deleting?'确认删除':'确认归档';
+  $('note-confirm-description').textContent=deleting?'笔记将从列表移除，尚未完成的整理也会停止。':restoring?'当前正文将替换为最近一次自动整理前的原稿，并进入编辑。尚未完成的整理会停止。':'归档后可在「已归档」中找回。Lumos 将停止这篇笔记尚未完成的整理。';
+  $('note-confirm-hint').textContent=deleting?'已被任务引用的原文与历史仍会保留。':restoring?'整理版与已有来源引用仍保留在历史中。':'需要更新知识库、主线或任务，请使用「Lumos 归档」。';
+  $('note-confirm-submit').textContent=deleting?'确认删除':restoring?'确认恢复':'确认归档';
   dialog.returnValue='';
   return new Promise(resolve=>{
     dialog.onclose=()=>{trigger.focus();resolve(dialog.returnValue==='confirm');};
@@ -259,6 +321,10 @@ function confirmNote(operation) {
   });
 }
 dismissOnBackdrop($('note-confirm'));
+$('restore-note').onclick=()=>pending?.operation==='restore'?navigate(async()=>{}):navigate(async()=> {
+  if(!await confirmNote('restore'))return;
+  transitioning=true;controls();try{dirty=true;await save('restore');}finally{transitioning=false;controls();}
+});
 $('archive-note').onclick=()=>pending?.operation==='archive'?navigate(async()=>{}):navigate(async()=> {
   const archive=current.data.status!=='archived';
   if(archive) {

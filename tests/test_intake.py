@@ -563,6 +563,43 @@ class IntakeTest(BaseStoreCase):
         self.assertTrue(intake_context(self.store, job['id'])['open_questions'])
         self.assertEqual(self.store.verify()['integrity'], 'ok')
 
+    def test_rewrite_edit_restore_and_archive_gate(self):
+        ident = 'note-'+uuid.uuid4().hex
+        def save(operation, **changes):
+            revision = note_detail(self.store, ident)['note']['data']['revision']
+            return save_note(self.store, {'id': ident, 'request_id': uuid.uuid4().hex,
+                'expected_revision': revision, 'operation': operation, 'changes': changes, 'source': self.source})['note']
+        save_note(self.store, {'id': ident, 'request_id': uuid.uuid4().hex, 'expected_revision': 0,
+            'operation': 'finish', 'changes': {'body': '重复原稿', 'title': '原题'}, 'source': self.source})
+        with self.assertRaisesRegex(lumos.Error, '自动整理'):
+            save('process')
+        with self.assertRaisesRegex(lumos.Error, '自动整理'):
+            save_intake(self.store, {'request_id': uuid.uuid4().hex, 'note_id': ident, 'source': self.source})
+        job = claim_intake(self.store); ctx = intake_context(self.store, job['id'])
+        apply_intake(self.store, {'id': job['id'], 'claim': job['data']['claim'], 'basis': ctx['basis'],
+            'plan': {'summary': '重写', 'questions': [], 'updates': [],
+                     'note_format': {'title': '整理题', 'body': '# 重写\n正文', 'related_ids': ['talk']}}})
+        edited = save('edit')
+        self.assertEqual(edited['data']['body'], '# 重写\n正文')
+        self.assertTrue(edited['data']['formatted_revision'])
+        save('finish')
+        self.assertEqual(note_detail(self.store, ident)['intake']['data']['status'], 'done')
+        save('edit')
+        modified = save('save', body='# 重写\n正文\n新问题')
+        self.assertFalse(modified['data']['formatted_revision'])
+        save('finish')
+        with self.assertRaisesRegex(lumos.Error, '自动整理'):
+            save('process')
+        job = claim_intake(self.store)
+        restored = save('restore')
+        self.assertEqual(restored['data']['body'], '重复原稿')
+        self.assertEqual(restored['data']['title'], '原题')
+        self.assertEqual(restored['data']['recording'], 'editing')
+        self.assertFalse(restored['data']['formatted_revision'])
+        self.assertEqual(restored['data']['suggested_refs'], [])
+        self.assertEqual(intake_context(self.store, job['id'])['intake']['data']['status'], 'obsolete')
+        self.assertEqual(note_detail(self.store, ident, 2)['note']['data']['body'], '# 重写\n正文')
+
     def test_manual_archive_delete_cancel_running_note_and_preserve_pinned_source(self):
         from lumos_notes import list_notes
         for operation in ('archive', 'delete'):
