@@ -13,13 +13,17 @@ class AgentWebTest(BaseStoreCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
         base = 'http://127.0.0.1:'+str(server.server_port)
         try:
-            for page in ('agents', 'knowledge', 'agents.js', 'knowledge.js'):
+            for page in ('agents', 'knowledge', 'agents.js', 'knowledge.js', 'navigation.js', 'navigation.css'):
                 with urlopen(base+'/'+page) as response:
                     self.assertEqual(response.status, 200)
                     self.assertIn("frame-ancestors 'none'", response.headers['Content-Security-Policy'])
             with urlopen(base+'/api/knowledge?query=%E6%A0%87%E5%AE%9A') as response:
                 result = json.load(response)
                 self.assertEqual(result['total'], 2)
+            with urlopen(base+'/api/knowledge?catalog=true') as response:
+                result = json.load(response)
+                self.assertEqual(set(result), {'contexts', 'token'})
+                self.assertEqual(len(result['contexts']), 2)
             for route in ('materials', 'agent-inspect'):
                 request = Request(base+'/api/'+route, data=b'{}', headers={'Content-Type': 'application/json', 'Origin': base})
                 with self.assertRaises(HTTPError) as error:

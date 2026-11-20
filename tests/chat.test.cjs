@@ -44,6 +44,14 @@ test('choosing a specialist persists without replacing user words',async()=>{
   const q=await page(p.storage,p.world.window.location.href);assert.equal(q.get('chat-agent').value,'aipm');await q.submit();
   assert.equal(q.posts[0].agent_role,'aipm');assert.equal(q.posts[0].text,'原始工作说明');
 });
+test('direct role links are consumed once and do not override a later choice or workspace',async()=>{
+  const p=await page(new Map(),'http://127.0.0.1/chat?agent=aipm&episode=intake-test');
+  assert.equal(p.get('chat-agent').value,'aipm');assert.equal(new URL(p.world.window.location.href).searchParams.has('agent'),false);
+  p.get('chat-agent').value='librarian';p.get('chat-agent').onchange();p.edit('保留这段草稿');
+  const q=await page(p.storage,p.world.window.location.href);assert.equal(q.get('chat-agent').value,'librarian');assert.equal(q.get('chat-text').value,'保留这段草稿');
+  q.get('chat-workspace').value='lumos';await q.get('chat-workspace').onchange();
+  const r=await page(q.storage,q.world.window.location.href);assert.equal(r.get('chat-agent').value,'lumos');assert.equal(r.get('episode-reference').textContent,'');
+});
 test('uncertain send survives reload and retries the same payload',async()=>{
   const p=await page();const normal=p.world.fetch;let original;
   p.world.fetch=async(url,opts)=>{if(opts){original=JSON.parse(opts.body);throw new Error('lost response');}return normal(url,opts);};

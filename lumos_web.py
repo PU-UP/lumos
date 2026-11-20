@@ -63,12 +63,15 @@ def make_server(store, port=8765):
                     self.reply(200, save(store, request))
                 elif path.path == "/api/agents":
                     from lumos_agents import episodes
-                    self.reply(200, {**episodes(store, parse_qs(path.query).get('workspace', ['lingguang'])[0]), 'token': token})
+                    self.reply(200, {**episodes(store, parse_qs(path.query).get('workspace', ['lingguang'])[0]), 'token': token,
+                                     'executor': getattr(getattr(self.server, 'worker', None), 'state', 'offline')})
                 elif path.path == "/api/knowledge":
-                    from lumos_knowledge import search_knowledge
+                    from lumos_knowledge import search_knowledge, knowledge_catalog
                     query = parse_qs(path.query)
-                    self.reply(200, {**search_knowledge(store, query.get('workspace', ['lingguang'])[0], query.get('query', [''])[0],
-                                                     query.get('archived', ['false'])[0] == 'true'), 'token': token})
+                    workspace = query.get('workspace', ['lingguang'])[0]
+                    data = knowledge_catalog(store, workspace) if query.get('catalog') == ['true'] else search_knowledge(
+                        store, workspace, query.get('query', [''])[0], query.get('archived', ['false'])[0] == 'true')
+                    self.reply(200, {**data, 'token': token})
                 elif path.path == "/api/materials":
                     from lumos_knowledge import material_files
                     self.reply(200, {'files': material_files(), 'token': token})
@@ -97,7 +100,7 @@ def make_server(store, port=8765):
                     self.reply(200, task_detail(store, parse_qs(path.query).get("id", [""])[0]))
                 elif path.path == "/api/mainline":
                     self.reply(200, mainline_detail(store, parse_qs(path.query).get("id", [""])[0]))
-                elif path.path in {"/", "/tasks", "/delivery", "/disclosure.js", "/intake.js", "/overview.js", "/work-model.js", "/dialog.js", "/overview.css", "/board.js", "/board.css", "/notes", "/notes.js", "/notes.css", "/people", "/people.js", "/people.css", "/chat", "/chat.js", "/chat.css", "/agents", "/agents.js", "/agents.css", "/knowledge", "/knowledge.js"}:
+                elif path.path in {"/", "/tasks", "/delivery", "/disclosure.js", "/intake.js", "/overview.js", "/work-model.js", "/dialog.js", "/overview.css", "/board.js", "/board.css", "/notes", "/notes.js", "/notes.css", "/people", "/people.js", "/people.css", "/chat", "/chat.js", "/chat.css", "/agents", "/agents.js", "/agents.css", "/knowledge", "/knowledge.js", "/navigation.js", "/navigation.css"}:
                     name = {"/": "overview.html", "/delivery": "overview.html", "/tasks": "index.html", "/notes": "notes.html", "/people": "people.html", "/chat": "chat.html", "/agents": "agents.html", "/knowledge": "knowledge.html"}.get(path.path, path.path[1:])
                     if path.path == "/" and "task" in parse_qs(path.query):
                         name = "index.html"  # Preserve existing task bookmarks.

@@ -42,6 +42,17 @@ class KnowledgeTest(BaseStoreCase):
         self.assertTrue(all(h['citation']['version'].endswith('.blob') for h in found))
         self.assertEqual(search_knowledge(self.store, workspace='lumos', query='标定')['results'], [])
 
+    def test_files_remain_visible_when_many_source_fragments_match(self):
+        with self.store.db() as db:
+            saved = self.store.nodes(db)
+        fragments = {f'fragment-{i}': {'id': f'fragment-{i}', 'kind': 'evidence',
+                     'data': {'context': 'mapping', 'text': '标定来源'}} for i in range(105)}
+        with patch.object(self.store, 'nodes', return_value={**fragments, **saved}):
+            found = search_knowledge(self.store, query='标定')
+        self.assertEqual(found['total'], 107)
+        self.assertEqual([h['kind'] for h in found['results'][:2]], ['document', 'document'])
+        self.assertEqual(len(found['results']), 100)
+
     def test_path_escape_refused_and_unsupported_format_not_claimed_as_read(self):
         (self.area/'outside.txt').write_text('outside')
         with self.assertRaises(lumos.Error):

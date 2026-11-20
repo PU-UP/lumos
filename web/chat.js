@@ -82,7 +82,7 @@ if(typeof document!=='undefined'){
     host.append(welcome);
   }
   async function loadTasks(){const current=++taskRead;try{const r=await fetch('/api/tasks'),data=await r.json();if(current!==taskRead)return;if(!r.ok)throw new Error();taskState=data;taskError='';}catch{if(current!==taskRead)return;taskState=null;taskError='任务与主线暂时读取失败，可直接写下名称和进展。';}signature='';render();if($('subject-picker').open)renderPicker();}
-  function address(){const u=new URL(window.location.href);u.searchParams.set('workspace',workspace);u.searchParams.set('id',chatId);history.replaceState(null,'',u);try{localStorage.setItem('lumos.chat.active.'+workspace,chatId);}catch{}}
+  function address(){const u=new URL(window.location.href);u.searchParams.set('workspace',workspace);u.searchParams.set('id',chatId);u.searchParams.delete('agent');u.searchParams.delete('episode');history.replaceState(null,'',u);try{localStorage.setItem('lumos.chat.active.'+workspace,chatId);}catch{}}
   function controls(){
     const latest=chatTurns(jobs,chatId).at(-1),waiting=latest && ['pending','running','failed'].includes(latest.data.status);
     $('chat-text').readOnly=busy||!!pending;
@@ -91,6 +91,7 @@ if(typeof document!=='undefined'){
     $('chat-model').disabled=busy||!!pending;
     $('chat-agent').value=agentRole;$('chat-agent').disabled=busy||!!pending;
     $('writing-label').textContent='写给 '+agentNames[agentRole];
+    $('chat-options-label').textContent=agentNames[agentRole]+' · 对话设置';
     $('episode-reference').textContent=episodeRef?'正在反馈一次执行：'+episodeRef:'';
     $('chat-workspace').disabled=busy;$('new-chat').disabled=busy;$('choose-subjects').disabled=busy||!!pending;
     const question=$('selected-question');question.replaceChildren();
@@ -123,7 +124,7 @@ if(typeof document!=='undefined'){
         if(d.reply)answer.append(el('p',d.reply,'chat-text'));
         const receipt=el('div',undefined,'chat-receipt');receipt.append(el('p',chatReceipt(job)));
         if(d.summary)receipt.append(el('p',d.summary));
-        const log=el('a','查看协作与运行记录');log.href='/agents?workspace='+workspace+'&episode='+encodeURIComponent(job.id);receipt.append(log);
+        const log=el('a','查看处理经过');log.href='/agents?workspace='+workspace+'&episode='+encodeURIComponent(job.id);receipt.append(log);
         for(const target of job.targets||[])if(['action','mainline'].includes(target.kind)){const a=el('a',target.title);a.href=target.kind==='action'?'/tasks?task='+encodeURIComponent(target.id):'/?line='+encodeURIComponent(target.id);receipt.append(a);}
         for(const [index,q] of (d.questions||[]).entries()){
           const answers=(d.resolutions||[]).filter(r=>r.index===index),last=answers.at(-1);
@@ -165,9 +166,12 @@ if(typeof document!=='undefined'){
       jobs=[data.intake,...jobs.filter(n=>n.id!==data.intake.id)];render();await refresh();
     }catch(e){error=e.message;timer=setTimeout(refresh,4000);}finally{busy=false;signature='';render();$('chat-text').focus();}
   }
-  $('chat-workspace').value=workspace;restoreDraft();address();
-  if(agentNames[url.searchParams.get('agent')])agentRole=url.searchParams.get('agent');
-  if(url.searchParams.get('episode'))episodeRef=url.searchParams.get('episode');
+  $('chat-workspace').value=workspace;restoreDraft();
+  if(!pending){
+    if(agentNames[url.searchParams.get('agent')])agentRole=url.searchParams.get('agent');
+    if(url.searchParams.get('episode'))episodeRef=url.searchParams.get('episode');
+  }
+  try{saveDraft();address();}catch{error='浏览器无法保留草稿，请勿关闭页面。';}
   $('chat-agent').onchange=()=>{agentRole=$('chat-agent').value;changedSelection();};
   $('new-chat').onclick=()=>chatTurns(jobs,chatId).length?selectChat(uuid()):$('chat-text').focus();
   $('chat-workspace').onchange=()=>{const space=$('chat-workspace').value;let id;try{id=localStorage.getItem('lumos.chat.active.'+space);}catch{}return selectChat(id||uuid(),space);};

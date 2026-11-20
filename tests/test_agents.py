@@ -11,6 +11,23 @@ from test_core import BaseStoreCase
 
 
 class AgentsTest(BaseStoreCase):
+    def test_diagnostics_separate_replaced_inputs_from_unresolved_current_failures(self):
+        from lumos_agents import diagnostics
+        def job(ident, status='failed', **extra):
+            return {'id': ident, 'kind': 'intake', 'data': {'workspace': 'lingguang', 'status': status,
+                    'title': ident, 'updated_at': '2026-11-20T00:00:00+00:00', **extra}}
+        nodes = {'note': {'id': 'note', 'kind': 'note', 'data': {'status': 'active', 'revision': 3}},
+                 'old': job('old', note={'id': 'note', 'revision': 1}),
+                 'current': job('current', note={'id': 'note', 'revision': 3}),
+                 'unrelated': job('unrelated'), 'obsolete': job('obsolete', 'obsolete'),
+                 'expired': job('expired', 'running', lease_until='2000-01-01T00:00:00+00:00')}
+        original = copy.deepcopy(nodes)
+        self.assertEqual({f['episode_id'] for f in diagnostics(nodes, 'lingguang')}, {'current','unrelated','expired'})
+        self.assertEqual(len(diagnostics(nodes, 'lingguang', True)), 5)
+        self.assertEqual(nodes, original)
+        nodes['note']['data']['status'] = 'archived'
+        self.assertNotIn('current', {f['episode_id'] for f in diagnostics(nodes, 'lingguang')})
+
     def setUp(self):
         super().setUp(); self.seed()
         self.source = {'type': 'user', 'ref': 'ISOLATED ROLE TEST'}

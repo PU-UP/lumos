@@ -1,13 +1,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-test('all pages expose the same task entry in their global navigation',()=>{
-  for(const file of ['overview','index','people','notes','chat']){
+test('all pages keep three everyday entries and retain contextual access to details',()=>{
+  for(const file of ['overview','index','people','notes','knowledge','chat','agents']){
     const html=fs.readFileSync('web/'+file+'.html','utf8');
     const nav=html.match(/<nav aria-label="工作视图"[\s\S]*?<\/nav>/)[0];
-    assert.match(nav,/<a href="\/tasks"[^>]*>全部任务<\/a>/,file);
-    assert.match(nav,/<a href="\/chat"[^>]*>对话<\/a>/,file);
+    assert.deepEqual([...nav.matchAll(/<a [^>]*>(.*?)<\/a>/g)].map(m=>m[1]),['工作','对话','记录'],file);
+    assert.match(html,/src="\/navigation.js"/,file);
   }
+  const home=fs.readFileSync('web/overview.html','utf8');
+  assert.match(home,/href="\/tasks"/);assert.match(home,/href="\/people"/);
+  assert.match(fs.readFileSync('web/notes.html','utf8'),/href="\/knowledge"/);
 });
 const {managementModel,milestoneTasks,deliveryDate,targetDate,matchesTask,submission} = require('../web/overview.js');
 test('uncertain submissions retry the original payload and suppress concurrent writes',async()=>{

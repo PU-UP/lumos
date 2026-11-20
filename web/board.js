@@ -1080,6 +1080,8 @@ $('owner-filter').onchange = render;
 $('search').oninput = () => {if (state) render();};
 window.addEventListener('beforeunload', event => {if (volatileDrafts.size || saving) {event.preventDefault(); event.returnValue = '';}});
 restorePreferences();
+const linkedWorkspace=new URLSearchParams(window.location?.search||'').get('workspace');
+if(Object.hasOwn(workspaces,linkedWorkspace))$('workspace').value=linkedWorkspace;
 refresh().then(() => {
   const params = new URLSearchParams(window.location?.search || '');
   const back = params.get('return');

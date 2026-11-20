@@ -152,7 +152,20 @@ def search_knowledge(store, workspace='lingguang', query='', archived=False):
             index = text.casefold().find(terms[0]) if terms else 0
             start = max(0, index-80)
             hits.append({'id': n['id'], 'kind': kind, 'title': title, 'citation': citation,
+                         'has_title': bool(d.get('title')), 'is_material': bool(d.get('material')),
+                         'context_title': contexts.get(d.get('context'), {}).get('data', {}).get('title', ''),
                          'excerpt': text[start:start+1200], 'truncated': len(text) > 1200,
                          'extraction': d.get('material', {}).get('extraction', '已读取文本'),
                          'context': d.get('context', ''), 'archived': d.get('status') == 'archived'})
-        return {'results': hits[:100], 'total': len(hits), 'contexts': [{'id': i, 'title': n['data']['title']} for i, n in contexts.items()]}
+        hits.sort(key=lambda h: 0 if h['kind'] == 'document' or h['is_material'] else 1 if h['kind'] == 'note' else 2)
+        return {'results': hits[:100], 'total': len(hits), 'contexts': [{'id': i, 'title': n['data']['title']} for i, n in contexts.items()
+                                                                   if n['data'].get('status', 'active') in {'active', 'waiting'}]}
+
+
+def knowledge_catalog(store, workspace='lingguang'):
+    """Opening the search page needs project choices, not every saved source fragment."""
+    require(workspace in {'lingguang', 'lumos'}, 'Invalid workspace')
+    with process_lock(store.root), store.db() as db:
+        contexts = [n for n in store.nodes(db).values() if n['kind'] == 'context' and context_workspace(n) == workspace
+                    and n['data'].get('status', 'active') in {'active', 'waiting'}]
+        return {'contexts': [{'id': n['id'], 'title': n['data']['title']} for n in contexts]}

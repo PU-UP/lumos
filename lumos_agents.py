@@ -90,11 +90,26 @@ def prepare_execution(store, ident, claim, plan):
         commit_tasks(store, nodes, {'reason': 'prepare agent result', 'updates': [node]}, ident)
 
 
-def diagnostics(nodes, workspace):
+def current_input(node, nodes):
+    data = node['data']
+    ref = data.get('note')
+    if ref and ref['id'] in nodes:
+        note = nodes[ref['id']]['data']
+        if note['status'] != 'active' or note['revision'] != ref['revision']:
+            return False
+    if data.get('review'):
+        from lumos_intake import review_matches
+        return review_matches(nodes, data['review'])
+    return True
+
+
+def diagnostics(nodes, workspace, include_history=False):
     findings = []
     for n in nodes.values():
         d = n['data']
         if n['kind'] != 'intake' or d['workspace'] != workspace:
+            continue
+        if not include_history and (d['status'] == 'obsolete' or not current_input(n, nodes)):
             continue
         if d['status'] == 'failed':
             code, title = 'failed', '执行失败，原输入已保留'
@@ -104,7 +119,7 @@ def diagnostics(nodes, workspace):
             code, title = 'obsolete', '来源已变化，旧结果未应用'
         else:
             continue
-        findings.append({'key': n['id']+':'+code, 'episode_id': n['id'], 'code': code, 'title': title,
+        findings.append({'key': n['id']+':'+code, 'episode_id': n['id'], 'code': code, 'title': title, 'subject': d['title'],
                          'at': d.get('updated_at', ''), 'suggestion': '查看步骤和原输入；核对后重试或重新整理。'})
     return sorted(findings, key=lambda f: f['at'], reverse=True)
 
@@ -117,8 +132,12 @@ def episodes(store, workspace='lingguang'):
                  'agent_role', 'agent_steps', 'summary', 'error', 'destinations', 'episode_ref', 'findings', 'chat_id', 'note') if k in n['data']},
                  'recorded': bool(n['data'].get('agent_steps'))} for n in nodes.values()
                 if n['kind'] == 'intake' and n['data']['workspace'] == workspace]
+        findings = diagnostics(nodes, workspace)
+        active = [n for n in nodes.values() if n['kind'] == 'intake' and n['data']['workspace'] == workspace and current_input(n, nodes)]
         return {'roles': ROLES, 'episodes': sorted(rows, key=lambda n: n['created_at'], reverse=True),
-                'findings': diagnostics(nodes, workspace)}
+                'findings': findings, 'history_count': len(diagnostics(nodes, workspace, True))-len(findings),
+                'pending': sum(n['data']['status'] == 'pending' for n in active),
+                'running': sum(n['data']['status'] == 'running' and n['data'].get('lease_until', '') >= now() for n in active)}
 
 
 def inspect_once(store, request):

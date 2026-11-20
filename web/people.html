@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lumos · 人员</title><link rel="stylesheet" href="/board.css"><link rel="stylesheet" href="/people.css"><script src="/people.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lumos · 人员</title><link rel="stylesheet" href="/board.css"><link rel="stylesheet" href="/people.css"><script src="/navigation.js" defer></script><script src="/people.js" defer></script><link rel="stylesheet" href="/navigation.css"></head>
 <body>
 <header><div class="brand"><span class="mark">L</span><strong>Lumos</strong><span class="divider">/</span><span>人员与组织</span></div><div class="tools"><button id="print-chart" hidden>打印架构图 / 保存 PDF</button><button id="refresh">刷新</button></div></header>
-<nav aria-label="工作视图" class="view-nav"><a href="/">主线</a><a href="/tasks">全部任务</a><a href="/people" aria-current="page">人员</a><a href="/notes">笔记</a><a href="/chat">对话</a><a href="/knowledge">资料</a><a href="/agents">协作记录</a></nav>
-<main>
+<nav aria-label="工作视图" class="view-nav"><a href="/" aria-current="page">工作</a><a href="/chat">对话</a><a href="/notes">记录</a></nav>
+<main><nav class="section-links" aria-label="工作明细"><a href="/">返回工作概览</a><a href="/tasks">全部任务</a><a href="/people" aria-current="page">人员与组织</a></nav>
 <div class="intro"><div><h1>人员与组织</h1><p class="muted">组织架构与人员安排，工作量概况见下方。</p></div><label>工作空间<select id="workspace"><option value="lingguang">灵光</option><option value="lumos">Lumos 仓库维护</option></select></label></div>
 <p id="message" role="status" aria-live="polite"></p>
 <section id="organization" aria-label="组织架构图" hidden></section>
