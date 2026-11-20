@@ -49,15 +49,29 @@ def make_server(store, port=8765):
                 require(self.headers.get("Sec-Fetch-Site") not in {"cross-site"}, "Cross-site request refused")
                 path = urlsplit(self.path)
                 if write:
-                    require(path.path in {"/api/tasks", "/api/notes", "/api/intakes", "/api/mainline-review", "/api/task-review"}, "Unknown route")
+                    require(path.path in {"/api/tasks", "/api/notes", "/api/intakes", "/api/mainline-review", "/api/task-review", "/api/materials", "/api/agent-inspect"}, "Unknown route")
                     require(self.headers.get("Origin") == "http://" + host, "Invalid origin")
                     require(secrets.compare_digest(self.headers.get("X-Lumos-Token", ""), token), "Invalid token")
                     require(self.headers.get("Content-Type", "").split(";")[0] == "application/json", "Expected JSON")
                     request = json.loads(raw)
                     require(isinstance(request, dict), "Expected request object")
                     request["source"] = {"type": "user", "ref": "本地看板用户保存，request=" + str(request.get("request_id", ""))}
-                    save = {"/api/tasks": save_task, "/api/notes": save_note, "/api/intakes": save_intake, "/api/mainline-review": save_review, "/api/task-review": request_task_review}[path.path]
+                    from lumos_agents import inspect_once
+                    from lumos_knowledge import register_material
+                    save = {"/api/tasks": save_task, "/api/notes": save_note, "/api/intakes": save_intake, "/api/mainline-review": save_review, "/api/task-review": request_task_review,
+                            "/api/materials": register_material, "/api/agent-inspect": inspect_once}[path.path]
                     self.reply(200, save(store, request))
+                elif path.path == "/api/agents":
+                    from lumos_agents import episodes
+                    self.reply(200, {**episodes(store, parse_qs(path.query).get('workspace', ['lingguang'])[0]), 'token': token})
+                elif path.path == "/api/knowledge":
+                    from lumos_knowledge import search_knowledge
+                    query = parse_qs(path.query)
+                    self.reply(200, {**search_knowledge(store, query.get('workspace', ['lingguang'])[0], query.get('query', [''])[0],
+                                                     query.get('archived', ['false'])[0] == 'true'), 'token': token})
+                elif path.path == "/api/materials":
+                    from lumos_knowledge import material_files
+                    self.reply(200, {'files': material_files(), 'token': token})
                 elif path.path == "/api/intakes":
                     query = parse_qs(path.query)
                     data = list_intakes(store, query.get("workspace", ["lingguang"])[0])
@@ -83,8 +97,8 @@ def make_server(store, port=8765):
                     self.reply(200, task_detail(store, parse_qs(path.query).get("id", [""])[0]))
                 elif path.path == "/api/mainline":
                     self.reply(200, mainline_detail(store, parse_qs(path.query).get("id", [""])[0]))
-                elif path.path in {"/", "/tasks", "/delivery", "/disclosure.js", "/intake.js", "/overview.js", "/work-model.js", "/dialog.js", "/overview.css", "/board.js", "/board.css", "/notes", "/notes.js", "/notes.css", "/people", "/people.js", "/people.css", "/chat", "/chat.js", "/chat.css"}:
-                    name = {"/": "overview.html", "/delivery": "overview.html", "/tasks": "index.html", "/notes": "notes.html", "/people": "people.html", "/chat": "chat.html"}.get(path.path, path.path[1:])
+                elif path.path in {"/", "/tasks", "/delivery", "/disclosure.js", "/intake.js", "/overview.js", "/work-model.js", "/dialog.js", "/overview.css", "/board.js", "/board.css", "/notes", "/notes.js", "/notes.css", "/people", "/people.js", "/people.css", "/chat", "/chat.js", "/chat.css", "/agents", "/agents.js", "/agents.css", "/knowledge", "/knowledge.js"}:
+                    name = {"/": "overview.html", "/delivery": "overview.html", "/tasks": "index.html", "/notes": "notes.html", "/people": "people.html", "/chat": "chat.html", "/agents": "agents.html", "/knowledge": "knowledge.html"}.get(path.path, path.path[1:])
                     if path.path == "/" and "task" in parse_qs(path.query):
                         name = "index.html"  # Preserve existing task bookmarks.
                     content_type = "text/javascript" if name.endswith(".js") else "text/css" if name.endswith(".css") else "text/html"

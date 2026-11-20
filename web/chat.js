@@ -1,4 +1,5 @@
 'use strict';
+const agentNames={lumos:'Lumos',aipm:'AIPM',librarian:'资料管理员',maintainer:'仓库维护者'};
 function chatTurns(jobs, id) {
   const turns=jobs.filter(n=>n.data.chat_id===id), children=new Map(turns.map(n=>[n.data.chat_parent||'',n])), ordered=[];
   let next=children.get('');
@@ -8,7 +9,7 @@ function chatTurns(jobs, id) {
 function chatReceipt(job) {
   const d=job.data;
   if(d.status==='pending')return '消息已保存 · 等待 Codex';
-  if(d.status==='running')return 'Codex 正在生成答复并整理进展';
+  if(d.status==='running')return (agentNames[d.agent_steps?.at(-1)?.role||d.agent_role]||'Lumos')+' 正在处理本轮内容';
   if(d.status==='failed')return '本轮未写入结果 · 可以重试';
   const changes=(job.targets||[]).filter(t=>['action','mainline','person'].includes(t.kind));
   return (changes.length?'已保存 '+changes.length+' 项工作记录':d.destinations?.length?'已保存依据或问题答复':'仅讨论 · 未修改工作记录')+(d.status==='needs_review'?' · 有待确认项':'');
@@ -36,12 +37,14 @@ if(typeof document!=='undefined'){
   const uuid=()=>crypto.randomUUID().replaceAll('-','');
   const url=new URL(window.location.href);
   let workspace=url.searchParams.get('workspace')==='lumos'?'lumos':'lingguang',chatId=url.searchParams.get('id');
+  if(!chatId && (url.searchParams.has('agent')||url.searchParams.has('episode')))chatId=uuid();
   try{chatId ||= localStorage.getItem('lumos.chat.active.'+workspace);}catch{}chatId ||= uuid();
   let jobs=[],token='',enabled=false,executor='',loaded=false,busy=false,pending=null,timer,generation=0,signature='',listSignature='',error='';
   let selected=[],taskState=null,taskError='',taskRead=0,expanded=false,selectedQuestion=null;
+  let agentRole='lumos',episodeRef='';
   const draftKey=()=>`lumos.chat.${workspace}.${chatId}`;
-  function saveDraft(){localStorage.setItem(draftKey(),JSON.stringify({text:$('chat-text').value,pending,selected,selectedQuestion}));}
-  function restoreDraft(){let d={};try{d=JSON.parse(localStorage.getItem(draftKey())||'{}')||{};}catch{}pending=d.pending||null;selected=Array.isArray(d.selected)?d.selected.filter(t=>typeof t.id==='string'&&typeof t.title==='string').slice(0,20):[];selectedQuestion=d.selectedQuestion?.key && Array.isArray(d.selectedQuestion.related_ids)?d.selectedQuestion:null;$('chat-text').value=d.text||'';}
+  function saveDraft(){localStorage.setItem(draftKey(),JSON.stringify({text:$('chat-text').value,pending,selected,selectedQuestion,agentRole,episodeRef}));}
+  function restoreDraft(){let d={};try{d=JSON.parse(localStorage.getItem(draftKey())||'{}')||{};}catch{}pending=d.pending||null;selected=Array.isArray(d.selected)?d.selected.filter(t=>typeof t.id==='string'&&typeof t.title==='string').slice(0,20):[];selectedQuestion=d.selectedQuestion?.key && Array.isArray(d.selectedQuestion.related_ids)?d.selectedQuestion:null;$('chat-text').value=d.text||'';agentRole=agentNames[d.agentRole]?d.agentRole:'lumos';episodeRef=d.episodeRef||'';}
   function changedSelection(){try{saveDraft();}catch{error='浏览器无法保留草稿，请勿关闭页面。';}signature='';render();if($('subject-picker').open)renderPicker();else $('chat-text').focus();}
   function chooseTask(task){
     if(busy||pending)return;
@@ -86,6 +89,9 @@ if(typeof document!=='undefined'){
     $('send-chat').disabled=!loaded||!enabled||busy||(!pending && (waiting||!$('chat-text').value.trim()));
     $('send-chat').textContent=pending?'重试确认':busy?'发送中…':'发送';
     $('chat-model').disabled=busy||!!pending;
+    $('chat-agent').value=agentRole;$('chat-agent').disabled=busy||!!pending;
+    $('writing-label').textContent='写给 '+agentNames[agentRole];
+    $('episode-reference').textContent=episodeRef?'正在反馈一次执行：'+episodeRef:'';
     $('chat-workspace').disabled=busy;$('new-chat').disabled=busy;$('choose-subjects').disabled=busy||!!pending;
     const question=$('selected-question');question.replaceChildren();
     if(selectedQuestion){question.append(el('strong','正在回答 · '+selectedQuestion.title),el('p',selectedQuestion.text));const clear=el('button','取消问题选择');clear.type='button';clear.disabled=busy||!!pending;clear.onclick=()=>{selectedQuestion=null;changedSelection();};question.append(clear);}
@@ -113,10 +119,11 @@ if(typeof document!=='undefined'){
         user.append(el('p','王牧楠 · '+new Date(d.created_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}),'chat-author'),el('p',d.text,'chat-text'));turn.append(user);
         if(d.question_text)user.append(el('p','回答问题：'+d.question_text,'chat-author'));
         if(job.subjects?.length)user.append(el('p','讨论对象：'+job.subjects.map(t=>t.title).join('、'),'chat-author'));
-        const answer=el('div',undefined,'assistant-message');answer.append(el('p','Lumos · '+(d.model||'Codex 默认模型'),'chat-author'));
+        const answer=el('div',undefined,'assistant-message');answer.append(el('p',(agentNames[d.agent_role]||'Lumos')+' · '+(d.model||'Codex 默认模型'),'chat-author'));
         if(d.reply)answer.append(el('p',d.reply,'chat-text'));
         const receipt=el('div',undefined,'chat-receipt');receipt.append(el('p',chatReceipt(job)));
         if(d.summary)receipt.append(el('p',d.summary));
+        const log=el('a','查看协作与运行记录');log.href='/agents?workspace='+workspace+'&episode='+encodeURIComponent(job.id);receipt.append(log);
         for(const target of job.targets||[])if(['action','mainline'].includes(target.kind)){const a=el('a',target.title);a.href=target.kind==='action'?'/tasks?task='+encodeURIComponent(target.id):'/?line='+encodeURIComponent(target.id);receipt.append(a);}
         for(const [index,q] of (d.questions||[]).entries()){
           const answers=(d.resolutions||[]).filter(r=>r.index===index),last=answers.at(-1);
@@ -154,16 +161,19 @@ if(typeof document!=='undefined'){
       const r=await fetch('/api/intakes',{method:'POST',headers:{'Content-Type':'application/json','X-Lumos-Token':token},body:JSON.stringify(pending)}),data=await r.json();
       if(!r.ok){if(r.status>=400 && r.status<500){pending=null;saveDraft();}throw new Error(data.error||'发送失败');}
       const retry=!!pending.id;pending=null;
-      if(!retry){selected=[];selectedQuestion=null;$('chat-text').value='';setExpanded(false);}saveDraft();signature='';
+      if(!retry){selected=[];selectedQuestion=null;episodeRef='';$('chat-text').value='';setExpanded(false);}saveDraft();signature='';
       jobs=[data.intake,...jobs.filter(n=>n.id!==data.intake.id)];render();await refresh();
     }catch(e){error=e.message;timer=setTimeout(refresh,4000);}finally{busy=false;signature='';render();$('chat-text').focus();}
   }
   $('chat-workspace').value=workspace;restoreDraft();address();
+  if(agentNames[url.searchParams.get('agent')])agentRole=url.searchParams.get('agent');
+  if(url.searchParams.get('episode'))episodeRef=url.searchParams.get('episode');
+  $('chat-agent').onchange=()=>{agentRole=$('chat-agent').value;changedSelection();};
   $('new-chat').onclick=()=>chatTurns(jobs,chatId).length?selectChat(uuid()):$('chat-text').focus();
   $('chat-workspace').onchange=()=>{const space=$('chat-workspace').value;let id;try{id=localStorage.getItem('lumos.chat.active.'+space);}catch{}return selectChat(id||uuid(),space);};
   $('chat-text').oninput=()=>{error='';try{saveDraft();}catch{error='浏览器无法保留草稿，请勿关闭页面。';}controls();};
   $('chat-text').onkeydown=e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'&&!e.isComposing){e.preventDefault();$('chat-form').requestSubmit();}};
-  $('chat-form').onsubmit=e=>{e.preventDefault();if($('send-chat').disabled)return;const text=$('chat-text').value.trim();send(pending||{request_id:uuid(),workspace,chat_id:chatId,chat_parent:chatTurns(jobs,chatId).at(-1)?.id||'',model:$('chat-model').value,text,title:text.slice(0,60),related_ids:[...new Set([...selected.map(t=>t.id),...(selectedQuestion?.related_ids||[])])],...(selectedQuestion?{question_key:selectedQuestion.key,question_keys:selectedQuestion.question_keys||[selectedQuestion.key],question_text:selectedQuestion.question_keys?.length>1?selectedQuestion.title+' · 合并跟进':selectedQuestion.text}:{})});};
+  $('chat-form').onsubmit=e=>{e.preventDefault();if($('send-chat').disabled)return;const text=$('chat-text').value.trim();send(pending||{request_id:uuid(),workspace,chat_id:chatId,chat_parent:chatTurns(jobs,chatId).at(-1)?.id||'',model:$('chat-model').value,agent_role:agentRole,...(episodeRef?{episode_ref:episodeRef}:{}),text,title:text.slice(0,60),related_ids:[...new Set([...selected.map(t=>t.id),...(selectedQuestion?.related_ids||[])])],...(selectedQuestion?{question_key:selectedQuestion.key,question_keys:selectedQuestion.question_keys||[selectedQuestion.key],question_text:selectedQuestion.question_keys?.length>1?selectedQuestion.title+' · 合并跟进':selectedQuestion.text}:{})});};
   function setExpanded(value){expanded=value;$('conversation').setAttribute('data-writing',value?'expanded':'normal');$('expand-writing').setAttribute('aria-expanded',String(value));$('expand-writing').textContent=value?'收起书写':'展开书写';}
   $('choose-subjects').onclick=()=>{$('subject-search').value='';$('subject-type').value='all';renderPicker();$('subject-picker').showModal();$('subject-search').focus();loadTasks();};
   $('subject-search').oninput=renderPicker;$('subject-type').onchange=renderPicker;

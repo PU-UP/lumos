@@ -31,6 +31,19 @@ test('send includes chosen model, clears acknowledged text, blocks concurrent tu
   assert.equal(p.get('chat-text').value,'');p.edit('next');await p.submit();assert.equal(p.posts.length,1);
   const user=p.get('messages').children[0].children[0];assert.equal(user.children[1].textContent,'<script>progress</script>');
 });
+test('role and episode feedback stay bound to the draft and uncertain request',async()=>{
+  const p=await page(new Map(),'http://127.0.0.1/chat?agent=maintainer&episode=intake-test');
+  assert.equal(p.get('chat-agent').value,'maintainer');p.edit('请检查这次执行');
+  const normal=p.world.fetch;p.world.fetch=async(url,opts)=>{if(opts)throw new Error('lost');return normal(url,opts);};
+  await p.submit();assert.equal(p.get('chat-agent').disabled,true);
+  const q=await page(p.storage,p.world.window.location.href);await q.submit();
+  assert.equal(q.posts[0].agent_role,'maintainer');assert.equal(q.posts[0].episode_ref,'intake-test');
+});
+test('choosing a specialist persists without replacing user words',async()=>{
+  const p=await page();p.edit('原始工作说明');p.get('chat-agent').value='aipm';p.get('chat-agent').onchange();
+  const q=await page(p.storage,p.world.window.location.href);assert.equal(q.get('chat-agent').value,'aipm');await q.submit();
+  assert.equal(q.posts[0].agent_role,'aipm');assert.equal(q.posts[0].text,'原始工作说明');
+});
 test('uncertain send survives reload and retries the same payload',async()=>{
   const p=await page();const normal=p.world.fetch;let original;
   p.world.fetch=async(url,opts)=>{if(opts){original=JSON.parse(opts.body);throw new Error('lost response');}return normal(url,opts);};

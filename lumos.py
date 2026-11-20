@@ -521,6 +521,11 @@ class Store:
             links = set(db.execute("SELECT src,dst,relation FROM links"))
         self.validate(nodes, nodes, {}, links)
         for manifest in manifests:
+            for record in manifest.get('request', {}).get('updates', []):
+                material = record.get('data', {}).get('material')
+                if material:
+                    path = safe_path(self.root, material['version'])
+                    require(path.is_file() and digest(path.read_bytes()) == material['sha256'], 'Missing/damaged material: '+record['id'])
             for spec in manifest["documents"]:
                 path = safe_path(self.root, spec["version"])
                 require(path.is_file() and digest(path.read_bytes()) == spec["sha256"],
@@ -614,6 +619,16 @@ def main():
     command = subs.add_parser("intake-claim")
     command.add_argument("id", nargs="?")
     subs.add_parser("agent-once")
+    command = subs.add_parser('agents')
+    command.add_argument('--workspace', default='lingguang')
+    command = subs.add_parser('knowledge')
+    command.add_argument('query', nargs='?', default='')
+    command.add_argument('--workspace', default='lingguang')
+    command.add_argument('--archived', action='store_true')
+    subs.add_parser('materials')
+    for name in ('material-save', 'agent-inspect'):
+        command = subs.add_parser(name)
+        command.add_argument('request', type=Path)
     command = subs.add_parser("task-save")
     command.add_argument("request", type=Path)
     command = subs.add_parser("notes")
@@ -680,6 +695,17 @@ def main():
             elif args.command == "agent-once":
                 from lumos_worker import run_once
                 result = run_once(store)
+            elif args.command in {'agents', 'agent-inspect'}:
+                from lumos_agents import episodes, inspect_once
+                result = episodes(store, args.workspace) if args.command == 'agents' else inspect_once(store, read_json(args.request))
+            elif args.command in {'knowledge', 'materials', 'material-save'}:
+                from lumos_knowledge import search_knowledge, material_files, register_material
+                if args.command == 'knowledge':
+                    result = search_knowledge(store, args.workspace, args.query, args.archived)
+                elif args.command == 'materials':
+                    result = {'files': material_files()}
+                else:
+                    result = register_material(store, read_json(args.request))
             elif args.command in {"tasks", "task", "task-save"}:
                 from lumos_tasks import list_tasks, task_detail, save_task
                 if args.command == "tasks":

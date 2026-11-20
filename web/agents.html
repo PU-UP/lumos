@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lumos · 协作记录</title><link rel="stylesheet" href="/board.css"><link rel="stylesheet" href="/agents.css"><script src="/agents.js" defer></script></head>
+<body><header><div class="brand"><span class="mark">L</span><strong>Lumos</strong><span class="divider">/</span><span>工作分身</span></div></header>
+<nav aria-label="工作视图" class="view-nav"><a href="/">主线</a><a href="/tasks">全部任务</a><a href="/people">人员</a><a href="/notes">笔记</a><a href="/chat">对话</a><a href="/knowledge">资料</a><a href="/agents" aria-current="page">协作记录</a></nav>
+<main class="agent-page"><div class="page-heading"><div><h1>协作记录</h1><p>看清谁处理了什么，以及哪一步需要接续。</p></div><label>工作空间<select id="workspace"><option value="lingguang">灵光</option><option value="lumos">Lumos 仓库维护</option></select></label></div>
+<section aria-label="角色分工" id="roles" class="role-list"></section>
+<section><div class="page-heading"><h2>运行发现</h2><button id="inspect">运行只读巡检</button></div><p class="muted">手动检查失败、过期和失效的执行。仅保存诊断；定时巡检尚未启用。</p><div id="findings"></div></section>
+<section><div class="page-heading"><h2>处理经过</h2><label>筛选角色<select id="role-filter"><option value="">全部角色</option></select></label></div><p id="status" role="status" aria-live="polite">正在读取…</p><div id="episodes"></div><button id="more" hidden>显示更多记录</button></section></main></body></html>

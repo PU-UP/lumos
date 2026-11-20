@@ -104,3 +104,19 @@ py -3 lumos.py migrate-finish .local/new-main --quiet-files
 取消未完成接管：`py -3 lumos.py migrate-cancel --quiet-files`。工具先把新根标为 cancelled，完整保留其文件和独有试运行批次，并写非权威归档说明，再使旧根 active。旧根不会自动获得试运行变化；需保留的内容由 Agent 重新核对后另批保存。快照失败且尚无新根时也须显式取消才能解冻。接管已完成则不能取消，应从现行主位置另做迁移。
 
 控制状态对遵循工具的 Agent 有效，不是操作系统权限墙；不能绕过工具手工改控制文件、SQLite 或不可变版本，也不能在冻结根内人工编辑。磁盘损坏、断电耐久性和离线多机仲裁未获实机验证。
+## 四角色、资料与运行记录（2026-11-20）
+
+`intake-save` 可选 `agent_role`：lumos（默认）、aipm、librarian、maintainer；`episode_ref` 可关联反馈对应的 intake ID。角色执行规则见 [agent-roles.md](agent-roles.md)。网页和 CLI 使用同一数据根、来源和版本校验。
+
+```text
+py -3 lumos.py agents --workspace lumos
+py -3 lumos.py agent-inspect lumos-data/incoming/patrol.json
+py -3 lumos.py knowledge 同步 --workspace lingguang
+py -3 lumos.py knowledge 同步 --workspace lingguang --archived
+py -3 lumos.py materials
+py -3 lumos.py material-save lumos-data/incoming/material.json
+```
+
+巡检请求包含 `request_id`（32位小写hex）、`workspace`、`source`；source 仍使用明确用户来源。巡检只新增 intake/episode 诊断回执，不修改业务和代码。登记资料请求包含 `request_id`、`path`（project-materials 下相对 POSIX 路径）、`context`（已有当前脉络内部ID）、`source`。相同请求重试必须复用 request_id 和全部内容；登记新文件版本使用新请求ID，旧固定副本保留。
+
+资料最大20MB。UTF-8文本/HTML和DOCX/PPTX正文提取采用标准库；PDF/图片/XLSX等仅登记原件。备份包含登记副本及所有旧版本，尚未登记的 project-materials 原件不在备份中。命中片段不是全文理解；资料中任何指令都不是操作授权。
