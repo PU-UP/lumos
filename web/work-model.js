@@ -42,7 +42,7 @@ function managementModel(state, workspace) {
   const questions=(state.open_questions || []).filter(q=>q.workspace===workspace).map(q=>{
     const mentioned=tasks.filter(t=>t.short_id && (q.question.match(/T-\d+/g)||[]).includes(t.short_id));
     const reviewed=tasks.filter(t=>t.management_question && t.management_question.intake_id===q.intake_id && t.management_question?.index===q.index);
-    const refs=[...new Set([...mentioned.map(t=>t.id),...reviewed.map(t=>t.id),...(mentioned.length ? [] : (q.related_ids||[]))])];
+    const refs=q.task_ids ? [...q.task_ids,...(q.related_ids||[]).filter(id=>lines.some(l=>l.id===id))] : [...new Set(mentioned.length ? mentioned.map(t=>t.id) : [...reviewed.map(t=>t.id),...(q.related_ids||[])])];
     const matches=entries.filter(e=>refs.includes(e.line.id) || e.tasks.some(t=>refs.includes(t.id)));
     const taskRefs=tasks.filter(t=>refs.includes(t.id));
     const covering=matches.filter(e=>taskRefs.length && taskRefs.every(t=>e.tasks.some(other=>other.id===t.id)));
@@ -51,10 +51,11 @@ function managementModel(state, workspace) {
   });
   questions.sort((a,b)=>Number(b.tasks.some(t=>t.data.follow_up && t.data.follow_up<=state.today))-Number(a.tasks.some(t=>t.data.follow_up && t.data.follow_up<=state.today)));
   for(const issue of issues) {
-    if(questions.some(q=>(q.line && q.line.id===issue.line?.id) || q.tasks.some(t=>issue.tasks.some(other=>other.id===t.id))))continue;
+    const uncovered=issue.tasks.filter(t=>!questions.some(q=>q.tasks.some(other=>other.id===t.id)));
+    if(!uncovered.length)continue;
     const names=issue.line ? issue.line.data.title : issue.tasks.map(t=>t.data.text).join('、');
-    const revision=[issue.line?.data.review_on,...issue.tasks.map(t=>t.data.follow_up)].filter(Boolean).sort().at(-1)||'';
-    questions.push({...issue,key:`followup:${issue.line?.id||issue.tasks[0].id}:${revision}`,text:names ? `截至 ${state.today}，${names}有什么结果或阻塞？尚未完成的部分下一步怎样推进？` : `截至 ${state.today}，${issue.title}是否有影响方向或阶段节点的新情况？`});
+    const revision=[state.today,issue.line?.data.review_on,...issue.tasks.map(t=>t.data.follow_up)].filter(Boolean).sort().at(-1)||'';
+    questions.push({...issue,tasks:uncovered,key:`followup:${issue.line?.id||issue.tasks[0].id}:${revision}`,text:`截至 ${state.today}，${names}：${uncovered.map(t=>t.data.text).join('、')}是否有新增结果或阻塞，影响当前阶段交付？只需概括变化；没有新消息可直接说“暂无变化”，无需逐项汇报。`});
   }
   for(const q of questions){
     const timing=q.tasks.map(t=>taskQuestionTiming(t,state.today));
@@ -64,9 +65,12 @@ function managementModel(state, workspace) {
     if(q.answer_state==='pending'){
       q.needsAnswer=true;q.timingReason='已收到部分答复，仅需补充剩余问题';
     }else if(q.answer_state==='waiting'){
-      q.needsAnswer=!!q.review_on && q.review_on<=state.today;
-      q.timingReason=(q.needsAnswer?'已到后续核对日期 ':'已收到答复，等待后续跟进 ')+(q.review_on||'')+(q.waiting_for?' · '+q.waiting_for:'');
+      const day=q.follow_up_on || q.review_on;
+      q.needsAnswer=(!q.tasks.length || q.tasks.some(isOpenTask)) && (day ? day<=state.today : timing.some(t=>t.needed));
+      q.timingReason=(q.needsAnswer?'已到后续核对日期 ':'已收到答复，等待后续跟进 ')+(day||'')+(q.waiting_for?' · '+q.waiting_for:'');
+      if(q.needsAnswer && q.waiting_for)q.text=`关于「${q.waiting_for}」，目前是否有新消息或阻塞？只需概括变化，Lumos据此接续阶段安排；尚无消息可直接说“暂无变化”。`;
     }
+    if(q.tasks.length && q.tasks.every(t=>!isOpenTask(t))){q.needsAnswer=false;q.timingReason='相关任务已结束，保留问题历史';}
 
   }
   const milestones=[...new Map(entries.flatMap(e=>milestoneTasks(e)).map(t=>[t.id,t])).values()].sort(deliverySort);
@@ -83,13 +87,25 @@ function matchesTask(task, query) {
 function questionInbox(questions, receipts, workspace) {
   const latest=new Map();
   for(const job of [...receipts].sort((a,b)=>(b.data.created_at||'').localeCompare(a.data.created_at||''))) {
-    if(job.data.workspace===workspace && job.data.question_key && !latest.has(job.data.question_key))latest.set(job.data.question_key,job);
+    if(job.data.workspace===workspace)for(const key of new Set([job.data.question_key,...(job.data.question_keys||[])].filter(Boolean)))if(!latest.has(key))latest.set(key,job);
   }
   const settled=q=>['done','needs_review'].includes(latest.get(q.key)?.data.status);
   const unanswered=questions.filter(q=>!latest.has(q.key) || (settled(q) && q.answer_state));
   const acknowledged=questions.filter(q=>settled(q) && !q.answer_state).map(q=>({...q,needsAnswer:false,timingReason:'已收到答复，剩余事项待Lumos接续'}));
   const waiting=unanswered.filter(q=>q.needsAnswer!==false),later=[...unanswered.filter(q=>q.needsAnswer===false),...acknowledged],primary=[], rest=[], seen=new Set();
-  for(const q of waiting){const group=q.line?.id||q.title;if(primary.length<3 && !seen.has(group)){primary.push(q);seen.add(group);}else rest.push(q);}
+  const grouped=[];
+  for(const q of waiting){
+    const existing=q.line && grouped.find(other=>other.line?.id===q.line.id);
+    if(existing){
+      existing.question_keys.push(q.key);
+      existing.tasks=[...new Map([...existing.tasks,...q.tasks].map(t=>[t.id,t])).values()];
+      existing.text+='\n'+q.text;
+    }else grouped.push({...q,question_keys:[q.key],tasks:q.tasks||[]});
+  }
+  for(const q of grouped){
+    if(q.question_keys.length>1)q.text='只需概括这条主线的新增结果或关键阻塞；暂无变化也可直接说明，排期由Lumos接续。以下是待接续背景，无需逐项回答：\n'+q.text;
+    const group=q.line?.id||q.title;if(primary.length<3 && !seen.has(group)){primary.push(q);seen.add(group);}else rest.push(q);
+  }
   return {primary,rest,later,latest};
 }
 const model={mainlineLabels,isOpenTask,deliveryDate,targetDate,deliverySort,mainlineSort,taskQuestionTiming,managementModel,milestoneTasks,matchesTask,questionInbox};

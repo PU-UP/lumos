@@ -116,6 +116,22 @@ test('selected question survives reload and accompanies the exact answer without
   await q.submit();assert.equal(q.posts[0].question_key,'question:original:0');assert.equal(q.posts[0].question_text,'T-one 验证结果是什么？');assert.equal(q.posts[0].text,'结果仍未知，请继续核对。');assert.deepEqual(q.posts[0].related_ids,['line']);
   assert.equal(q.get('selected-question').children.length,0);
 });
+
+test('grouped question identities survive drafts and uncertain submission retries',async()=>{
+  const data=questionsBoard();data.tasks[1].data.follow_up=data.today;
+  for(const question of data.open_questions)question.question+='补充背景。'.repeat(250);
+  const keys=['question:original:0','question:original:1'];
+  const p=await page(new Map(),undefined,[],data);
+  descendants(p.get('messages')).find(n=>n.className==='question-prompt').onclick();p.edit('暂无变化');
+  const q=await page(p.storage,p.world.window.location.href,[],data);
+  const normal=q.world.fetch;let submitted;
+  q.world.fetch=async(url,opts)=>{if(opts){submitted=JSON.parse(opts.body);throw new Error('lost response');}return normal(url,opts);};
+  await q.submit();assert.deepEqual(submitted.question_keys,keys);assert.equal(submitted.text,'暂无变化');
+  assert.match(submitted.question_text,/合并跟进$/);assert.ok(submitted.question_text.length<=2000);
+  const retry=await page(q.storage,q.world.window.location.href,[],data);await retry.submit();
+  assert.deepEqual(retry.posts[0],submitted);
+  assert.equal(discussionQuestions(data,retry.listing.intakes,'lingguang').primary.length,0);
+});
 test('picker can browse every current task and select a mainline plus a task with no delivery date',async()=>{
   const data=board(Array.from({length:35},(_,i)=>task(String(i),{due:'',owner:i===34?'特别负责人':''})));
   const p=await page(new Map(),undefined,[],data);p.get('choose-subjects').onclick();await tick();

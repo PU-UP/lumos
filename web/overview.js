@@ -158,7 +158,7 @@ if (typeof document !== 'undefined') {
     const text=$('feedback-text').value.trim();if(!text && !feedbackSender.pending){$('feedback-status').textContent='请先填写答复。';$('feedback-text').focus();return;}
     const target=$('feedback-target').value;
     const request=feedbackSender.pending||{request_id:crypto.randomUUID().replaceAll('-',''),workspace:feedbackWorkspace,
-      text:activeQuestion?activeQuestion.text+'\n\n王牧楠答复：\n'+text:text,title:activeQuestion?.title.slice(0,300)||'主线页反馈',related_ids:target?[target]:[],...(activeQuestion?{question_key:activeQuestion.key,question_text:activeQuestion.text}:{})};
+      text:activeQuestion?activeQuestion.text+'\n\n王牧楠答复：\n'+text:text,title:activeQuestion?.title.slice(0,300)||'主线页反馈',related_ids:target?[target]:[],...(activeQuestion?{question_key:activeQuestion.key,question_keys:activeQuestion.question_keys||[activeQuestion.key],question_text:activeQuestion.question_keys?.length>1?activeQuestion.title+' · 合并跟进':activeQuestion.text}:{})};
     await sendFeedback(request,request.id?undefined:text);
   };
   function renderQuestions(){
@@ -179,9 +179,10 @@ if (typeof document !== 'undefined') {
     if(receiptState==='error')progress.append(el('p','处理状态读取失败，正在重试；请勿重复提交。','muted'));
     else if(receiptState==='loading')progress.append(el('p','正在核对已提交的答复…','muted'));
     if(inbox.latest.size){
-      const jobs=[...inbox.latest.values()],working=jobs.filter(job=>['pending','running','failed'].includes(job.data.status)).length;
-      const section=fold('答复处理进度 · '+inbox.latest.size+(working?' · '+working+' 件待处理或重试':' · 处理回执可查看'),progress,'answers',working>0);
-      for(const [key,job] of inbox.latest){
+      const tracked=[...new Map([...inbox.latest].map(([key,job])=>[job.id,[key,job]])).values()];
+      const working=tracked.filter(([,job])=>['pending','running','failed'].includes(job.data.status)).length;
+      const section=fold('答复处理进度 · '+tracked.length+(working?' · '+working+' 件待处理或重试':' · 处理回执可查看'),progress,'answers',working>0);
+      for(const [key,job] of tracked){
         const row=el('div',undefined,'answer-progress-row');row.append(el('span',model.questions.find(q=>q.key===key)?.title || (job.data.title==='跨事项待确认' ? job.data.question_text || job.data.text.split('\n\n王牧楠答复：')[0] : job.data.title)),el('span',answerStatus(job),'answer-state'));
         const view=el('button','查看答复与结果');view.onclick=()=>openFeedback(model.questions.find(q=>q.key===key)||{key,title:job.data.title,text:'这份答复的原文与处理结果如下。可继续补充新情况。',tasks:[],line:job.data.related_ids?.length===1?model.entries.find(e=>e.line.id===job.data.related_ids[0])?.line:null},view);row.append(view);section.append(row);
       }

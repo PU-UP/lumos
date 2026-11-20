@@ -17,6 +17,53 @@ from test_core import BaseStoreCase
 
 
 class IntakeTest(BaseStoreCase):
+    def test_waiting_followup_is_atomic_bounded_and_preserves_business_history(self):
+        self.enable_management()
+        first = self.job(); first['plan']['questions'] = ['T-001 的阶段结果？']
+        apply_intake(self.store, first)
+        second = self.job()
+        future = (date.fromisoformat(today()) + timedelta(days=3)).isoformat()
+        second['plan']['resolutions'] = [{'intake_id': first['id'], 'index': 0,
+            'answer': '暂无结果', 'excerpt': intake_context(self.store, second['id'])['text'],
+            'state': 'waiting', 'remaining': 'T-001 的阶段结果？', 'review_on': future, 'waiting_for': '测试结果'}]
+        before = task_detail(self.store, 'talk')['task']['data']
+        apply_intake(self.store, second)
+        after = task_detail(self.store, 'talk')['task']['data']
+        self.assertEqual(after['follow_up'], future)
+        for field in ('status', 'due', 'progress', 'updated_at'):
+            self.assertEqual(after.get(field), before.get(field))
+        board = list_tasks(self.store)
+        self.assertEqual(board['open_questions'][0]['follow_up_on'], future)
+        seq = board['seq']; enqueue_due_reviews(self.store)
+        self.assertEqual(self.store.status()['seq'], seq)
+        third = self.job()
+        third['plan']['resolutions'] = [{**second['plan']['resolutions'][0], 'review_on': ''}]
+        apply_intake(self.store, third)
+        q = list_tasks(self.store)['open_questions'][0]
+        self.assertEqual(q['follow_up_on'], future)
+        self.assertEqual(len(q['answers']), 2)
+
+    def test_grouped_reply_must_continue_all_selected_open_questions(self):
+        first = self.job(); first['plan']['questions'] = ['阶段结果？', '关键阻塞？']
+        apply_intake(self.store, first)
+        keys = [f"question:{first['id']}:{i}" for i in range(2)]
+        job = save_intake(self.store, {'request_id': uuid.uuid4().hex, 'text': '暂无变化',
+            'source': self.source, 'question_key': keys[0], 'question_keys': keys})['intake']
+        claim = claim_intake(self.store, job['id'])
+        ctx = intake_context(self.store, job['id'])
+        answer = {'intake_id': first['id'], 'index': 0, 'answer': '暂无变化', 'excerpt': ctx['text'],
+            'state': 'waiting', 'remaining': '阶段结果？', 'review_on': '', 'waiting_for': '新消息'}
+        request = {'id': job['id'], 'claim': claim['data']['claim'], 'basis': ctx['basis'],
+            'plan': {'summary': '继续等待', 'questions': [], 'updates': [], 'resolutions': [answer]}}
+        with self.assertRaisesRegex(lumos.Error, '接续所选问题'):
+            apply_intake(self.store, request)
+        request['plan']['resolutions'].append({**answer, 'index': 1, 'remaining': '关键阻塞？'})
+        apply_intake(self.store, request)
+        questions = list_tasks(self.store)['open_questions']
+        self.assertEqual(len(questions), 2)
+        expected = (date.fromisoformat(today()) + timedelta(days=7)).isoformat()
+        self.assertTrue(all(q['follow_up_on'] == expected for q in questions))
+
     def enable_management(self):
         with self.store.db() as db:
             policy = self.store.nodes(db)[POLICY]
@@ -236,8 +283,9 @@ class IntakeTest(BaseStoreCase):
 
     def test_atomic_reconciliation_and_pinned_note_archive_replay(self):
         request = self.job(note=True)
+        future = (date.fromisoformat(today()) + timedelta(days=3)).isoformat()
         request['plan']['updates'] = [self.item(changes={'status': 'done', 'progress': '讨论完成'}),
-            self.item('mainline-test', 'mainline', {'summary': '讨论阶段完成，整体未验收', 'review_on': '2026-11-20', 'review_basis': 'agent'}),
+            self.item('mainline-test', 'mainline', {'summary': '讨论阶段完成，整体未验收', 'review_on': future, 'review_basis': 'agent'}),
             self.item('person-test', 'person', {'assessment': {'summary': '可继续负责接口', 'responsibilities': ['接口核对'],
                 'uncertainties': ['实际验证待确认'], 'basis_ids': ['talk']}})]
         before = task_detail(self.store, 'talk')['task']['data']

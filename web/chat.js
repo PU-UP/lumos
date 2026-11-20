@@ -53,7 +53,7 @@ if(typeof document!=='undefined'){
   function chooseQuestion(q){
     if(busy||pending)return;
     if(new Set([...selected.map(t=>t.id),q.line.id]).size>20){error='每轮最多选择20个讨论对象，请先移除部分选择。';controls();return;}
-    selectedQuestion={key:q.key,title:q.title,text:q.text,related_ids:[q.line.id]};changedSelection();
+    selectedQuestion={key:q.key,question_keys:q.question_keys||[q.key],title:q.title,text:q.text,related_ids:[q.line.id]};changedSelection();
   }
   function renderPicker(){
     const host=$('subject-results');host.replaceChildren();
@@ -163,7 +163,7 @@ if(typeof document!=='undefined'){
   $('chat-workspace').onchange=()=>{const space=$('chat-workspace').value;let id;try{id=localStorage.getItem('lumos.chat.active.'+space);}catch{}return selectChat(id||uuid(),space);};
   $('chat-text').oninput=()=>{error='';try{saveDraft();}catch{error='浏览器无法保留草稿，请勿关闭页面。';}controls();};
   $('chat-text').onkeydown=e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'&&!e.isComposing){e.preventDefault();$('chat-form').requestSubmit();}};
-  $('chat-form').onsubmit=e=>{e.preventDefault();if($('send-chat').disabled)return;const text=$('chat-text').value.trim();send(pending||{request_id:uuid(),workspace,chat_id:chatId,chat_parent:chatTurns(jobs,chatId).at(-1)?.id||'',model:$('chat-model').value,text,title:text.slice(0,60),related_ids:[...new Set([...selected.map(t=>t.id),...(selectedQuestion?.related_ids||[])])],...(selectedQuestion?{question_key:selectedQuestion.key,question_text:selectedQuestion.text}:{})});};
+  $('chat-form').onsubmit=e=>{e.preventDefault();if($('send-chat').disabled)return;const text=$('chat-text').value.trim();send(pending||{request_id:uuid(),workspace,chat_id:chatId,chat_parent:chatTurns(jobs,chatId).at(-1)?.id||'',model:$('chat-model').value,text,title:text.slice(0,60),related_ids:[...new Set([...selected.map(t=>t.id),...(selectedQuestion?.related_ids||[])])],...(selectedQuestion?{question_key:selectedQuestion.key,question_keys:selectedQuestion.question_keys||[selectedQuestion.key],question_text:selectedQuestion.question_keys?.length>1?selectedQuestion.title+' · 合并跟进':selectedQuestion.text}:{})});};
   function setExpanded(value){expanded=value;$('conversation').setAttribute('data-writing',value?'expanded':'normal');$('expand-writing').setAttribute('aria-expanded',String(value));$('expand-writing').textContent=value?'收起书写':'展开书写';}
   $('choose-subjects').onclick=()=>{$('subject-search').value='';$('subject-type').value='all';renderPicker();$('subject-picker').showModal();$('subject-search').focus();loadTasks();};
   $('subject-search').oninput=renderPicker;$('subject-type').onchange=renderPicker;

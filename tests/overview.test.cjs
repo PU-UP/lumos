@@ -150,7 +150,9 @@ test('review links open the requested workspace and subsequent switches keep the
 test('question and receipt disclosures keep live state through polling, count changes and refreshes',async()=>{
   const p=reviewPage();await settle();
   p.snapshot.mainlines[0].data.review_on=p.snapshot.today;
-  p.snapshot.open_questions=Array.from({length:4},(_,index)=>({intake_id:'old',index,workspace:'lingguang',question:'阶段结果 '+index,related_ids:['m']}));
+  p.snapshot.mainlines.push(...Array.from({length:3},(_,i)=>line('extra'+i,[])));
+  p.snapshot.mainlines.forEach(l=>l.data.review_on=p.snapshot.today);
+  p.snapshot.open_questions=Array.from({length:5},(_,index)=>({intake_id:'old',index,workspace:'lingguang',question:'阶段结果 '+index,related_ids:[p.snapshot.mainlines[index%4].id]}));
   p.get('search').oninput();
   const find=(id,title)=>p.get(id).children.find(n=>n.tag==='details' && n.children[0].textContent.startsWith(title));
   find('attention-items','其他当前问题').open=true;
@@ -170,7 +172,7 @@ test('question and receipt disclosures keep live state through polling, count ch
   assert.equal(find('attention-items','后续再跟进').open,true);
   p.snapshot.mainlines[0].data.review_on=p.snapshot.today;p.get('search').oninput();
   assert.equal(find('attention-items','其他当前问题').open,true);
-  p.get('workspace').value='lumos';p.snapshot.mainlines[0].data.context='maintenance';
+  p.get('workspace').value='lumos';p.snapshot.mainlines.forEach(l=>l.data.context='maintenance');
   p.snapshot.open_questions.forEach(q=>q.workspace='lumos');p.get('search').oninput();
   assert.equal(find('attention-items','其他当前问题').open,false);
 });
@@ -344,7 +346,7 @@ test('closed tasks keep review history without requesting another answer',()=>{
  }
 });
 
-test('partial answers stay actionable while event waits override task alarms',()=>{
+test('partial answers and due event waits stay actionable without duplicating submitted answers',()=>{
  const {questionInbox}=require('../web/overview.js');
  const a=task('a',{status:'blocked',due:'2026-11-01',follow_up:'2026-11-01'});
  a.management_question={intake_id:'old',index:0};
@@ -352,11 +354,25 @@ test('partial answers stay actionable while event waits override task alarms',()
  s.open_questions=[{workspace:'lingguang',intake_id:'old',index:0,question:'谁确认发布？',answer_state:'waiting',waiting_for:'联调后确认',review_on:''}];
  const receipt={id:'reply',data:{workspace:'lingguang',question_key:'question:old:0',status:'done'}};
  let q=managementModel(s,'lingguang').questions;let box=questionInbox(q,[receipt],'lingguang');
- assert.equal(box.primary.length,0);assert.equal(box.later.length,1);assert.match(box.later[0].timingReason,/联调后确认/);
+ assert.equal(box.primary.length,1);assert.equal(box.later.length,0);assert.match(box.primary[0].timingReason,/联调后确认/);
  s.open_questions[0].review_on=s.today;
  q=managementModel(s,'lingguang').questions;assert.equal(questionInbox(q,[receipt],'lingguang').primary.length,1);
  s.open_questions[0].answer_state='pending';
  q=managementModel(s,'lingguang').questions;box=questionInbox(q,[receipt],'lingguang');
  assert.equal(box.primary[0].text,'谁确认发布？');
  assert.equal(questionInbox(q,[{...receipt,data:{...receipt.data,status:'running'}}],'lingguang').primary.length,0);
+});
+
+test('waiting questions do not swallow other due tasks and one mainline needs only one reply',()=>{
+ const {questionInbox}=require('../web/overview.js');
+ const s=state([task('001',{follow_up:'2026-11-14'}),task('002',{follow_up:'2026-11-14'}),task('003',{follow_up:'2026-11-14'})],[line('m',['001','002','003'])]);
+ s.open_questions=[{workspace:'lingguang',intake_id:'old',index:0,question:'T-001 实测结果？',task_ids:['001'],answer_state:'waiting',follow_up_on:'2026-11-20'}];
+ let view=managementModel(s,'lingguang'),box=questionInbox(view.questions,[],'lingguang');
+ assert.equal(box.primary.length,1);assert.deepEqual(box.primary[0].tasks.map(t=>t.id),['002','003']);assert.equal(box.later.length,1);
+ s.open_questions[0].follow_up_on=s.today;
+ view=managementModel(s,'lingguang');box=questionInbox(view.questions,[],'lingguang');
+ assert.equal(box.primary.length,1);assert.equal(box.rest.length,0);assert.equal(box.primary[0].question_keys.length,2);
+ assert.deepEqual(new Set(box.primary[0].tasks.map(t=>t.id)),new Set(['001','002','003']));
+ const receipt={id:'reply',data:{workspace:'lingguang',question_key:box.primary[0].key,question_keys:box.primary[0].question_keys,status:'running'}};
+ assert.equal(questionInbox(view.questions,[receipt],'lingguang').primary.length,0);
 });

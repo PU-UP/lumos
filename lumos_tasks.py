@@ -123,14 +123,15 @@ def list_tasks(store, today=None):
         mainlines = sorted((n for n in nodes.values() if n["kind"] == "mainline"
                            and n["data"]["context"] in ids and n["data"].get("status", "active") == "active"),
                           key=lambda n: (n["data"].get("order", 0), n["id"]))
-        from lumos_intake import open_questions, management_enabled
+        from lumos_intake import management_enabled
         from lumos_task_review import task_issues
-        questions = {space: open_questions(nodes, space) for space in WORKSPACES}
+        from lumos_followup import followup_questions
+        questions = {space: followup_questions(nodes, space, numbers) for space in WORKSPACES}
         for task in tasks:
             space = context_workspace(nodes[task['data']['context']])
             task['management_issues'] = task_issues(task['data'], today.isoformat())
-            ref = task['data'].get('task_review', {}).get('question')
-            task['management_question'] = next((q for q in questions[space] if ref and q['intake_id'] == ref['intake_id'] and q['index'] == ref['index']), None)
+            linked = [q for q in questions[space] if task['id'] in q['task_ids']]
+            task['management_question'] = min(linked, key=lambda q: q.get('follow_up_on', ''), default=None)
         reviews = {}
         for space in WORKSPACES:
             jobs = sorted((n for n in nodes.values() if n['kind'] == 'intake' and n['data']['workspace'] == space and n['data'].get('task_review')), key=lambda n: n['data']['created_at'], reverse=True)
@@ -138,7 +139,7 @@ def list_tasks(store, today=None):
             reviews[space] = {'enabled': management_enabled(nodes, space), 'latest': jobs[0] if jobs else None, 'completed': completed}
         return {"seq": seq, "today": today.isoformat(), "contexts": contexts, "tasks": tasks, "mainlines": mainlines, "people": list_people(nodes, ids), "archived_people": archived_people, "board_order": board_order,
                 "task_reviews": reviews,
-                "open_questions": [{**q, 'workspace': space} for space in sorted(WORKSPACES) for q in open_questions(nodes, space)],
+                "open_questions": [{**q, 'workspace': space} for space in sorted(WORKSPACES) for q in questions[space]],
                 "attention": [n["id"] for n in tasks if n["attention"]],
                 "writable": ctl["mode"] in {"active", "trial", "sandbox"}
                 and ctl["bound_root"] == str(store.root) and not (store.root / "session.json").exists(),

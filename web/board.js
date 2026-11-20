@@ -309,7 +309,7 @@ function filtered() {
 }
 
 const currentDue = data => data.planned_due || data.due || '';
-const questionLabel = q => q?.answer_state === 'waiting' && (!q.review_on || q.review_on > state.today) ? '已收到答复 · 等待后续跟进' : '待你回答主线问题';
+const questionLabel = q => q?.answer_state === 'waiting' && (q.follow_up_on || q.review_on || '') > state.today ? '已收到答复 · 等待后续跟进' : '待你回答主线问题';
 function followUpHint(data, question = null) {
   if (['done', 'cancelled'].includes(data.status)) return {text: '', cls: ''};
   const due = currentDue(data);

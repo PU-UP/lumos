@@ -44,6 +44,8 @@ def validate_intake(data, nodes):
         require(isinstance(data.get(field, ''), str) and len(data.get(field, '')) <= limit, 'Invalid intake '+field)
     require(isinstance(data.get('source'), dict) and data['source'].get('ref'), 'Intake needs a source')
     require(isinstance(data.get('question_key', ''), str) and len(data.get('question_key', '')) <= 500, 'Invalid question key')
+    keys = data.get('question_keys', [])
+    require(isinstance(keys, list) and len(keys) <= 100 and all(isinstance(k, str) and 0 < len(k) <= 500 for k in keys), 'Invalid question keys')
     if 'chat_id' in data:
         require(isinstance(data['chat_id'], str) and re.fullmatch('[a-f0-9]{32}', data['chat_id']), 'Invalid chat ID')
         parent = data.get('chat_parent', '')
@@ -105,7 +107,7 @@ def list_intakes(store, workspace='lingguang'):
 
 
 def save_intake(store, request):
-    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'text', 'title', 'source', 'note_id', 'id', 'expected_revision', 'execution', 'related_ids', 'question_key', 'question_text', 'chat_id', 'chat_parent', 'model', 'task_review'}, 'Invalid intake request')
+    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'text', 'title', 'source', 'note_id', 'id', 'expected_revision', 'execution', 'related_ids', 'question_key', 'question_keys', 'question_text', 'chat_id', 'chat_parent', 'model', 'task_review'}, 'Invalid intake request')
     require(request.get('execution', 'automatic') in {'automatic', 'conversation'}, 'Invalid execution mode')
     require(type(request.get('task_review', False)) is bool, 'Invalid task review flag')
     key = request.get('request_id', '')
@@ -167,7 +169,7 @@ def save_intake(store, request):
                 'summary': '', 'questions': [], 'related_ids': refs, 'execution': request.get('execution', 'automatic')}}
             if 'question_key' in request:
                 node['data']['question_key'] = request['question_key']
-            for field in ('chat_id', 'chat_parent', 'model', 'question_text', 'task_review'):
+            for field in ('chat_id', 'chat_parent', 'model', 'question_text', 'question_keys', 'task_review'):
                 if field in request:
                     node['data'][field] = request[field]
         require(enabled(nodes, node['data']['workspace']), '尚未启用此空间的自主整理规则')
@@ -251,7 +253,10 @@ def enqueue_due_reviews(store):
         store.writable(); store.idle()
         with store.db() as db:
             nodes = store.nodes(db)
-        updates = []
+            numbers = task_numbers(db)
+        from lumos_followup import synchronize_followups
+        updates = synchronize_followups(nodes, numbers)
+        scheduled = 0
         for line in nodes.values():
             data = line['data']
             if line['kind'] != 'mainline' or not data.get('review_on') or data['review_on'] > today():
@@ -269,9 +274,10 @@ def enqueue_due_reviews(store):
                 'status': 'pending', 'revision': 1, 'summary': '', 'questions': [],
                 'created_at': now(), 'updated_at': now(),
                 'source': {'type': 'agent', 'ref': '主线复核日期 '+data['review_on'], 'authorization': POLICY}}})
+            scheduled += 1
         if updates:
             commit_tasks(store, nodes, {'reason': 'enqueue due mainline reviews', 'updates': updates}, updates[0]['id'])
-        return len(updates)
+        return scheduled
 
 
 def review_changes(previous, changes, field, item, source, management=False):
@@ -314,8 +320,9 @@ def intake_context(store, ident):
                 content = safe_path(store.root, record['data']['version']).read_bytes()
                 require(digest(content) == record['data']['sha256'], 'Damaged source version: '+record['id'])
                 record['content'] = content.decode('utf-8-sig')
+        from lumos_followup import followup_questions
         result = {'intake': job, 'text': text, 'today': today(), 'basis': context_basis(nodes, job['data']['workspace']),
-                  'records': visible, 'open_questions': open_questions(nodes, job['data']['workspace'])}
+                  'records': visible, 'open_questions': followup_questions(nodes, job['data']['workspace'], numbers)}
         if job['data'].get('chat_id'):
             history, parent = [], job['data'].get('chat_parent')
             visited = {job['id']}
@@ -538,8 +545,9 @@ def apply_intake(store, request):
             prior = resolved.setdefault(key[0], {**nodes[key[0]], 'data': {**nodes[key[0]]['data'],
                 'resolutions': list(nodes[key[0]]['data'].get('resolutions', []))}})
             prior['data']['resolutions'].append({**answer, 'source_intake': old['id'], 'at': now()})
-        question_key = job.get('question_key', '')
-        if updates and question_key.startswith('question:'):
+        for question_key in set([job.get('question_key', ''), *job.get('question_keys', [])]):
+            if not question_key.startswith('question:'):
+                continue
             selected = next((q for q in open_questions(nodes, job['workspace']) if f"question:{q['intake_id']}:{q['index']}" == question_key), None)
             require(not selected or any(a['intake_id'] == selected['intake_id'] and a['index'] == selected['index'] for a in resolutions),
                     '答复尚未接续所选问题：请记录已答内容、剩余问题或后续跟进；任务未更新。')
@@ -579,5 +587,11 @@ def apply_intake(store, request):
             data = {**source_note['data'], 'status': 'archived', 'archive_mode': 'lumos', 'archive_reason': plan['summary'][:1000]+'；去向：'+', '.join(receipt['data']['destinations'])[:900],
                     'revision': source_note['data']['revision']+1, 'checkpoint': False, 'updated_at': now(), 'source': source}
             updates.append({**source_note, 'data': data})
+        from lumos_followup import synchronize_followups
+        merged = {**nodes, **{n['id']: n for n in updates}}
+        with store.db() as db:
+            numbers = task_numbers(db)
+        synchronized = {n['id']: n for n in synchronize_followups(merged, numbers)}
+        updates = [synchronized.pop(n['id'], n) for n in updates] + list(synchronized.values())
         commit_tasks(store, nodes, {'reason': 'reconcile:'+old['id']+':'+plan_hash, 'updates': updates}, old['id'])
         return {'intake': receipt, 'replayed': False}
