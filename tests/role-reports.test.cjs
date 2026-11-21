@@ -4,6 +4,8 @@ test('work receipts and Ops diagnoses retain different meanings and recipients',
   const data={lumos_reports:[{episode_id:'one'}],ops_reports:[{episode_id:'two'}],episodes:[{id:'old'}]};
   assert.equal(reportItems(data,'lumos')[0].episode_id,'one');assert.equal(reportItems(data,'maintainer')[0].episode_id,'two');
   assert.equal(reportItems(data,'lumos',true)[0].id,'old');
+  assert.equal(reportItems({...data,issues:[{episode_id:'grouped'}]},'maintainer')[0].episode_id,'grouped');
+  assert.equal(reportLabel({status:'rechecked'},'maintainer'),'复查未再发现此异常');
   assert.equal(reportLabel({status:'processing',outcome:'failed'},'lumos'),'处理受阻 · 已报 Ops');
   assert.equal(reportLabel({status:'received',decision:null},'lumos'),'已同步 Lumos');
   assert.equal(reportLabel({status:'received',decision:{phase:'decide'}},'lumos'),'Lumos 已决策 · 已保存');

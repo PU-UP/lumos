@@ -345,6 +345,8 @@ def intake_context(store, ident):
         nodes = store.nodes(db)
         job = nodes.get(ident)
         require(job and job['kind'] == 'intake', 'Intake not found')
+        from lumos_agents import role_for
+        ops = role_for(job['data']) == 'maintainer'
         records = scoped_nodes(nodes, job['data']['workspace'])
         note = job['data'].get('note')
         text = note_version(db, note['id'], note['revision'])['data']['body'] if note else job['data']['text']
@@ -353,6 +355,8 @@ def intake_context(store, ident):
         evidence = {ref for n in records.values() if n['kind'] == 'mainline' for ref in n['data'].get('source_ids', [])}
         visible = [dict(n, **({'short_id': numbers[n['id']]} if n['kind'] == 'action' else {})) for n in records.values()
                    if n['kind'] not in {'evidence', 'decision'} or n['id'] in evidence or n['id'] == POLICY]
+        if ops:
+            visible = []
         for record in visible:
             if record['kind'] == 'document' and record['data']['path'].endswith('.md'):
                 content = safe_path(store.root, record['data']['version']).read_bytes()
@@ -360,10 +364,11 @@ def intake_context(store, ident):
                 record['content'] = content.decode('utf-8-sig')
         from lumos_followup import followup_questions
         result = {'intake': job, 'text': text, 'today': today(), 'basis': context_basis(nodes, job['data']['workspace']),
-                  'records': visible, 'open_questions': followup_questions(nodes, job['data']['workspace'], numbers)}
+                  'records': visible, 'open_questions': [] if ops else followup_questions(nodes, job['data']['workspace'], numbers)}
         from lumos_agents import ROLES, role_for, diagnostics, role_reports
         result['agent'] = {'role': role_for(job['data']), **ROLES[role_for(job['data'])]}
-        result['diagnostics'] = diagnostics(nodes, job['data']['workspace'])
+        from lumos_ops import inspection_findings
+        result['diagnostics'] = inspection_findings(store, nodes, job['data']['workspace']) if ops else diagnostics(nodes, job['data']['workspace'])
         result['lumos_reports'] = role_reports(nodes, job['data']['workspace'], 'lumos')[:30]
         result['ops_reports'] = role_reports(nodes, job['data']['workspace'], 'maintainer')[:30]
         if job['data'].get('episode_ref'):
@@ -435,9 +440,12 @@ def fail_intake(store, ident, claim, error):
                 'revision': old['data']['revision']+1, 'updated_at': now()}}
         from lumos_agents import role_for
         prior = old['data'].get('ops_report', {})
+        from lumos_ops import failure_code
+        code = failure_code(str(error))
         node['data']['ops_report'] = {'from_role': role_for(old['data']), 'to_role': 'maintainer', 'report_to': '王牧楠',
             'status': 'pending', 'at': now(), 'count': prior.get('count', 0)+1,
             'summary': str(error)[:2000], 'claim': claim,
+            'code': code, 'occurrences': [*prior.get('occurrences', []), {'claim': claim, 'code': code, 'at': now()}],
             'impact': '本次处理未完成，原输入仍保留；没有应用本轮业务结果。',
             'previous_diagnosis': prior.get('diagnosis', prior.get('previous_diagnosis', ''))}
         commit_tasks(store, nodes, {'reason': 'intake failed; no partial result applied', 'updates': [node]}, ident)
@@ -482,7 +490,8 @@ def apply_intake(store, request):
             if job.get('agent_steps') and report.get('lumos_report', {}).get('decision'):
                 require(not missing_followups(plan, nodes), 'Lumos 决策仍缺少下次关心时间，尚未保存')
             if 'findings' in plan:
-                actual = {f['key']: f for f in diagnostics(nodes, job['workspace'])}
+                from lumos_ops import inspection_findings
+                actual = {f['key']: f for f in inspection_findings(store, nodes, job['workspace'])}
                 require(role == 'maintainer' and isinstance(plan['findings'], list)
                         and all(f in actual.values() for f in plan['findings']), '诊断必须引用当前巡检证据')
             require(enabled(nodes, job['workspace']), '自主整理授权已停用')

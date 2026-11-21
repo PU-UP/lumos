@@ -308,7 +308,8 @@ def run_once(store, planner=plan_with_codex):
         enqueue_due_reviews(store)
         job = claim_intake(store)
     if not job:
-        return {'status': 'idle'}
+        from lumos_ops import inspect_due
+        return inspect_due(store) or {'status': 'idle'}
     try:
         context = intake_context(store, job['id'])
         plan = collaborate(store, job, context, planner)

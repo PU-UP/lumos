@@ -84,7 +84,7 @@ def missing_followups(plan, records):
 def execution_hashes():
     return {'rules_hash': digest(b''.join((ENGINE/f).read_bytes() for f in
             ('docs/agent-roles.md', 'docs/agent-planner.md', 'docs/chat-planner.md', 'docs/task-review-planner.md', 'docs/note-format-planner.md'))),
-            'code_hash': digest(b''.join((ENGINE/f).read_bytes() for f in ('lumos_agents.py', 'lumos_worker.py', 'lumos_intake.py', 'lumos_followup.py', 'lumos_knowledge.py')))}
+            'code_hash': digest(b''.join((ENGINE/f).read_bytes() for f in ('lumos_agents.py', 'lumos_worker.py', 'lumos_intake.py', 'lumos_followup.py', 'lumos_knowledge.py', 'lumos_ops.py')))}
 
 
 def record_step(store, ident, claim, role, phase, basis='', *, attempt=None, plan=None, error=None, input_hash='', reused_from=''):
@@ -239,6 +239,7 @@ def diagnostics(nodes, workspace, include_history=False):
 
 
 def episodes(store, workspace='lingguang'):
+    from lumos_ops import issue_groups, inspection_schedule
     require(workspace in {'lingguang', 'lumos'}, 'Invalid workspace')
     with process_lock(store.root), store.db() as db:
         nodes = store.nodes(db)
@@ -250,6 +251,7 @@ def episodes(store, workspace='lingguang'):
         findings = diagnostics(nodes, workspace)
         active = [n for n in nodes.values() if n['kind'] == 'intake' and n['data']['workspace'] == workspace and current_input(n, nodes)]
         return {'roles': ROLES, 'episodes': sorted(rows, key=lambda n: n['created_at'], reverse=True),
+                'issues': issue_groups(nodes, workspace), 'inspection': inspection_schedule(nodes, workspace),
                 'lumos_reports': role_reports(nodes, workspace, 'lumos'), 'ops_reports': role_reports(nodes, workspace, 'maintainer'),
                 'findings': findings, 'history_count': len(diagnostics(nodes, workspace, True))-len(findings),
                 'pending': sum(n['data']['status'] == 'pending' for n in active),

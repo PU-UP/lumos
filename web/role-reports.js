@@ -1,12 +1,12 @@
 'use strict';
 function reportItems(data,role,history=false){
-  return history?(data.episodes||[]):(role==='lumos'?data.lumos_reports||[]:data.ops_reports||[]);
+  return history?(data.episodes||[]):(role==='lumos'?data.lumos_reports||[]:data.issues||data.ops_reports||[]);
 }
 function reportLabel(item,role,history=false){
   if(item.outcome==='obsolete')return '原内容已变化 · 未应用';
   if(history)return {pending:'等待处理',running:'处理中',failed:'未完成',done:'已保存',needs_review:'需要补充',obsolete:'来源已变化'}[item.status]||item.status;
   if(role==='lumos')return item.status==='processing'?(item.outcome==='failed'?'处理受阻 · 已报 Ops':'已接收 · 正在处理'):item.decision?.phase==='external'?'Lumos 外部协调 · 已保存':item.decision?'Lumos 已决策 · 已保存':'已同步 Lumos';
-  return {pending:'Ops 已收到 · 待诊断',detected:'检测到异常 · 待诊断',diagnosed:'已给出诊断 · 未确认修复',recovered:'原处理已接续'}[item.status]||item.status;
+  return {pending:'Ops 已收到 · 待诊断',detected:'检测到异常 · 待诊断',diagnosed:'已给出诊断 · 未确认修复',recovered:'原处理已接续',rechecked:'复查未再发现此异常'}[item.status]||item.status;
 }
 if(typeof module!=='undefined')module.exports={reportItems,reportLabel};
 if(typeof document!=='undefined'){
@@ -23,7 +23,10 @@ if(typeof document!=='undefined'){
   function render(){
     if(!data)return;
     let items=reportItems(data,role,history);
-    const focus=url.searchParams.get('episode');if(focus)items=items.filter(n=>(n.episode_id||n.id)===focus);
+    const focus=url.searchParams.get('episode');if(focus)items=items.filter(n=>(n.episode_id||n.id)===focus||n.episode_ids?.includes(focus));
+    const schedule=data.inspection;
+    $('inspection-status').hidden=role!=='maintainer';
+    if(role==='maintainer'&&schedule)$('inspection-status').textContent=(schedule.last_at?'上次检查：'+new Date(schedule.last_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})+(schedule.last_status==='failed'?'，未完成。':'。'):'尚未完成检查。')+(schedule.enabled?(schedule.active_id?' 当前检查等待接续。':schedule.due?' 本周检查尚未执行，空闲时补查一次。':' 下次检查：'+new Date(schedule.next_at).toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai'})+'。'):' 每周检查未启用，可手动检查。')+' 只检查已保存执行记录与固定来源，不修改业务。';
     $('report-count').textContent=items.length+' 项'+(data.executor==='offline'?' · 执行器离线，输入仍保留':'');
     $('current-reports').setAttribute('aria-pressed',String(!history));$('report-history').setAttribute('aria-pressed',String(history));
     const host=$('report-list');host.replaceChildren();
@@ -32,6 +35,7 @@ if(typeof document!=='undefined'){
       const id=item.episode_id||item.id,card=el('article',undefined,'report-card');
       const head=el('div',undefined,'report-card-heading');head.append(el('h2',item.title),el('span',reportLabel(item,role,history),'report-state'));card.append(head);
       card.append(el('p',(names[item.from_role||item.agent_role]||'系统')+' · '+new Date(item.at||item.updated_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}),'report-meta'));
+      if(item.count)card.append(el('p','已记录 '+item.count+' 次'+(item.subject_id?' · 来源 '+item.subject_id:''),'report-meta'));
       card.append(el('p',(role==='lumos'&&item.result)||item.summary||item.error||'本轮尚未返回结果。','report-summary'));
       if(role==='lumos'&&item.result_truncated)card.append(el('p','这里显示结果节选，完整答复可回到原对话查看。','report-meta'));
       if(item.impact)card.append(el('p',item.impact));
