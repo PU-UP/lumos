@@ -79,6 +79,14 @@ class IntakeTest(BaseStoreCase):
                     'plan': {'summary': '已核对全部模拟任务', 'questions': [], 'updates': [], 'resolutions': [],
                              'task_reviews': [{'id': 'talk', 'question': '', 'reason': '核对模拟任务安排'}]}}
 
+    def apply_review(self, request):
+        from lumos_agents import record_step, prepare_execution
+        for role, phase in [('lumos', 'decide'), ('aipm', 'apply')]:
+            attempt = record_step(self.store, request['id'], request['claim'], role, phase, request['basis'])
+            record_step(self.store, request['id'], request['claim'], role, phase, attempt=attempt, plan=request['plan'])
+        prepare_execution(self.store, request['id'], request['claim'], request['plan'])
+        return apply_intake(self.store, request)
+
     def test_full_review_requires_grant_coverage_and_real_questions_then_stamps_atomically(self):
         from lumos_task_review import request_task_review
         request = {'request_id': uuid.uuid4().hex, 'workspace': 'lingguang', 'source': self.source}
@@ -94,11 +102,11 @@ class IntakeTest(BaseStoreCase):
                         [{'id': 'talk', 'question': 'new:99', 'reason': '不存在的问题'}]):
             env['plan']['task_reviews'] = reviews
             with self.assertRaises(lumos.Error):
-                apply_intake(self.store, env)
+                self.apply_review(env)
             self.assertEqual(task_detail(self.store, 'talk')['task']['data'], before)
         env['plan']['task_reviews'] = [{'id': 'talk', 'question': 'new:0', 'reason': '尚缺关键节点结果'}]
         env['plan']['questions'] = ['模拟主线的实际阶段结果是什么？']
-        receipt = apply_intake(self.store, env)['intake']
+        receipt = self.apply_review(env)['intake']
         self.assertTrue(receipt['data']['completed_at'])
         board = list_tasks(self.store)
         self.assertEqual(board['task_reviews']['lingguang']['completed']['id'], first['id'])
@@ -116,7 +124,7 @@ class IntakeTest(BaseStoreCase):
         future = (date.fromisoformat(today()) + timedelta(days=3)).isoformat()
         env['plan']['updates'] = [{'id': 'talk', 'kind': 'action', 'mode': 'planned', 'excerpt': ctx['text'],
                                   'reason': '依据模拟同事既有分工接续', 'changes': {'owner': '模拟同事', 'follow_up': future, 'planned_due': future}}]
-        apply_intake(self.store, env)
+        self.apply_review(env)
         task = task_detail(self.store, 'talk')['task']['data']
         self.assertEqual(task['owner'], '模拟同事')
         self.assertEqual(task['manual_edits']['owner']['value'], '王牧楠')
@@ -127,17 +135,17 @@ class IntakeTest(BaseStoreCase):
         env['plan']['updates'] = [{'id': 'talk', 'kind': 'action', 'mode': 'reported', 'excerpt': ctx['text'],
                                   'reason': '不应伪造', 'changes': {'status': 'done'}}]
         with self.assertRaisesRegex(lumos.Error, '新进展报告'):
-            apply_intake(self.store, env)
+            self.apply_review(env)
 
     def test_full_review_rejects_concurrent_manual_changes_and_keeps_previous_completion(self):
         self.enable_management(); ctx, env = self.full_review()
         env['plan']['questions'] = ['模拟关键节点？']; env['plan']['task_reviews'][0]['question'] = 'new:0'
-        first = apply_intake(self.store, env)['intake']
+        first = self.apply_review(env)['intake']
         ctx, env = self.full_review()
         save_task(self.store, {'request_id': uuid.uuid4().hex, 'expected_seq': self.store.status()['seq'], 'id': 'talk',
                               'changes': {'progress': '王牧楠新修改'}, 'source': self.source})
         with self.assertRaisesRegex(lumos.Error, '已变化'):
-            apply_intake(self.store, env)
+            self.apply_review(env)
         board = list_tasks(self.store)
         self.assertEqual(board['task_reviews']['lingguang']['completed']['id'], first['id'])
         self.assertNotIn('seen_at', task_detail(self.store, 'talk')['task']['data']['manual_edits']['progress'])

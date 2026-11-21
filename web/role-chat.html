@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Lumos · 对话</title><link rel="stylesheet" href="/board.css"><link rel="stylesheet" href="/chat.css"><script src="/navigation.js" defer></script><script src="/dialog.js" defer></script><script src="/work-model.js" defer></script><script src="/role-chat.js" defer></script><link rel="stylesheet" href="/navigation.css"></head>
+<body class="chat-page">
+<header><div class="brand"><span class="mark">L</span><strong>Lumos</strong><span class="divider">/</span><span>工作分身</span></div></header>
+<nav aria-label="工作视图" class="view-nav"><a href="/">工作</a><a href="/chat" aria-current="page">对话</a><a href="/notes">记录</a></nav>
+<main class="chat-layout">
+<aside aria-label="对话列表"><div class="chat-heading"><h1 id="role-heading">Lumos</h1><button id="new-chat">＋ 新对话</button></div><label>工作空间<select id="chat-workspace"><option value="lingguang">灵光</option><option value="lumos">Lumos 仓库维护</option></select></label><p id="role-description" class="muted"></p><div id="chat-list"></div></aside>
+<section id="conversation" class="conversation" aria-label="与 Lumos 对话">
+<div class="conversation-heading"><div><h2 id="chat-title">从一件正在推进的事开始</h2><p id="conversation-scope" class="scope-caption"></p></div><button id="manage-conversation" type="button" aria-haspopup="dialog">管理对话</button></div>
+<div id="messages" tabindex="0" aria-label="对话消息"><div class="chat-welcome"><h2>讨论清楚，进展也留下来。</h2><p>可以询问近期重点、梳理方案，或直接补充某项任务的进展。提到任务名称或 T-编号，Lumos 会结合当前记录接续。</p></div></div>
+<form id="chat-form">
+<div class="writing-heading"><label for="chat-text" id="writing-label">写给 Lumos</label><div><button id="choose-subjects" type="button">关联任务</button><a id="role-resource" class="action-link" href="/knowledge">查找资料</a><button id="expand-writing" type="button" aria-expanded="false" aria-controls="chat-text">展开书写</button></div></div>
+<p id="episode-reference" class="muted"></p>
+<div id="selected-question" aria-label="正在回答的问题"></div><div id="selected-tasks" aria-label="本轮讨论对象"></div><textarea id="chat-text" rows="9" maxlength="200000" placeholder="回答选中的问题，或写下进展、遇到的问题和你的判断。讨论对象会随消息一起交给 Lumos。" required></textarea>
+<div class="composer-actions"><label class="model-choice"><span class="sr-only">对话模型</span><select id="chat-model"><option value="">默认模型</option></select></label><span>Ctrl / ⌘ + Enter</span><button id="send-chat" class="primary" type="submit" disabled>发送</button></div>
+<p id="chat-status" role="status" aria-live="polite">正在读取对话…</p>
+
+</form>
+</section></main>
+<dialog id="conversation-management" class="new-conversation" aria-labelledby="management-title"><div class="dialog-heading"><h2 id="management-title">管理对话</h2><button id="close-management" type="button">完成</button></div><label>对话标题<input id="session-title" maxlength="300"></label><label>工作备忘<textarea id="session-memo" maxlength="10000" placeholder="当前目标、未完成事项与需要记住的背景；正式事实以共享记录为准。"></textarea></label><p id="memo-sources"></p><button id="save-session" type="button">保存对话信息</button> <button id="close-session" type="button">结束这段对话</button><p id="session-status" role="status"></p><p id="recent-result"></p><p id="model-help" role="status"></p></dialog>
+<dialog id="subject-picker" aria-labelledby="subject-picker-title"><div class="dialog-heading"><h2 id="subject-picker-title">选择讨论对象</h2><button id="close-subject-picker" type="button">完成选择</button></div><p class="muted">当前工作空间的全部主线与未结束任务，不限日期，可多选。</p><div class="subject-filters"><label>搜索<input id="subject-search" type="search" placeholder="任务编号、名称、负责人或进展"></label><label>查看<select id="subject-type"><option value="all">全部</option><option value="mainline">主线</option><option value="action">当前任务</option></select></label></div><p id="subject-count" role="status"></p><div id="subject-results"></div></dialog>
+<dialog id="new-conversation" class="new-conversation" aria-labelledby="new-conversation-title"><h2 id="new-conversation-title">新对话</h2><form id="new-conversation-form"><label>对话标题<input id="new-title" maxlength="300" required placeholder="这次想推进什么？"></label><label>本次资料范围<select id="new-workspace"><option value="lingguang">灵光</option><option value="lumos">Lumos 仓库维护</option></select></label><p class="muted">创建后范围固定；角色不会替你推断项目归属。</p><p id="new-error" role="status"></p><div class="actions"><button type="button" id="cancel-new">取消</button><button class="primary" type="submit" id="create-conversation">创建对话</button></div></form></dialog></body></html>

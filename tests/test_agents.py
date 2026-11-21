@@ -47,8 +47,60 @@ class AgentsTest(BaseStoreCase):
 
     def update(self, kind='action'):
         return {'id': 'talk' if kind == 'action' else 'knowledge-test', 'kind': kind,
-            'changes': {'progress': '同步条件已核对'} if kind == 'action' else {'context': 'mapping', 'title': '同步依据', 'text': '同步条件已核对'},
+            'changes': {'progress': '同步条件已核对', 'follow_up': '2026-11-22', 'review_basis': 'agent'} if kind == 'action' else {'context': 'mapping', 'title': '同步依据', 'text': '同步条件已核对'},
             'reason': '原话报告', 'excerpt': '同步条件已核对', 'mode': 'reported'}
+
+    def test_chat_role_survives_restart_model_change_and_request_replay(self):
+        for role in ('lumos', 'aipm', 'librarian', 'maintainer'):
+            first = self.create(role)
+            run_once(self.store, lambda *_: self.plan())
+            request = {'request_id': uuid.uuid4().hex, 'chat_id': first['data']['chat_id'],
+                'chat_parent': first['id'], 'text': '继续讨论', 'source': self.source,
+                'model': 'test-other-model'}
+            store = lumos.Store(self.root)
+            saved = save_intake(store, request)['intake']
+            self.assertEqual(saved['data']['agent_role'], role)
+            self.assertEqual(saved['data']['model'], 'test-other-model')
+            self.assertNotIn('agent_role', request)
+            self.assertTrue(save_intake(store, request)['replayed'])
+            claim_intake(store, saved['id'])
+            self.assertEqual(intake_context(store, saved['id'])['agent']['role'], role)
+            fail_intake(store, saved['id'], intake_context(store, saved['id'])['intake']['data']['claim'], '模拟失败')
+
+    def test_chat_rejects_role_and_workspace_changes_without_saving(self):
+        first = self.create('aipm')
+        run_once(self.store, lambda *_: self.plan())
+        request = {'request_id': uuid.uuid4().hex, 'chat_id': first['data']['chat_id'],
+            'chat_parent': first['id'], 'text': '继续讨论', 'source': self.source}
+        before = self.store.status()['seq']
+        for changes, message in [({'agent_role': 'lumos'}, '角色已固定'),
+                                 ({'agent_role': 'maintainer'}, '角色已固定'),
+                                 ({'workspace': 'lumos'}, '不属于当前空间')]:
+            with self.assertRaisesRegex(lumos.Error, message):
+                save_intake(self.store, {**request, **changes})
+            self.assertEqual(self.store.status()['seq'], before)
+        saved = save_intake(self.store, {**request, 'agent_role': 'aipm'})['intake']
+        self.assertEqual(saved['data']['agent_role'], 'aipm')
+
+    def test_legacy_mixed_role_chat_is_preserved_but_cannot_continue(self):
+        with self.store.db(True) as db:
+            db.execute('PRAGMA user_version=1')
+        first = self.create('aipm')
+        run_once(self.store, lambda *_: self.plan())
+        second = self.create('librarian')
+        run_once(self.store, lambda *_: self.plan())
+        with self.store.db() as db:
+            legacy = copy.deepcopy(self.store.nodes(db)[second['id']])
+        legacy['data'].update(chat_id=first['data']['chat_id'], chat_parent=first['id'])
+        batch = self.store.begin({'reason': 'synthetic pre-refactor mixed chat', 'updates': [legacy]}, True)
+        self.store.commit(batch['batch'], True)
+        before = self.store.status()['seq']
+        with self.assertRaisesRegex(lumos.Error, '历史对话包含多个角色'):
+            save_intake(self.store, {'request_id': uuid.uuid4().hex, 'chat_id': first['data']['chat_id'],
+                'chat_parent': second['id'], 'agent_role': 'librarian', 'text': '继续', 'source': self.source})
+        self.assertEqual(self.store.status()['seq'], before)
+        with self.store.db() as db:
+            self.assertEqual(self.store.nodes(db)[second['id']], legacy)
 
     def test_pure_chat_has_one_step_and_no_business_changes(self):
         self.create()
@@ -62,6 +114,7 @@ class AgentsTest(BaseStoreCase):
         self.assertEqual(result['data']['status'], 'done')
         self.assertEqual(task_detail(self.store, 'talk')['task'], before)
         self.assertEqual(len(episodes(self.store)['episodes'][0]['agent_steps']), 1)
+        self.assertEqual(episodes(self.store)['lumos_reports'], [])
 
     def test_read_only_roles_do_not_schedule_or_reconcile_tasks_as_a_side_effect(self):
         for role in ('lumos', 'librarian', 'maintainer'):
@@ -84,17 +137,182 @@ class AgentsTest(BaseStoreCase):
             if role == 'aipm':
                 update = self.update(); update['changes']['progress'] = '已核对；继续检查'
                 return self.plan(updates=[update])
-            return self.plan(reply='已接续任务与知识依据')
+            return self.plan(updates=context['proposals']['specialists']['aipm']['updates'], reply='已接续任务与知识依据')
         outcome = run_once(self.store, planner)
         self.assertIn('intake', outcome, outcome)
         result = outcome['intake']
-        self.assertEqual(calls, [('lumos', 'coordinate'), ('librarian', 'work'), ('aipm', 'work'), ('lumos', 'synthesize')])
+        self.assertEqual(calls, [('lumos', 'coordinate'), ('librarian', 'work'), ('aipm', 'work'), ('lumos', 'decide')])
         self.assertEqual(result['data']['reply'], '已接续任务与知识依据')
         self.assertEqual(task_detail(self.store, 'talk')['task']['data']['progress'], '已核对；继续检查')
         with self.store.db() as db:
             batches = db.execute('SELECT batch FROM history WHERE node IN (?,?) ORDER BY rowid DESC LIMIT 2', ('talk', 'knowledge-test')).fetchall()
             self.assertEqual(batches[0], batches[1])
         self.assertEqual(result['id'], job['id'])
+
+    def test_direct_aipm_arrangement_is_decided_by_lumos_and_reported(self):
+        self.create('aipm')
+        calls = []
+        def planner(context, root):
+            calls.append((context['agent']['role'], context['agent']['phase']))
+            update = self.update()
+            update['changes']['progress'] = 'AIPM 候选' if context['agent']['role'] == 'aipm' else 'Lumos 最终决定'
+            return self.plan(updates=[update])
+        result = run_once(self.store, planner)['intake']
+        self.assertEqual(calls, [('aipm', 'work'), ('lumos', 'decide')])
+        self.assertEqual(task_detail(self.store, 'talk')['task']['data']['progress'], 'Lumos 最终决定')
+        self.assertEqual(result['data']['lumos_report']['decision']['phase'], 'decide')
+        report = episodes(lumos.Store(self.root))['lumos_reports'][0]
+        self.assertEqual(report['episode_id'], result['id'])
+        self.assertEqual(report['from_role'], 'aipm')
+        self.assertEqual(report['status'], 'received')
+
+    def test_lumos_repairs_missing_followup_before_saving_without_asking_user_for_a_date(self):
+        self.create('aipm'); calls = []
+        def planner(context, root):
+            calls.append((context['agent']['role'], bool(context.get('proposals', {}).get('required_followups'))))
+            item = self.update()
+            if not context.get('proposals', {}).get('required_followups'):
+                item['changes'].pop('follow_up'); item['changes'].pop('review_basis')
+            return self.plan(updates=[item])
+        result = run_once(self.store, planner)['intake']
+        self.assertEqual(calls, [('aipm', False), ('lumos', False), ('lumos', True)])
+        self.assertEqual(task_detail(self.store, 'talk')['task']['data']['follow_up'], '2026-11-22')
+        self.assertEqual(result['data']['questions'], [])
+
+    def test_incomplete_followup_is_rejected_after_one_repair_and_at_the_save_boundary(self):
+        from lumos_agents import prepare_execution
+        job = self.create('aipm'); calls = []
+        item = self.update(); item['changes'].pop('follow_up'); item['changes'].pop('review_basis')
+        plan = self.plan(updates=[item]); before = task_detail(self.store, 'talk')['task']
+        def planner(context, root):
+            calls.append(context['agent']['role']); return copy.deepcopy(plan)
+        outcome = run_once(self.store, planner)
+        self.assertEqual(outcome['status'], 'failed'); self.assertEqual(calls, ['aipm', 'lumos', 'lumos'])
+        self.assertEqual(task_detail(self.store, 'talk')['task'], before)
+        second = self.create('aipm'); claimed = claim_intake(self.store, second['id']); ctx = intake_context(self.store, second['id'])
+        claim = claimed['data']['claim']
+        for role, phase in [('lumos', 'decide'), ('aipm', 'apply')]:
+            attempt = record_step(self.store, second['id'], claim, role, phase, ctx['basis'])
+            record_step(self.store, second['id'], claim, role, phase, attempt=attempt, plan=plan)
+        prepare_execution(self.store, second['id'], claim, plan)
+        with self.assertRaisesRegex(lumos.Error, '下次关心时间'):
+            apply_intake(self.store, {'id': second['id'], 'claim': claim, 'basis': ctx['basis'], 'plan': plan})
+
+    def test_followup_completeness_preserves_explicit_clear_closed_and_unaffected_tasks(self):
+        from lumos_agents import missing_followups
+        item = self.update(); item['changes'] = {'progress': '进展'}
+        nodes = {'talk': {'data': {'status': 'todo', 'review_basis': 'user', 'follow_up': ''}}}
+        self.assertEqual(missing_followups({'updates': [item]}, nodes), [])
+        for changes in ({'status': 'done'}, {'status': 'cancelled'}, {'follow_up': '', 'review_basis': 'user'}):
+            self.assertEqual(missing_followups({'updates': [{**item, 'changes': changes}]}, {}), [])
+        self.assertEqual(missing_followups({'updates': []}, {'other': {'data': {'status': 'todo'}}}), [])
+        self.assertEqual(missing_followups({'updates': [item]}, {})[0]['id'], 'talk')
+        for status in ('done', 'cancelled'):
+            nodes['talk']['data'].update(status=status, follow_up='2026-11-20')
+            reopened = {**item, 'changes': {'status': 'todo'}}
+            self.assertEqual(missing_followups({'updates': [reopened]}, nodes)[0]['id'], 'talk')
+            reopened['changes'].update(follow_up='2026-11-22', review_basis='agent')
+            self.assertEqual(missing_followups({'updates': [reopened]}, nodes), [])
+
+    def test_librarian_work_and_plain_answers_reach_lumos_without_extra_model_call(self):
+        self.create('librarian')
+        calls = []
+        def planner(context, root):
+            calls.append(context['agent']['role'])
+            return self.plan(updates=[self.update('evidence')])
+        result = run_once(self.store, planner)['intake']
+        self.assertEqual(calls, ['librarian'])
+        self.assertIsNone(result['data']['lumos_report']['decision'])
+        job = self.create('lumos'); claim_intake(self.store, job['id'])
+        self.assertIn(result['id'], [r['episode_id'] for r in intake_context(self.store, job['id'])['lumos_reports']])
+
+    def test_direct_specialist_and_tampered_prepared_decision_cannot_bypass_lumos(self):
+        from lumos_agents import prepare_execution
+        job = self.create('aipm'); claimed = claim_intake(self.store, job['id']); context = intake_context(self.store, job['id'])
+        claim = claimed['data']['claim']; plan = self.plan(updates=[self.update()])
+        request = {'id': job['id'], 'claim': claim, 'basis': context['basis'], 'plan': plan}
+        with self.assertRaisesRegex(lumos.Error, 'Lumos'):
+            apply_intake(self.store, request)
+        for role, phase in [('lumos', 'decide'), ('aipm', 'apply')]:
+            attempt = record_step(self.store, job['id'], claim, role, phase, context['basis'])
+            record_step(self.store, job['id'], claim, role, phase, attempt=attempt, plan=plan)
+        changed = copy.deepcopy(plan); changed['updates'][0]['changes']['owner'] = '另一人'
+        prepare_execution(self.store, job['id'], claim, changed)
+        with self.assertRaisesRegex(lumos.Error, 'Lumos'):
+            apply_intake(self.store, {**request, 'plan': changed})
+        prepare_execution(self.store, job['id'], claim, plan)
+        self.assertEqual(apply_intake(self.store, request)['intake']['data']['status'], 'done')
+
+    def test_failed_decision_is_reported_to_ops_and_restart_reuses_valid_candidate(self):
+        job = self.create('aipm'); calls = []
+        def broken(context, root):
+            calls.append(context['agent']['role'])
+            if context['agent']['role'] == 'lumos':
+                raise lumos.Error('模拟执行器不可用')
+            return self.plan(updates=[self.update()])
+        self.assertEqual(run_once(self.store, broken)['status'], 'failed')
+        report = episodes(self.store)['ops_reports'][0]
+        self.assertEqual(report['report_to'], '王牧楠'); self.assertEqual(report['status'], 'pending')
+        self.assertEqual(report['episode_id'], job['id'])
+        with self.store.db() as db:
+            failed = self.store.nodes(db)[job['id']]
+        save_intake(self.store, {'id': job['id'], 'request_id': uuid.uuid4().hex, 'expected_revision': failed['data']['revision']})
+        def resumed(context, root):
+            calls.append(context['agent']['role'])
+            return self.plan(updates=[self.update()])
+        result = run_once(lumos.Store(self.root), resumed)['intake']
+        self.assertEqual(calls, ['aipm', 'lumos', 'lumos'])
+        self.assertTrue(any(s.get('reused_from') for s in result['data']['agent_steps']))
+        self.assertEqual(result['data']['ops_report']['status'], 'recovered')
+
+    def test_changed_source_forces_new_candidate_and_ops_diagnosis_is_not_repair(self):
+        job = self.create('aipm')
+        def broken(context, root):
+            if context['agent']['role'] == 'lumos':
+                raise lumos.Error('模拟权限拒绝')
+            return self.plan(updates=[self.update()])
+        run_once(self.store, broken)
+        ops = save_intake(self.store, {'request_id': uuid.uuid4().hex, 'agent_role': 'maintainer', 'episode_ref': job['id'],
+            'chat_id': uuid.uuid4().hex, 'text': '核对原因', 'source': self.source})['intake']
+        run_once(self.store, lambda *_: self.plan(reply='已核对拒绝记录，尚未修复。'))
+        report = episodes(self.store)['ops_reports'][0]
+        self.assertEqual(report['status'], 'diagnosed'); self.assertEqual(report['diagnosis_episode'], ops['id'])
+        save_task(self.store, {'request_id': uuid.uuid4().hex, 'id': 'talk', 'expected_seq': self.store.status()['seq'],
+            'changes': {'progress': '人工新输入'}, 'source': self.source})
+        with self.store.db() as db:
+            failed = self.store.nodes(db)[job['id']]
+        save_intake(self.store, {'id': job['id'], 'request_id': uuid.uuid4().hex, 'expected_revision': failed['data']['revision']})
+        calls = []
+        def resumed(context, root):
+            calls.append(context['agent']['role']); return self.plan(updates=[self.update()])
+        run_once(self.store, resumed)
+        self.assertEqual(calls, ['aipm', 'lumos'])
+
+    def test_ops_does_not_overwrite_a_new_failure_with_an_old_diagnosis(self):
+        job = self.create('aipm'); claimed = claim_intake(self.store, job['id'])
+        fail_intake(self.store, job['id'], claimed['data']['claim'], '第一次模拟故障')
+        ops = save_intake(self.store, {'request_id': uuid.uuid4().hex, 'agent_role': 'maintainer', 'episode_ref': job['id'],
+            'chat_id': uuid.uuid4().hex, 'text': '核对原因', 'source': self.source})['intake']
+        ops_claim = claim_intake(self.store, ops['id']); ctx = intake_context(self.store, ops['id'])
+        with self.store.db() as db:
+            failed = self.store.nodes(db)[job['id']]
+        save_intake(self.store, {'id': job['id'], 'request_id': uuid.uuid4().hex, 'expected_revision': failed['data']['revision']})
+        new = claim_intake(self.store, job['id']); fail_intake(self.store, job['id'], new['data']['claim'], '第二次模拟故障')
+        with self.assertRaisesRegex(lumos.Error, '重新领取'):
+            apply_intake(self.store, {'id': ops['id'], 'claim': ops_claim['data']['claim'], 'basis': ctx['basis'], 'plan': self.plan()})
+        self.assertEqual(episodes(self.store)['ops_reports'][0]['summary'], '第二次模拟故障')
+
+    def test_atlas_material_impact_follows_aipm_proposal_and_lumos_decision(self):
+        self.create('librarian'); calls = []
+        def planner(context, root):
+            role = context['agent']['role']; calls.append(role)
+            if role == 'librarian':
+                return self.plan(updates=[self.update('evidence')], delegate_to=['aipm'])
+            return self.plan(updates=[self.update()])
+        result = run_once(self.store, planner)['intake']
+        self.assertEqual(calls, ['librarian', 'aipm', 'lumos'])
+        self.assertEqual(set(result['data']['destinations']), {'talk', 'knowledge-test'})
+        self.assertEqual(result['data']['lumos_report']['from_role'], 'librarian')
 
     def test_specialist_denial_and_retry_keep_attempt_history(self):
         job = self.create('librarian')

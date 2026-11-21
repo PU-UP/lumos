@@ -508,7 +508,7 @@ function renderList(tasks) {
     title.title = [t.data.next_step, ...t.attention, t.data.due ? '交付 ' + dueLabel(t.data.due) : ''].filter(Boolean).join('\n');
     title.onclick = () => openTask(t.id);
     if(!isClosed(t.data) && t.management_question){const q=t.management_question,note=element('small',questionLabel(q)+'：'+q.question,'task-stewardship');title.append(note);title.onclick=()=>{window.location.href='/?workspace='+workspaceOf(t.data.context)+'&question='+encodeURIComponent('question:'+q.intake_id+':'+q.index);};}
-    else if(t.management_issues?.length){const note=element('small','Lumos 待复核','task-stewardship');note.title=t.management_issues.join('；');title.append(note);}
+    else if(t.management_issues?.length){const note=element('small','待接续 · '+t.management_issues[0],'task-stewardship');note.title=t.management_issues.join('；');title.append(note);}
     const changed=manualBadge(t,['text','status','priority','group','context','progress','next_step','details','condition']);if(changed)title.append(changed);
     const priority = element('select', undefined, 'row-priority priority-' + (t.data.priority || 'normal'));
     priority.append(...Object.entries(priorities).map(([value, label]) => new Option(label, value)));

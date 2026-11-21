@@ -11,6 +11,7 @@ from lumos_task_review import request_task_review
 from lumos_notes import list_notes, note_detail, save_note
 from lumos_mainlines import mainline_detail, save_review
 from lumos_intake import list_intakes, save_intake
+from lumos_conversations import list_conversations, save_conversation
 
 
 def make_server(store, port=8765):
@@ -49,7 +50,7 @@ def make_server(store, port=8765):
                 require(self.headers.get("Sec-Fetch-Site") not in {"cross-site"}, "Cross-site request refused")
                 path = urlsplit(self.path)
                 if write:
-                    require(path.path in {"/api/tasks", "/api/notes", "/api/intakes", "/api/mainline-review", "/api/task-review", "/api/materials", "/api/agent-inspect"}, "Unknown route")
+                    require(path.path in {"/api/tasks", "/api/notes", "/api/intakes", "/api/mainline-review", "/api/task-review", "/api/materials", "/api/agent-inspect", "/api/conversations"}, "Unknown route")
                     require(self.headers.get("Origin") == "http://" + host, "Invalid origin")
                     require(secrets.compare_digest(self.headers.get("X-Lumos-Token", ""), token), "Invalid token")
                     require(self.headers.get("Content-Type", "").split(";")[0] == "application/json", "Expected JSON")
@@ -59,7 +60,8 @@ def make_server(store, port=8765):
                     from lumos_agents import inspect_once
                     from lumos_knowledge import register_material
                     save = {"/api/tasks": save_task, "/api/notes": save_note, "/api/intakes": save_intake, "/api/mainline-review": save_review, "/api/task-review": request_task_review,
-                            "/api/materials": register_material, "/api/agent-inspect": inspect_once}[path.path]
+                            "/api/materials": register_material, "/api/agent-inspect": inspect_once,
+                            "/api/conversations": save_conversation}[path.path]
                     self.reply(200, save(store, request))
                 elif path.path == "/api/agents":
                     from lumos_agents import episodes
@@ -79,7 +81,10 @@ def make_server(store, port=8765):
                     query = parse_qs(path.query)
                     data = list_intakes(store, query.get("workspace", ["lingguang"])[0])
                     worker = getattr(self.server, 'worker', None)
-                    self.reply(200, {**data, 'executor': worker.state if worker else 'offline', 'token': token})
+                    self.reply(200, {**data, **list_conversations(store, query.get('workspace', ['lingguang'])[0]),
+                        'executor': worker.state if worker else 'offline', 'token': token})
+                elif path.path == '/api/conversations':
+                    self.reply(200, {**list_conversations(store, parse_qs(path.query).get('workspace', ['lingguang'])[0]), 'token': token})
                 elif path.path == "/api/codex-models":
                     from lumos_worker import codex_models
                     self.reply(200, codex_models())
@@ -93,7 +98,11 @@ def make_server(store, port=8765):
                     revision = query.get("revision", [None])[0]
                     self.reply(200, note_detail(store, query.get("id", [""])[0], int(revision) if revision else None))
                 elif path.path == "/api/health":
-                    self.reply(200, {"app": "lumos", "root": str(store.root)})
+                    self.reply(200, {"app": "lumos", "root": str(store.root), 'preview': (store.root/'PREVIEW').is_file(), 'role_spaces': True})
+                elif path.path in {'/role-navigation.js', '/role-navigation.css', '/role-chat.js', '/role-reports.js', '/role-reports.css'}:
+                    name = path.path[1:]
+                    self.reply(200, (ENGINE/'web'/name).read_bytes(),
+                               ('text/javascript' if name.endswith('.js') else 'text/css')+'; charset=utf-8')
                 elif path.path == "/api/tasks":
                     self.reply(200, {**list_tasks(store), "token": token, "executor": getattr(getattr(self.server, "worker", None), "state", "offline")})
                 elif path.path == "/api/task":
@@ -105,7 +114,14 @@ def make_server(store, port=8765):
                     if path.path == "/" and "task" in parse_qs(path.query):
                         name = "index.html"  # Preserve existing task bookmarks.
                     content_type = "text/javascript" if name.endswith(".js") else "text/css" if name.endswith(".css") else "text/html"
-                    self.reply(200, (ENGINE / "web" / name).read_bytes(), content_type + "; charset=utf-8")
+                    if name == 'chat.html':
+                        name = 'role-chat.html'
+                    if name == 'agents.html':
+                        name = 'role-reports.html'
+                    raw = (ENGINE / 'web' / name).read_bytes()
+                    if name.endswith('.html'):
+                        raw = raw.replace(b'/navigation.js', b'/role-navigation.js').replace(b'/navigation.css', b'/role-navigation.css')
+                    self.reply(200, raw, content_type + "; charset=utf-8")
                 else:
                     self.reply(404, {"error": "Not found"})
             except (Error, ValueError, TypeError, KeyError, OSError, sqlite3.Error) as exc:

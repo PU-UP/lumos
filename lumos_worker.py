@@ -12,7 +12,8 @@ import threading
 from lumos import ENGINE, Error, require, write_json
 from lumos_tasks import FIELDS
 from lumos_intake import claim_intake, intake_context, apply_intake, fail_intake, enqueue_due_reviews
-from lumos_agents import ROLES, role_for, check_plan, record_step, prepare_execution
+from lumos_agents import (ROLES, role_for, check_plan, record_step, prepare_execution,
+                          business_plan, needs_decision, reusable_step, missing_followups)
 
 SCHEMA = {
     'type': 'object', 'additionalProperties': False, 'required': ['summary', 'questions', 'updates', 'resolutions'],
@@ -108,7 +109,9 @@ def plan_with_codex(context, root):
                 response_schema['properties']['search_query'] = {'type': 'string'}
                 role, phase = agent['role'], agent.get('phase', 'work')
                 allowed = {'aipm': {'action', 'mainline', 'person'}, 'librarian': {'evidence'}}.get(role, set())
-                if role != 'lumos' or phase == 'synthesize':
+                if role == 'lumos' and phase == 'decide':
+                    allowed = {'action', 'mainline', 'person'}
+                if role != 'lumos' or phase in {'synthesize', 'decide'}:
                     variants = response_schema['properties']['updates']['items']['anyOf']
                     kept = []
                     for variant in variants:
@@ -120,7 +123,7 @@ def plan_with_codex(context, root):
                         response_schema['properties']['updates']['items']['anyOf'] = kept
                     else:
                         response_schema['properties']['updates']['maxItems'] = 0
-                    if role != 'aipm':
+                    if role != 'aipm' and phase != 'decide':
                         for field in ('questions', 'resolutions'):
                             response_schema['properties'][field]['maxItems'] = 0
         schema.write_text(json.dumps(response_schema), encoding='utf-8')
@@ -163,21 +166,33 @@ def collaborate(store, job, context, planner):
     results = {}
 
     def run(actor, phase, proposals=None, query=''):
-        attempt = record_step(store, job['id'], job['data']['claim'], actor, phase, context['basis'])
+        from lumos_intake import fingerprint
+        current = {**context, 'agent': {'role': actor, 'phase': phase, **ROLES[actor]}}
+        current['intake'] = {**job, 'data': {k: v for k, v in job['data'].items() if k in
+            {'title', 'text', 'workspace', 'agent_role', 'model', 'note', 'note_mode', 'review', 'task_review',
+             'source', 'related_ids', 'chat_id', 'chat_parent', 'episode_ref', 'question_key', 'question_keys', 'question_text'}}}
+        if proposals:
+            current['proposals'] = copy.deepcopy(proposals)
+        if actor == 'librarian' and job['data'].get('note_mode') != 'format':
+            from lumos_knowledge import search_knowledge
+            found = search_knowledge(store, job['data']['workspace'], query)
+            current['knowledge'] = found if query else {'catalog': [
+                {k: h[k] for k in ('id', 'title', 'kind', 'citation', 'extraction')} for h in found['results']]}
+        if actor == 'maintainer':
+            current = {k: v for k, v in current.items() if k not in {'records', 'open_questions', 'chat_history', 'lumos_reports', 'proposals'}}
+        else:
+            current.pop('diagnostics', None)
+            current.pop('ops_reports', None)
+            if actor != 'lumos':
+                current.pop('lumos_reports', None)
+        input_hash = fingerprint(current)
+        cached = reusable_step(store, job['id'], actor, phase, input_hash)
+        attempt = record_step(store, job['id'], job['data']['claim'], actor, phase, context['basis'],
+                              input_hash=input_hash, reused_from=cached['attempt_id'] if cached else '')
         try:
-            current = {**context, 'agent': {'role': actor, 'phase': phase, **ROLES[actor]}}
-            if proposals:
-                current['proposals'] = proposals
-            if actor == 'librarian' and job['data'].get('note_mode') != 'format':
-                from lumos_knowledge import search_knowledge
-                found = search_knowledge(store, job['data']['workspace'], query)
-                current['knowledge'] = found if query else {'catalog': [
-                    {k: h[k] for k in ('id', 'title', 'kind', 'citation', 'extraction')} for h in found['results']]}
-            if actor == 'maintainer':
-                current = {k: v for k, v in current.items() if k not in {'records', 'open_questions', 'chat_history'}}
-            plan = planner(current, store.root)
-            check_plan(actor, plan, coordinator=actor == 'lumos' and phase == 'coordinate')
-            if phase == 'synthesize':
+            plan = copy.deepcopy(cached['proposal']) if cached else planner(current, store.root)
+            check_plan('aipm' if phase == 'decide' else actor, plan, coordinator=actor == 'lumos' and phase == 'coordinate')
+            if phase in {'synthesize', 'decide'}:
                 require(not plan.get('delegate_to'), '汇总不能重新派发')
             record_step(store, job['id'], job['data']['claim'], actor, phase, attempt=attempt, plan=plan)
             return plan
@@ -221,7 +236,24 @@ def collaborate(store, job, context, planner):
         if 'task_reviews' in result:
             final['task_reviews'] = result['task_reviews']
     final['summary'] = '\n'.join(ROLES[r]['name']+'：'+p['summary'] for r, p in results.items())[:4000]
-    if job['data'].get('chat_id') and (role == 'lumos' or len(results) > 1):
+    if needs_decision(final, job['data']):
+        decision = run('lumos', 'decide', {'candidate': final, 'specialists': results})
+        missing = missing_followups(decision, context['records'])
+        if missing:
+            decision = run('lumos', 'decide', {'candidate': decision, 'specialists': results,
+                'required_followups': missing,
+                'correction': '上述未结束任务遗漏下次关心时间。请根据当前日期、交付、依赖和阻塞主动安排 follow_up，注明 review_basis=agent 和依据；负责人未知不阻止安排核对时间。保留全部有效变更、问题和原明确承诺，返回完整决定，不让王牧楠逐字段设置日期。'})
+        require(not missing_followups(decision, context['records']), 'Lumos 决策仍缺少下次关心时间，尚未保存；请修正安排后重试')
+        # AIPM applies the exact decision; a second generative rewrite could silently change it.
+        check_plan('aipm', decision)
+        attempt = record_step(store, job['id'], job['data']['claim'], 'aipm', 'apply', context['basis'])
+        record_step(store, job['id'], job['data']['claim'], 'aipm', 'apply', attempt=attempt, plan=decision)
+        evidence = [i for i in final['updates'] if i['kind'] == 'evidence']
+        final.update(business_plan(decision), summary=decision['summary'])
+        final['updates'] = evidence+final['updates']
+        if job['data'].get('chat_id'):
+            final['reply'] = decision['reply']
+    elif job['data'].get('chat_id') and (role == 'lumos' or len(results) > 1):
         synthesis = run('lumos', 'synthesize', results)
         final['reply'] = synthesis['reply']
     return final
@@ -264,12 +296,9 @@ class Worker:
 
     def loop(self):
         while not self.stop.is_set():
-            if not executable():
-                self.state = 'offline'
-            else:
-                try:
-                    self.state = 'available'
-                    run_once(self.store)
-                except (Error, OSError):
-                    self.state = 'waiting'
+            try:
+                self.state = 'available' if executable() else 'offline'
+                run_once(self.store)
+            except (Error, OSError):
+                self.state = 'waiting'
             self.stop.wait(5)

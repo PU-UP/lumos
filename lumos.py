@@ -20,8 +20,8 @@ if __name__ == "__main__":
     sys.dont_write_bytecode = True  # Running a bundled engine must not mutate the backup.
 
 ENGINE = Path(__file__).resolve().parent
-SCHEMA = 1
-KINDS = {"context", "evidence", "decision", "action", "document", "note", "person", "mainline", "intake"}
+SCHEMA = 2
+KINDS = {"context", "evidence", "decision", "action", "document", "note", "person", "mainline", "intake", "conversation"}
 RELATIONS = {"related", "supports", "refutes", "depends_on", "derived_from", "supersedes"}
 
 
@@ -134,7 +134,7 @@ def initialize(root):
     (root / "incoming").mkdir()
     with closing(sqlite3.connect(root / "lumos.sqlite3")) as db:
         db.executescript("""
-            PRAGMA user_version=1;
+            PRAGMA user_version=2;
             CREATE TABLE nodes(id TEXT PRIMARY KEY, kind TEXT NOT NULL, data TEXT NOT NULL);
             CREATE TABLE links(src TEXT REFERENCES nodes(id), dst TEXT REFERENCES nodes(id),
                                relation TEXT, PRIMARY KEY(src,dst,relation));
@@ -153,7 +153,7 @@ class Store:
         self.root = Path(root).resolve()
         require((self.root / "lumos.sqlite3").is_file(), "Data store missing; use init or restore")
         with self.db() as db:
-            require(db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA,
+            require(db.execute("PRAGMA user_version").fetchone()[0] in {1, SCHEMA},
                     "Unsupported schema; refusing access, restore matching engine/data")
 
     @contextmanager
@@ -281,7 +281,7 @@ class Store:
                         "Invalid context status")
                 require(data.get("entry") in nodes and nodes[data["entry"]]["kind"] == "document",
                         f"Context needs an entry document: {ident}")
-            elif kind not in {"note", "intake"}:
+            elif kind not in {"note", "intake", "conversation"}:
                 require(data.get("context") in nodes and nodes[data["context"]]["kind"] == "context",
                         f"Missing context for {ident}")
             if kind in {"evidence", "decision", "action", "person", "mainline"}:
@@ -345,6 +345,9 @@ class Store:
             if kind == "intake":
                 from lumos_intake import validate_intake
                 validate_intake(data, nodes)
+            if kind == "conversation":
+                from lumos_conversations import validate_conversation
+                validate_conversation(node, old.get(ident), nodes)
         from lumos_people import list_people
         list_people(nodes, {n["id"] for n in nodes.values() if n["kind"] == "context"})
         documents = [n for n in nodes.values() if n["kind"] == "document"]
@@ -626,6 +629,11 @@ def main():
     command.add_argument('--workspace', default='lingguang')
     command.add_argument('--archived', action='store_true')
     subs.add_parser('materials')
+    subs.add_parser('conversations')
+    command = subs.add_parser('conversation-save')
+    command.add_argument('request', type=Path)
+    command = subs.add_parser('upgrade-roles')
+    command.add_argument('--quiet-files', action='store_true')
     for name in ('material-save', 'agent-inspect'):
         command = subs.add_parser(name)
         command.add_argument('request', type=Path)
@@ -679,6 +687,11 @@ def main():
                 result = getattr(store, args.command)()
             elif args.command == "context":
                 result = store.context(args.question)
+            elif args.command in {'conversations', 'conversation-save', 'upgrade-roles'}:
+                from lumos_conversations import list_conversations, save_conversation, upgrade_conversations
+                result = (list_conversations(store) if args.command == 'conversations' else
+                          save_conversation(store, read_json(args.request)) if args.command == 'conversation-save' else
+                          upgrade_conversations(store, args.quiet_files))
             elif args.command == "mainline":
                 from lumos_mainlines import mainline_detail
                 result = mainline_detail(store, args.id)

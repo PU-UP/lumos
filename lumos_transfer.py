@@ -71,6 +71,7 @@ def _snapshot(store, destination, hook=None):
     engine_before, commit, dirty = engine_inventory()
     with store.db() as db:
         seq = store.seq(db)
+        schema = db.execute('PRAGMA user_version').fetchone()[0]
         data = destination / "data"
         data.mkdir()
         with closing(sqlite3.connect(data / "lumos.sqlite3")) as target:
@@ -86,7 +87,7 @@ def _snapshot(store, destination, hook=None):
         require(store.seq(db) == seq, "Database changed during snapshot")
     check = Store(data)
     check.verify()
-    manifest = {"format": 1, "schema": SCHEMA, "at": now(), "source": store.control(),
+    manifest = {"format": 1, "schema": schema, "at": now(), "source": store.control(),
                 "seq": seq, "engine_commit": commit, "engine_dirty": dirty,
                 "data": inventory(data), "engine": inventory(destination / "engine")}
     write_json(destination / "manifest.json", manifest)
@@ -113,7 +114,7 @@ def verify_snapshot(snapshot):
     require((snapshot / "COMPLETE").read_text() == digest((snapshot / "manifest.json").read_bytes()),
             "Snapshot manifest checksum mismatch")
     manifest = read_json(snapshot / "manifest.json")
-    require(manifest["schema"] == SCHEMA and manifest["format"] == 1, "Unsupported snapshot format/schema")
+    require(manifest["schema"] in {1, SCHEMA} and manifest["format"] == 1, "Unsupported snapshot format/schema")
     require(inventory(snapshot / "data") == manifest["data"], "Snapshot data missing/changed")
     require(inventory(snapshot / "engine") == manifest["engine"], "Snapshot engine missing/changed")
     Store(snapshot / "data").verify()

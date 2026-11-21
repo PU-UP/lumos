@@ -9,6 +9,19 @@ from lumos_worker import codex_models, plan_with_codex, SCHEMA
 
 
 class WorkerTest(unittest.TestCase):
+    def test_lumos_decision_schema_can_decide_tasks_but_cannot_change_evidence(self):
+        def run(command, **kwargs):
+            schema = json.loads(Path(command[command.index('--output-schema')+1]).read_text())
+            kinds = {k for item in schema['properties']['updates']['items']['anyOf'] for k in item['properties']['kind']['enum']}
+            self.assertEqual(kinds, {'action', 'mainline', 'person'})
+            self.assertNotIn('maxItems', schema['properties']['questions'])
+            self.assertIn('decide 阶段', kwargs['input'])
+            Path(command[command.index('--output-last-message')+1]).write_text(json.dumps({
+                'summary': '决定', 'questions': [], 'updates': [], 'resolutions': [], 'delegate_to': [], 'search_query': ''}), encoding='utf-8')
+            return SimpleNamespace(returncode=0, stdout='')
+        with tempfile.TemporaryDirectory() as folder, patch('lumos_worker.executable', return_value='codex'), patch('lumos_worker.subprocess.run', side_effect=run):
+            plan_with_codex({'intake': {'data': {}}, 'agent': {'role': 'lumos', 'phase': 'decide'}}, Path(folder))
+
     def test_note_format_uses_astra_and_cannot_request_business_updates(self):
         def run(command, **kwargs):
             self.assertEqual(command[2:4], ['--model', 'gpt-6.2-astra'])

@@ -105,7 +105,7 @@ def list_intakes(store, workspace='lingguang'):
         nodes = store.nodes(db)
         jobs = [n for n in nodes.values() if n['kind'] == 'intake' and n['data']['workspace'] == workspace]
         jobs.sort(key=lambda n: n['data']['created_at'], reverse=True)
-        return {'intakes': [{**n, 'subjects': [{'id': i, 'title': nodes[i]['data'].get('title') or nodes[i]['data'].get('text', i)}
+        return {'intakes': [{**n, 'data': {**n['data'], 'agent_steps': [{k: v for k, v in s.items() if k != 'proposal'} for s in n['data'].get('agent_steps', [])]}, 'subjects': [{'id': i, 'title': nodes[i]['data'].get('title') or nodes[i]['data'].get('text', i)}
                     for i in n['data'].get('related_ids', []) if i in nodes], 'targets': [{'id': i, 'kind': nodes[i]['kind'],
                     'title': nodes[i]['data'].get('title') or nodes[i]['data'].get('text', i)}
                     for i in n['data'].get('destinations', []) if i in nodes]} for n in jobs], 'enabled': enabled(nodes, workspace)}
@@ -148,10 +148,25 @@ def save_intake(store, request):
                 return {'intake': nodes[node['id']], 'replayed': True}
         else:
             require(isinstance(request.get('text'), str) and request['text'].strip(), 'Progress text required')
+            chat_role = request.get('agent_role', 'lumos')
             if 'chat_id' in request:
+                require(isinstance(request['chat_id'], str) and re.fullmatch('[a-f0-9]{32}', request['chat_id']), 'Invalid chat ID')
+                conversation = nodes.get('chat-'+request['chat_id'])
+                if conversation:
+                    meta = conversation['data']
+                    require(meta['status'] == 'active', '此对话已结束或为混合历史，请新建对话')
+                    require(meta['workspace'] == request.get('workspace', 'lingguang'), '对话不属于当前空间')
+                    chat_role = meta['agent_role']
+                    require(request.get('agent_role', chat_role) == chat_role, '对话角色已固定，请新建对应角色的对话')
                 require(request.get('execution', 'automatic') == 'automatic', '网页对话需要自动执行')
                 turns = [n for n in nodes.values() if n['kind'] == 'intake' and n['data'].get('chat_id') == request['chat_id']]
                 require(all(n['data']['workspace'] == request.get('workspace', 'lingguang') for n in turns), '对话不属于当前空间')
+                roles = {role_for(n['data']) for n in turns}
+                require(len(roles) <= 1, '此历史对话包含多个角色，请新建对应角色的对话；原历史保留')
+                require(not conversation or not roles or roles == {chat_role}, '对话历史与固定角色不一致，请新建对话并保留原历史')
+                if roles:
+                    chat_role = next(iter(roles))
+                    require(request.get('agent_role', chat_role) == chat_role, '对话角色已固定，请新建对应角色的对话')
                 parents = {n['data'].get('chat_parent') for n in turns}
                 latest = next((n for n in turns if n['id'] not in parents), None)
                 require(request.get('chat_parent', '') == (latest['id'] if latest else ''), '对话已有新消息，请刷新后接续')
@@ -179,9 +194,19 @@ def save_intake(store, request):
             for field in ('chat_id', 'chat_parent', 'model', 'question_text', 'question_keys', 'task_review', 'agent_role', 'episode_ref'):
                 if field in request:
                     node['data'][field] = request[field]
+            if 'chat_id' in request:
+                node['data']['agent_role'] = chat_role
         node['data']['agent_role'] = role_for(node['data'])
         require(enabled(nodes, node['data']['workspace']), '尚未启用此空间的自主整理规则')
-        commit_tasks(store, nodes, {'reason': reason, 'updates': [node]}, node['id'])
+        updates = [node]
+        if node['data'].get('chat_id') and 'chat-'+node['data']['chat_id'] not in nodes:
+            with store.db() as db:
+                upgraded = db.execute('PRAGMA user_version').fetchone()[0] == 2
+            if upgraded:
+                from lumos_conversations import conversation_node
+                updates.append(conversation_node(node['data']['chat_id'], node['data']['agent_role'],
+                    node['data']['workspace'], node['data']['title']))
+        commit_tasks(store, nodes, {'reason': reason, 'updates': updates}, node['id'])
         return {'intake': node, 'replayed': False}
 
 
@@ -331,14 +356,20 @@ def intake_context(store, ident):
         from lumos_followup import followup_questions
         result = {'intake': job, 'text': text, 'today': today(), 'basis': context_basis(nodes, job['data']['workspace']),
                   'records': visible, 'open_questions': followup_questions(nodes, job['data']['workspace'], numbers)}
-        from lumos_agents import ROLES, role_for, diagnostics
+        from lumos_agents import ROLES, role_for, diagnostics, role_reports
         result['agent'] = {'role': role_for(job['data']), **ROLES[role_for(job['data'])]}
         result['diagnostics'] = diagnostics(nodes, job['data']['workspace'])
+        result['lumos_reports'] = role_reports(nodes, job['data']['workspace'], 'lumos')[:30]
+        result['ops_reports'] = role_reports(nodes, job['data']['workspace'], 'maintainer')[:30]
         if job['data'].get('episode_ref'):
             ref = nodes[job['data']['episode_ref']]
             result['episode'] = {'id': ref['id'], **{k: ref['data'][k] for k in
-                ('status', 'summary', 'error', 'agent_steps', 'destinations') if k in ref['data']}}
+                ('status', 'summary', 'error', 'destinations', 'lumos_report', 'ops_report') if k in ref['data']},
+                'agent_steps': [{k: v for k, v in s.items() if k != 'proposal'} for s in ref['data'].get('agent_steps', [])]}
         if job['data'].get('chat_id'):
+            conversation = nodes.get('chat-'+job['data']['chat_id'])
+            if conversation:
+                result['conversation'] = conversation
             history, parent = [], job['data'].get('chat_parent')
             visited = {job['id']}
             while parent:
@@ -377,6 +408,12 @@ def claim_intake(store, ident=None):
                 'revision': old['data']['revision']+1, 'updated_at': now()}}
         node['data']['agent_steps'] = [{**s, 'status': 'interrupted', 'finished_at': now()} if s['status'] == 'running' else s
                                       for s in old['data'].get('agent_steps', [])]
+        from lumos_agents import role_for
+        if role_for(node['data']) == 'maintainer' and node['data'].get('episode_ref'):
+            node['data']['episode_claim'] = nodes[node['data']['episode_ref']]['data'].get('claim', '')
+        if role_for(node['data']) in {'aipm', 'librarian'} and not node['data'].get('lumos_report'):
+            node['data']['lumos_report'] = {'from_role': role_for(node['data']), 'to_role': 'lumos',
+                'status': 'processing', 'at': now(), 'summary': '已接收：'+node['data']['title'], 'decision': None}
         commit_tasks(store, nodes, {'reason': 'claim intake', 'updates': [node]}, node['id'])
         return node
 
@@ -391,6 +428,13 @@ def fail_intake(store, ident, claim, error):
             return
         node = {**old, 'data': {**old['data'], 'status': 'failed', 'error': str(error)[:2000],
                 'revision': old['data']['revision']+1, 'updated_at': now()}}
+        from lumos_agents import role_for
+        prior = old['data'].get('ops_report', {})
+        node['data']['ops_report'] = {'from_role': role_for(old['data']), 'to_role': 'maintainer', 'report_to': '王牧楠',
+            'status': 'pending', 'at': now(), 'count': prior.get('count', 0)+1,
+            'summary': str(error)[:2000], 'claim': claim,
+            'impact': '本次处理未完成，原输入仍保留；没有应用本轮业务结果。',
+            'previous_diagnosis': prior.get('diagnosis', prior.get('previous_diagnosis', ''))}
         commit_tasks(store, nodes, {'reason': 'intake failed; no partial result applied', 'updates': [node]}, ident)
 
 
@@ -417,7 +461,7 @@ def apply_intake(store, request):
             if job.get('applied_hash') == plan_hash:
                 return {'intake': old, 'replayed': True}
             require(job['status'] == 'running' and job.get('claim') == request['claim'], '整理已换批次，请重新读取')
-            from lumos_agents import check_plan, role_for, diagnostics
+            from lumos_agents import check_plan, role_for, diagnostics, report_receipt, missing_followups
             role = role_for(job)
             if job.get('agent_steps'):
                 require(job.get('prepared_claim') == request['claim'] and job.get('prepared_plan') == fingerprint(plan),
@@ -427,6 +471,9 @@ def apply_intake(store, request):
                 if job.get('note_mode') == 'format':
                     require(not (plan['updates'] or plan['questions'] or resolutions), '笔记润色不能修改业务记录或提出主线问题')
                 check_plan(role, plan, coordinator=role == 'lumos')
+            report = report_receipt(job, plan, request['basis'])
+            if job.get('agent_steps') and report.get('lumos_report', {}).get('decision'):
+                require(not missing_followups(plan, nodes), 'Lumos 决策仍缺少下次关心时间，尚未保存')
             if 'findings' in plan:
                 actual = {f['key']: f for f in diagnostics(nodes, job['workspace'])}
                 require(role == 'maintainer' and isinstance(plan['findings'], list)
@@ -461,7 +508,7 @@ def apply_intake(store, request):
             validate_note(data)
             note = {**source_note, 'data': data}
             receipt = {**old, 'data': {**job, 'status': 'done', 'summary': plan['summary'], 'questions': [],
-                'destinations': [note['id']], 'applied_hash': plan_hash, 'revision': job['revision']+1, 'updated_at': now(), 'error': ''}}
+                'destinations': [note['id']], 'applied_hash': plan_hash, 'revision': job['revision']+1, 'updated_at': now(), 'error': '', **report}}
             commit_tasks(store, nodes, {'reason': 'reconcile:'+old['id']+':'+plan_hash, 'updates': [note, receipt]}, old['id'])
             return {'intake': receipt, 'replayed': False}
         require('note_format' not in plan, '只有笔记润色可以改写笔记正文')
@@ -614,7 +661,10 @@ def apply_intake(store, request):
         require(updates or plan['questions'] or job.get('chat_id') or full_review or role == 'maintainer', '不能把未承接的内容标为已整理')
         receipt = {**old, 'data': {**job, 'status': 'needs_review' if plan['questions'] else 'done',
                    'summary': plan['summary'], 'questions': plan['questions'], 'destinations': [n['id'] for n in updates],
-                   'applied_hash': plan_hash, 'revision': job['revision']+1, 'updated_at': now(), 'error': ''}}
+                   'applied_hash': plan_hash, 'revision': job['revision']+1, 'updated_at': now(), 'error': '', **report}}
+        if job.get('ops_report'):
+            receipt['data']['ops_report'] = {**job['ops_report'], 'status': 'recovered', 'recovered_at': now(),
+                'impact': '该次处理已成功接续；不代表底层故障已永久修复。'}
         if full_review:
             receipt['data'].update(task_reviews=plan['task_reviews'], completed_at=now())
         if job.get('chat_id'):
@@ -622,6 +672,17 @@ def apply_intake(store, request):
         if role == 'maintainer':
             require(not (updates or resolutions or plan['questions']), '仓库维护者不能修改业务记录')
             receipt['data']['findings'] = plan.get('findings', [])
+            target = nodes.get(job.get('episode_ref'))
+            if target and (target['data'].get('ops_report') or target['data']['status'] in {'failed', 'running'}):
+                require(target['data'].get('claim', '') == job.get('episode_claim', ''), '原执行已重新领取，需核对新故障后再诊断')
+                prior_report = target['data'].get('ops_report') or {'from_role': role_for(target['data']), 'to_role': 'maintainer',
+                    'report_to': '王牧楠', 'status': 'pending', 'at': target['data']['updated_at'], 'summary': target['data'].get('error', ''),
+                    'claim': target['data'].get('claim', '')}
+                updated = {**target, 'data': {**target['data'], 'ops_report': {**prior_report,
+                    'status': 'diagnosed' if prior_report['status'] != 'recovered' else 'recovered',
+                    'diagnosis': plan.get('reply', plan['summary']), 'diagnosis_episode': old['id'], 'diagnosed_at': now()},
+                    'revision': target['data']['revision']+1, 'updated_at': now()}}
+                updates.append(updated)
         updates.append(receipt)
         if source_note and (not plan['questions'] or job.get('note_mode') == 'archive'):
             data = {**source_note['data'], 'status': 'archived', 'archive_mode': 'lumos', 'archive_reason': plan['summary'][:1000]+'；去向：'+', '.join(receipt['data']['destinations'])[:900],
