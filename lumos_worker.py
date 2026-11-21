@@ -28,6 +28,14 @@ SCHEMA = {
                 'changes_json': {'type': 'string'}, 'reason': {'type': 'string'}, 'excerpt': {'type': 'string'},
                 'mode': {'type': 'string', 'enum': ['reported', 'planned']}}}}}}
 
+SCHEMA['required'].append('question_options')
+SCHEMA['properties']['question_options'] = {'type': 'array', 'maxItems': 5, 'items': {
+    'type': 'object', 'additionalProperties': False, 'required': ['index', 'options'], 'properties': {
+        'index': {'type': 'integer'}, 'options': {'type': 'array', 'minItems': 1, 'maxItems': 5, 'items': {
+            'type': 'object', 'additionalProperties': False, 'required': ['text', 'basis_ids'], 'properties': {
+                'text': {'type': 'string', 'maxLength': 160},
+                'basis_ids': {'type': 'array', 'minItems': 1, 'maxItems': 5, 'items': {'type': 'string'}}}}}}}}
+
 
 # Partial answers keep the same question identity and retain the answer history.
 _resolution = SCHEMA['properties']['resolutions']['items']
@@ -124,7 +132,7 @@ def plan_with_codex(context, root):
                     else:
                         response_schema['properties']['updates']['maxItems'] = 0
                     if role != 'aipm' and phase != 'decide':
-                        for field in ('questions', 'resolutions'):
+                        for field in ('questions', 'resolutions', 'question_options'):
                             response_schema['properties'][field]['maxItems'] = 0
         schema.write_text(json.dumps(response_schema), encoding='utf-8')
         formatting = context['intake']['data'].get('note_mode') == 'format'
@@ -226,11 +234,13 @@ def collaborate(store, job, context, planner):
             result = run(actor, 'retrieve', {'coordinator': first, 'specialists': results}, result['search_query'])
         results[actor] = result
         pending.extend(r for r in result.get('delegate_to', []) if r not in visited)
-    final = {k: copy.deepcopy(v) for k, v in first.items() if k not in {'delegate_to', 'search_query', 'updates', 'questions', 'resolutions'}}
-    final.update(updates=[], questions=[], resolutions=[])
+    final = {k: copy.deepcopy(v) for k, v in first.items() if k not in {'delegate_to', 'search_query', 'updates', 'questions', 'resolutions', 'question_options'}}
+    final.update(updates=[], questions=[], resolutions=[], question_options=[])
     if not results:
         return final
     for actor, result in results.items():
+        offset = len(final['questions'])
+        final['question_options'].extend({**g, 'index': g['index']+offset} for g in result.get('question_options', []))
         for field in ('updates', 'questions', 'resolutions'):
             final[field].extend(result.get(field, []))
         if 'task_reviews' in result:

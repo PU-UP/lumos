@@ -226,6 +226,39 @@ class AgentsTest(BaseStoreCase):
         job = self.create('lumos'); claim_intake(self.store, job['id'])
         self.assertIn(result['id'], [r['episode_id'] for r in intake_context(self.store, job['id'])['lumos_reports']])
 
+    def test_clarification_choices_follow_lumos_decision_and_partial_answer_keeps_identity(self):
+        from lumos_intake import list_intakes, open_questions
+        first = self.create('aipm')
+        def question(context, root):
+            options = [{'text': '属于模拟建图定位', 'basis_ids': ['mapping']},
+                       {'text': '属于模拟入职准备', 'basis_ids': ['prep']}]
+            if context['agent']['phase'] == 'decide':
+                options.reverse()
+            return self.plan(questions=['属于哪个项目，实际结果如何？'], question_options=[{'index': 0, 'options': options}])
+        done = run_once(self.store, question)['intake']
+        self.assertEqual(done['data']['question_options'][0]['options'][0]['text'], '属于模拟入职准备')
+        rows = list_intakes(lumos.Store(self.root))['intakes']
+        self.assertTrue(next(n for n in rows if n['id'] == first['id'])['question_options'][0]['options'][0]['available'])
+        key = 'question:'+first['id']+':0'
+        request = {'request_id': uuid.uuid4().hex, 'chat_id': first['data']['chat_id'], 'chat_parent': first['id'],
+                   'agent_role': 'aipm', 'text': '属于模拟建图定位', 'question_key': key, 'question_text': '属于哪个项目，实际结果如何？', 'source': self.source}
+        second = save_intake(self.store, request)['intake']
+        self.assertTrue(save_intake(self.store, request)['replayed'])
+        with self.store.db() as db:
+            self.assertEqual(len(open_questions(self.store.nodes(db), 'lingguang')), 1)
+        def answer(context, root):
+            self.assertEqual(context['intake']['data']['question_key'], key)
+            return self.plan(resolutions=[{'intake_id': first['id'], 'index': 0, 'answer': request['text'],
+                'excerpt': request['text'], 'state': 'pending', 'remaining': '实际结果如何？', 'review_on': '', 'waiting_for': ''}])
+        result = run_once(self.store, answer)['intake']
+        self.assertEqual(result['id'], second['id'])
+        with self.store.db() as db:
+            questions = open_questions(self.store.nodes(db), 'lingguang')
+        self.assertEqual([(q['intake_id'], q['index'], q['question']) for q in questions], [(first['id'], 0, '实际结果如何？')])
+        self.assertEqual(questions[0]['options'], [])
+        self.assertEqual(questions[0]['answers'][0]['source_intake'], second['id'])
+        self.assertEqual(questions[0]['answers'][0]['excerpt'], request['text'])
+
     def test_direct_specialist_and_tampered_prepared_decision_cannot_bypass_lumos(self):
         from lumos_agents import prepare_execution
         job = self.create('aipm'); claimed = claim_intake(self.store, job['id']); context = intake_context(self.store, job['id'])

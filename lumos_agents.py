@@ -31,6 +31,8 @@ def check_plan(role, plan, *, coordinator=False):
     require(len([i for i in plan['updates'] if isinstance(i, dict)]) == len(plan['updates']), 'Invalid agent update')
     allowed = {'action', 'mainline', 'person', 'evidence'} if coordinator else KINDS[role]
     require(kinds <= allowed, ROLES[role]['name']+'不能提交这些业务变更')
+    from lumos_followup import validate_question_options
+    validate_question_options(plan.get('question_options', []), plan.get('questions', []))
     if role != 'aipm' and not coordinator:
         require(not (plan.get('questions') or plan.get('resolutions') or plan.get('task_reviews')),
                 '主线问题与任务复核须由 AIPM 承接')
@@ -46,7 +48,7 @@ def check_plan(role, plan, *, coordinator=False):
 
 def business_plan(plan):
     """The exact task proposal decided by Lumos, excluding presentation and evidence."""
-    result = {k: copy.deepcopy(plan.get(k, [])) for k in ('questions', 'resolutions')}
+    result = {k: copy.deepcopy(plan.get(k, [])) for k in ('questions', 'resolutions', 'question_options')}
     result['updates'] = [copy.deepcopy(u) for u in plan.get('updates', []) if u.get('kind') != 'evidence']
     if 'task_reviews' in plan:
         result['task_reviews'] = copy.deepcopy(plan['task_reviews'])
@@ -78,7 +80,7 @@ def missing_followups(plan, records):
 def execution_hashes():
     return {'rules_hash': digest(b''.join((ENGINE/f).read_bytes() for f in
             ('docs/agent-roles.md', 'docs/agent-planner.md', 'docs/chat-planner.md', 'docs/task-review-planner.md', 'docs/note-format-planner.md'))),
-            'code_hash': digest(b''.join((ENGINE/f).read_bytes() for f in ('lumos_agents.py', 'lumos_worker.py', 'lumos_intake.py')))}
+            'code_hash': digest(b''.join((ENGINE/f).read_bytes() for f in ('lumos_agents.py', 'lumos_worker.py', 'lumos_intake.py', 'lumos_followup.py')))}
 
 
 def record_step(store, ident, claim, role, phase, basis='', *, attempt=None, plan=None, error=None, input_hash='', reused_from=''):

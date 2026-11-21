@@ -9,6 +9,27 @@ class Element{
   append(...v){this.children.push(...v);}replaceChildren(...v){this.children=v;}setAttribute(k,v){this[k]=v;}focus(){}
 }
 const descendants=n=>[n,...n.children.flatMap(descendants)];
+const choiceJob=()=>({id:'choice-job',question_options:[{index:0,options:[{text:'属于模拟建图定位',available:true},{text:'属于模拟入职准备',available:false}]}],
+  data:{chat_id:'a'.repeat(32),agent_role:'aipm',title:'确认归属',text:'准备资料',reply:'请确认归属。',status:'needs_review',questions:['这件事属于哪个项目？'],created_at:'2026-11-21T00:00:00Z'}});
+test('choosing an answer preserves prose, survives reload and submits the exact original question once',async()=>{
+  const job=choiceJob(),storage=new Map(),p=await page(storage,undefined,[job]);p.edit('补充原话，不要丢失');
+  const choices=descendants(p.get('messages')).filter(n=>n.className==='clarification-option');
+  assert.equal(choices[1].disabled,true);choices[0].onclick();assert.equal(p.posts.length,0);assert.equal(p.get('chat-text').value,'补充原话，不要丢失');
+  assert.equal(p.get('chat-text').required,false);
+  const q=await page(storage,p.world.window.location.href,[job]);await q.submit();
+  assert.equal(q.posts[0].text,'属于模拟建图定位\n\n补充原话，不要丢失');assert.equal(q.posts[0].question_key,'question:choice-job:0');
+  assert.equal(q.posts[0].question_text,job.data.questions[0]);assert.equal(q.posts[0].chat_parent,job.id);
+  assert.ok(descendants(q.get('messages')).some(n=>n.textContent==='答复已提交 · 正在接续'));
+  assert.ok(!descendants(q.get('messages')).some(n=>n.className==='clarification-option'));
+});
+test('choice-only answers can send, free input cancels the choice and resolved questions show no controls',async()=>{
+  const job=choiceJob(),p=await page(new Map(),undefined,[job]);
+  descendants(p.get('messages')).find(n=>n.className==='clarification-option').onclick();assert.equal(p.get('send-chat').disabled,false);
+  descendants(p.get('messages')).find(n=>n.textContent==='自由补充').onclick();assert.equal(p.get('send-chat').disabled,true);assert.equal(p.get('chat-text').required,true);
+  p.edit('不是这些项目，暂不创建任务');await p.submit();assert.equal(p.posts[0].text,'不是这些项目，暂不创建任务');
+  const resolved={...job,data:{...job.data,resolutions:[{index:0,state:'resolved'}]}};
+  const q=await page(new Map(),undefined,[resolved]);assert.ok(!descendants(q.get('messages')).some(n=>n.className==='clarification-option'||n.textContent==='自由补充'));
+});
 test('model preference persists per agent across new conversations, reload and explicit default',async()=>{
   const storage=new Map([['lumos.chat.model','test-model']]);
   const p=await page(storage,'http://127.0.0.1/chat?role=aipm');assert.equal(p.get('chat-model').value,'test-model');

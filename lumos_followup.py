@@ -3,6 +3,57 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from lumos_tasks import current_due
+from lumos import require
+
+
+def validate_question_options(groups, questions, *, pinned=False):
+    require(isinstance(groups, list) and len(groups) <= 5, '澄清选项最多对应五个问题')
+    indices = set()
+    for group in groups:
+        require(isinstance(group, dict) and set(group) == {'index', 'options'}, 'Invalid question options')
+        index, options = group['index'], group['options']
+        require(type(index) is int and 0 <= index < len(questions) and index not in indices, '澄清选项必须关联确切问题')
+        indices.add(index)
+        require(isinstance(options, list) and 1 <= len(options) <= 5, '每个问题提供一至五个有依据的选项')
+        texts = set()
+        for option in options:
+            require(isinstance(option, dict) and set(option) == ({'text', 'basis_ids', 'basis'} if pinned else {'text', 'basis_ids'}), 'Invalid question option')
+            text, refs = option['text'], option['basis_ids']
+            require(isinstance(text, str) and text.strip() and len(text) <= 160 and text not in texts, '选项须简短且不重复')
+            texts.add(text)
+            require(isinstance(refs, list) and 1 <= len(refs) <= 5 and all(isinstance(i, str) and i for i in refs)
+                    and len(set(refs)) == len(refs), '选项必须有确切来源')
+            if pinned:
+                require(isinstance(option['basis'], dict) and set(option['basis']) == set(refs)
+                        and all(isinstance(v, str) and re.fullmatch('[a-f0-9]{64}', v) for v in option['basis'].values()), 'Invalid option basis')
+
+
+def pin_question_options(groups, questions, nodes, workspace):
+    from lumos_intake import scoped_nodes, fingerprint
+    validate_question_options(groups, questions)
+    scope = scoped_nodes(nodes, workspace)
+    result = []
+    for group in groups:
+        options = []
+        for option in group['options']:
+            require(all(i in scope and scope[i]['kind'] in {'context', 'mainline', 'action', 'person', 'evidence', 'document'}
+                        and scope[i]['data'].get('status') not in {'archived', 'deleted', 'done', 'cancelled'} for i in option['basis_ids']),
+                    '澄清选项来源不存在、已结束或不属于当前资料范围')
+            options.append({**option, 'basis': {i: fingerprint(nodes[i]) for i in option['basis_ids']}})
+        result.append({'index': group['index'], 'options': options})
+    return result
+
+
+def current_question_options(data, nodes):
+    from lumos_intake import scoped_nodes, fingerprint
+    if data['status'] != 'needs_review' or not data.get('question_options'):
+        return []
+    scope = scoped_nodes(nodes, data['workspace'])
+    answered = {r['index'] for r in data.get('resolutions', [])}
+    # A partial answer changes the question; do not reuse choices for its old wording.
+    return [{'index': g['index'], 'options': [{'text': o['text'],
+             'available': all(i in scope and fingerprint(nodes[i]) == value for i, value in o['basis'].items())}
+             for o in g['options']]} for g in data.get('question_options', []) if g['index'] not in answered]
 
 
 def followup_questions(nodes, workspace, numbers):

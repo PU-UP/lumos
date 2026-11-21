@@ -17,6 +17,39 @@ from test_core import BaseStoreCase
 
 
 class IntakeTest(BaseStoreCase):
+    def test_question_choices_reject_invalid_sources_and_survive_source_changes_without_rewriting_history(self):
+        first = self.job()
+        options = [{'index': 0, 'options': [{'text': '讨论当前同步任务', 'basis_ids': ['talk']},
+                                         {'text': '讨论入职准备', 'basis_ids': ['prep']}]}]
+        first['plan'].update(questions=['想讨论哪件事？'], question_options=options)
+        for bad in ([{'index': 1, 'options': options[0]['options']}],
+                    [{'index': 0, 'options': [{'text': '不存在', 'basis_ids': ['missing']}]}],
+                    [{'index': 0, 'options': [{'text': '不能把授权记录当选项', 'basis_ids': [POLICY]}]}],
+                    [{'index': 0, 'options': [{'text': '无依据', 'basis_ids': []}]}]):
+            with self.assertRaises(lumos.Error):
+                apply_intake(self.store, {**first, 'plan': {**first['plan'], 'question_options': bad}})
+        saved = apply_intake(self.store, first)['intake']
+        self.assertTrue(list_intakes(self.store)['intakes'][0]['question_options'][0]['options'][0]['available'])
+        save_task(self.store, {'request_id': uuid.uuid4().hex, 'expected_seq': self.store.status()['seq'], 'id': 'talk',
+                              'changes': {'progress': '背景已改变'}, 'source': self.source})
+        row = next(n for n in list_intakes(self.store)['intakes'] if n['id'] == first['id'])
+        self.assertFalse(row['question_options'][0]['options'][0]['available'])
+        self.assertTrue(row['question_options'][0]['options'][1]['available'])
+        self.assertEqual(row['data']['question_options'], saved['data']['question_options'])
+        self.assertTrue(apply_intake(self.store, first)['replayed'])
+
+    def test_question_choice_cannot_reference_another_workspace(self):
+        first = self.job()
+        with self.store.db() as db:
+            context = self.store.nodes(db)['prep']
+        context['data']['workspace'] = 'lumos'
+        batch = self.store.begin({'reason': 'synthetic scope change', 'updates': [context]}, True)
+        self.store.commit(batch['batch'], True)
+        first['basis'] = intake_context(self.store, first['id'])['basis']
+        first['plan'].update(questions=['属于哪个项目？'], question_options=[{'index': 0, 'options': [{'text': '入职准备', 'basis_ids': ['prep']}]}])
+        with self.assertRaisesRegex(lumos.Error, '当前资料范围'):
+            apply_intake(self.store, first)
+
     def test_waiting_followup_is_atomic_bounded_and_preserves_business_history(self):
         self.enable_management()
         first = self.job(); first['plan']['questions'] = ['T-001 的阶段结果？']

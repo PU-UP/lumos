@@ -60,6 +60,8 @@ def validate_intake(data, nodes):
     model = data.get('model', '')
     require(isinstance(model, str) and (not model or re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,99}', model)), 'Invalid Codex model')
     require(isinstance(data.get('questions', []), list) and all(isinstance(q, str) and len(q) <= 2000 for q in data.get('questions', [])), 'Invalid questions')
+    from lumos_followup import validate_question_options
+    validate_question_options(data.get('question_options', []), data.get('questions', []), pinned=True)
     answers = data.get('resolutions', [])
     require(isinstance(answers, list), 'Invalid resolutions')
     indices = set()
@@ -100,12 +102,13 @@ def note_intake_status(nodes, note_id):
 
 
 def list_intakes(store, workspace='lingguang'):
+    from lumos_followup import current_question_options
     require(workspace in {'lingguang', 'lumos'}, 'Invalid workspace')
     with process_lock(store.root), store.db() as db:
         nodes = store.nodes(db)
         jobs = [n for n in nodes.values() if n['kind'] == 'intake' and n['data']['workspace'] == workspace]
         jobs.sort(key=lambda n: n['data']['created_at'], reverse=True)
-        return {'intakes': [{**n, 'data': {**n['data'], 'agent_steps': [{k: v for k, v in s.items() if k != 'proposal'} for s in n['data'].get('agent_steps', [])]}, 'subjects': [{'id': i, 'title': nodes[i]['data'].get('title') or nodes[i]['data'].get('text', i)}
+        return {'intakes': [{**n, 'question_options': current_question_options(n['data'], nodes), 'data': {**n['data'], 'agent_steps': [{k: v for k, v in s.items() if k != 'proposal'} for s in n['data'].get('agent_steps', [])]}, 'subjects': [{'id': i, 'title': nodes[i]['data'].get('title') or nodes[i]['data'].get('text', i)}
                     for i in n['data'].get('related_ids', []) if i in nodes], 'targets': [{'id': i, 'kind': nodes[i]['kind'],
                     'title': nodes[i]['data'].get('title') or nodes[i]['data'].get('text', i)}
                     for i in n['data'].get('destinations', []) if i in nodes]} for n in jobs], 'enabled': enabled(nodes, workspace)}
@@ -248,6 +251,7 @@ def validate_answer_state(answer):
 
 
 def open_questions(nodes, workspace):
+    from lumos_followup import current_question_options
     result = []
     for n in nodes.values():
         data = n['data']
@@ -261,6 +265,7 @@ def open_questions(nodes, workspace):
             original = next((r['previous'] for r in data.get('question_revisions', []) if r['index'] == index), question)
             result.append({'intake_id': n['id'], 'index': index,
                 'question': last.get('remaining') or question, 'original_question': original,
+                'options': next((g['options'] for g in current_question_options(data, nodes) if g['index'] == index), []),
                 'answer_state': last.get('state', ''), 'answers': answers,
                 'review_on': last.get('review_on', ''), 'waiting_for': last.get('waiting_for', ''),
                 'related_ids': list(dict.fromkeys(data.get('related_ids', []) + [r['id'] for r in data.get('task_reviews', []) if r['question'] == f'new:{index}'])),
@@ -442,7 +447,7 @@ def apply_intake(store, request):
     require(isinstance(request, dict) and set(request) == {'id', 'claim', 'basis', 'plan'}, 'Invalid reconciliation envelope')
     plan = request['plan']
     require(isinstance(plan, dict) and {'summary', 'questions', 'updates'} <= set(plan)
-            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions', 'reply', 'task_reviews', 'note_format', 'findings'}, 'Invalid reconciliation plan')
+            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions', 'reply', 'task_reviews', 'note_format', 'findings', 'question_options'}, 'Invalid reconciliation plan')
     require(isinstance(plan.get('reply', ''), str) and len(plan.get('reply', '')) <= 20000, 'Invalid chat reply')
     require(isinstance(plan['summary'], str) and 0 < len(plan['summary']) <= 4000, 'Receipt summary required')
     require(isinstance(plan['questions'], list) and all(isinstance(q, str) and 0 < len(q) <= 2000 for q in plan['questions']), 'Invalid questions')
@@ -460,6 +465,8 @@ def apply_intake(store, request):
             require(bool(plan.get('reply', '').strip()) if job.get('chat_id') else 'reply' not in plan, '对话需要答复；普通整理不能用答复代替承接')
             if job.get('applied_hash') == plan_hash:
                 return {'intake': old, 'replayed': True}
+            from lumos_followup import pin_question_options
+            options = pin_question_options(plan.get('question_options', []), plan['questions'], nodes, job['workspace'])
             require(job['status'] == 'running' and job.get('claim') == request['claim'], '整理已换批次，请重新读取')
             from lumos_agents import check_plan, role_for, diagnostics, report_receipt, missing_followups
             role = role_for(job)
@@ -661,7 +668,8 @@ def apply_intake(store, request):
         require(updates or plan['questions'] or job.get('chat_id') or full_review or role == 'maintainer', '不能把未承接的内容标为已整理')
         receipt = {**old, 'data': {**job, 'status': 'needs_review' if plan['questions'] else 'done',
                    'summary': plan['summary'], 'questions': plan['questions'], 'destinations': [n['id'] for n in updates],
-                   'applied_hash': plan_hash, 'revision': job['revision']+1, 'updated_at': now(), 'error': '', **report}}
+                   'applied_hash': plan_hash, 'revision': job['revision']+1, 'updated_at': now(), 'error': '',
+                   'question_options': options, **report}}
         if job.get('ops_report'):
             receipt['data']['ops_report'] = {**job['ops_report'], 'status': 'recovered', 'recovered_at': now(),
                 'impact': '该次处理已成功接续；不代表底层故障已永久修复。'}
