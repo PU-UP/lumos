@@ -17,6 +17,48 @@ from test_core import BaseStoreCase
 
 
 class IntakeTest(BaseStoreCase):
+    def test_existing_sources_archive_note_without_duplicate_updates_or_questions(self):
+        request = self.job(note=True)
+        request['plan']['source_refs'] = [{'id': 'talk', 'excerpt': '同步讨论已完成。'}]
+        before = task_detail(self.store, 'talk')['task']
+        for refs in ([{'id': 'missing', 'excerpt': '同步讨论已完成。'}],
+                     [{'id': POLICY, 'excerpt': '同步讨论已完成。'}],
+                     [{'id': 'talk', 'excerpt': '伪造本轮原话'}], None):
+            seq = self.store.status()['seq']
+            with self.assertRaises(lumos.Error):
+                apply_intake(self.store, {**request, 'plan': {**request['plan'], 'source_refs': refs}})
+            self.assertEqual(self.store.status()['seq'], seq)
+        result = apply_intake(self.store, request)['intake']['data']
+        self.assertEqual(result['status'], 'done')
+        self.assertEqual(result['destinations'], [])
+        self.assertEqual(len(result['source_refs'][0]['basis']), 64)
+        note = note_detail(self.store, result['note']['id'])['note']['data']
+        self.assertEqual(note['status'], 'archived')
+        self.assertIn('已有来源 talk', note['archive_reason'])
+        self.assertEqual(task_detail(self.store, 'talk')['task'], before)
+        self.assertTrue(apply_intake(self.store, request)['replayed'])
+        save_task(self.store, {'request_id': uuid.uuid4().hex, 'expected_seq': self.store.status()['seq'],
+            'id': 'talk', 'changes': {'progress': '后续改变不覆盖旧引用'}, 'source': self.source})
+        self.assertEqual(self.store.verify()['integrity'], 'ok')
+        self.assertEqual(intake_context(self.store, request['id'])['intake']['data']['source_refs'], result['source_refs'])
+
+    def test_existing_source_rejects_cross_workspace_and_questions_have_archive_destination(self):
+        request = self.job(note=True)
+        with self.store.db() as db:
+            nodes = self.store.nodes(db)
+            context, job = nodes['prep'], nodes[request['id']]
+        context['data']['workspace'] = 'lumos'
+        job['data']['note_mode'] = 'archive'
+        batch = self.store.begin({'reason': 'synthetic scope and explicit archive', 'updates': [context, job]}, True)
+        self.store.commit(batch['batch'], True)
+        request['basis'] = intake_context(self.store, request['id'])['basis']
+        request['plan']['source_refs'] = [{'id': 'prep', 'excerpt': '同步讨论已完成。'}]
+        with self.assertRaisesRegex(lumos.Error, '当前资料范围'):
+            apply_intake(self.store, request)
+        request['plan'].update(source_refs=[], questions=['哪项条件阻止下一步？'])
+        result = apply_intake(self.store, request)['intake']['data']
+        self.assertIn('待答问题 '+request['id'], note_detail(self.store, result['note']['id'])['note']['data']['archive_reason'])
+
     def test_question_choices_reject_invalid_sources_and_survive_source_changes_without_rewriting_history(self):
         first = self.job()
         options = [{'index': 0, 'options': [{'text': '讨论当前同步任务', 'basis_ids': ['talk']},
@@ -628,7 +670,10 @@ class IntakeTest(BaseStoreCase):
         plan['updates'] = [self.item()]
         with self.assertRaisesRegex(lumos.Error, '润色不能'):
             apply_intake(self.store, request)
-        plan['updates'] = []; apply_intake(self.store, request)
+        plan['updates'] = []; plan['source_refs'] = [{'id': 'talk', 'excerpt': raw}]
+        with self.assertRaisesRegex(lumos.Error, '润色不能'):
+            apply_intake(self.store, request)
+        plan.pop('source_refs'); apply_intake(self.store, request)
         self.assertTrue(apply_intake(self.store, request)['replayed'])
         detail = note_detail(self.store, ident)
         self.assertEqual(detail['note']['data']['status'], 'active')

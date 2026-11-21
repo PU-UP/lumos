@@ -25,6 +25,7 @@ window.LumosIntake = (() => {
           fold.append(el(modern?'h3':'summary',subject+(d.note_mode==='format'?' · 笔记自动整理':d.note_mode==='archive'?' · Lumos归档':d.review?' · 到期复核':'')+' · '+labels[d.status]+' · '+submitted));
           if(d.text&&!modern)fold.append(el('p',(d.review?'系统复核说明：':'我的反馈：')+d.text));
           if(d.summary)fold.append(el('p','Lumos 处理结果：'+d.summary));
+          for(const ref of d.source_refs||[])fold.append(el('p','已有来源承接：'+ref.title+'（已固定本轮引用）'));
           if(d.error)fold.append(el('p',d.error));
           for(const [index,q] of (d.questions||[]).entries()){
             const answer=(d.resolutions||[]).filter(r=>r.index===index).at(-1);
@@ -34,6 +35,7 @@ window.LumosIntake = (() => {
           const record=modern?window.LumosRoleUI.panel('来源与保存结果',fold):el('details','');if(!modern){record.append(el('summary','来源与处理去向'));window.LumosDisclosure.remember(record,key+':source');}
           if(d.note){const a=el('a','查看原笔记');a.href='/notes?id='+encodeURIComponent(d.note.id)+'&revision='+d.note.revision;record.append(a);}
           else record.append(el('p',d.text));
+          for(const ref of d.source_refs||[])record.append(el('p',ref.title+' · '+ref.id+'\n本轮原话：'+ref.excerpt));
           for(const target of job.targets||[]){const row=el('p','');if(['action','mainline'].includes(target.kind)){const a=el('a',target.title);a.href=target.kind==='action'?'/tasks?task='+encodeURIComponent(target.id):'/?line='+encodeURIComponent(target.id);row.append(a);}else row.textContent=target.title;record.append(row);}if(!modern)fold.append(record);
           if(d.status==='failed'){
             const retry=el('button','重新整理');

@@ -40,6 +40,10 @@ SCHEMA['properties']['material_reads'] = {'type': 'array', 'maxItems': 3, 'items
 SCHEMA['properties']['material_registrations'] = {'type': 'array', 'maxItems': 3, 'items': {
     'type': 'object', 'additionalProperties': False, 'required': ['path', 'context', 'sha256', 'excerpt', 'reason'],
     'properties': {k: {'type': 'string'} for k in ('path', 'context', 'sha256', 'excerpt', 'reason')}}}
+SCHEMA['required'].append('source_refs')
+SCHEMA['properties']['source_refs'] = {'type': 'array', 'maxItems': 20, 'items': {
+    'type': 'object', 'additionalProperties': False, 'required': ['id', 'excerpt'],
+    'properties': {k: {'type': 'string'} for k in ('id', 'excerpt')}}}
 
 
 # Partial answers keep the same question identity and retain the answer history.
@@ -122,7 +126,7 @@ def plan_with_codex(context, root):
                 response_schema['properties']['search_query'] = {'type': 'string'}
                 role, phase = agent['role'], agent.get('phase', 'work')
                 if role != 'librarian':
-                    for field in ('material_reads', 'material_registrations'):
+                    for field in ('material_reads', 'material_registrations', 'source_refs'):
                         response_schema['properties'][field]['maxItems'] = 0
                 allowed = {'aipm': {'action', 'mainline', 'person'}, 'librarian': {'evidence'}}.get(role, set())
                 if role == 'lumos' and phase == 'decide':
@@ -249,7 +253,7 @@ def collaborate(store, job, context, planner):
         first = run(role, 'retrieve', query=first.get('search_query', ''), paths=first.get('material_reads'))
     pending = list(first.get('delegate_to', []))
     if role == 'lumos':
-        if any(i['kind'] == 'evidence' for i in first['updates']):
+        if any(i['kind'] == 'evidence' for i in first['updates']) or first.get('source_refs'):
             pending.insert(0, 'librarian')
         if any(i['kind'] != 'evidence' for i in first['updates']) or first.get('questions') or first.get('resolutions'):
             pending.append('aipm')
@@ -266,14 +270,15 @@ def collaborate(store, job, context, planner):
             result = run(actor, 'retrieve', {'coordinator': first, 'specialists': results}, result.get('search_query', ''), result.get('material_reads'))
         results[actor] = result
         pending.extend(r for r in result.get('delegate_to', []) if r not in visited)
-    final = {k: copy.deepcopy(v) for k, v in first.items() if k not in {'delegate_to', 'search_query', 'updates', 'questions', 'resolutions', 'question_options', 'material_reads', 'material_registrations'}}
-    final.update(updates=[], questions=[], resolutions=[], question_options=[], material_registrations=[])
+    final = {k: copy.deepcopy(v) for k, v in first.items() if k not in {'delegate_to', 'search_query', 'updates', 'questions', 'resolutions', 'question_options', 'material_reads', 'material_registrations', 'source_refs'}}
+    final.update(updates=[], questions=[], resolutions=[], question_options=[], material_registrations=[], source_refs=[])
     if not results:
         return final
     for actor, result in results.items():
         offset = len(final['questions'])
         final['question_options'].extend({**g, 'index': g['index']+offset} for g in result.get('question_options', []))
         final['material_registrations'].extend(result.get('material_registrations', []))
+        final['source_refs'].extend(result.get('source_refs', []))
         for field in ('updates', 'questions', 'resolutions'):
             final[field].extend(result.get(field, []))
         if 'task_reviews' in result:

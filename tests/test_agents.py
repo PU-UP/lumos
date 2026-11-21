@@ -11,6 +11,26 @@ from test_core import BaseStoreCase
 
 
 class AgentsTest(BaseStoreCase):
+    def test_atlas_references_existing_source_without_business_decision_or_duplicate_record(self):
+        job = self.create('lumos')
+        before = task_detail(self.store, 'talk')['task']
+        def planner(context, root):
+            if context['agent']['phase'] == 'coordinate':
+                return self.plan(delegate_to=['librarian'])
+            if context['agent']['role'] == 'librarian':
+                return self.plan(source_refs=[{'id': 'talk', 'excerpt': '同步条件已核对'}])
+            return self.plan()
+        result = run_once(self.store, planner)['intake']['data']
+        self.assertEqual(result['status'], 'done')
+        self.assertEqual(result['source_refs'][0]['id'], 'talk')
+        self.assertEqual(result['destinations'], [])
+        self.assertNotIn('decide', [s['phase'] for s in result['agent_steps']])
+        self.assertEqual(task_detail(self.store, 'talk')['task'], before)
+        from lumos_agents import check_plan
+        for role in ('aipm', 'maintainer'):
+            with self.assertRaises(lumos.Error):
+                check_plan(role, self.plan(source_refs=[{'id': 'talk', 'excerpt': '同步条件已核对'}]))
+
     def test_diagnostics_separate_replaced_inputs_from_unresolved_current_failures(self):
         from lumos_agents import diagnostics
         def job(ident, status='failed', **extra):

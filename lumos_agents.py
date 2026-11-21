@@ -37,6 +37,9 @@ def check_plan(role, plan, *, coordinator=False):
     require(isinstance(reads, list) and len(reads) <= 3 and all(isinstance(p, str) and 0 < len(p) <= 1000 for p in reads), '每轮最多读取三份确切资料')
     require(isinstance(registrations, list) and len(registrations) <= 3, '每轮最多登记三份确切资料')
     require(not (reads or registrations) or role == 'librarian' or coordinator, '项目文件须交 Atlas 读取或登记')
+    refs = plan.get('source_refs', [])
+    require(isinstance(refs, list) and len(refs) <= 20, 'Invalid source references')
+    require(not refs or role == 'librarian' or coordinator, '已有来源须由 Atlas 核对')
     if role != 'aipm' and not coordinator:
         require(not (plan.get('questions') or plan.get('resolutions') or plan.get('task_reviews')),
                 '主线问题与任务复核须由 AIPM 承接')

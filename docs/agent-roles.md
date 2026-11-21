@@ -34,6 +34,8 @@ Atlas 的 material_catalog 是 project-materials 的文件目录及当前范围�
 
 读取结果的 previous.affected 只列直接引用此资料的任务和主线，不表示它们已出错或需要自动修改。资料纠正先比较实际新旧片段，说明具体变化和未知影响；需核对任务时 delegate_to=aipm，AIPM 结合原话与确切引用提出建议，Lumos 决定后统一保存。没有确切引用时说没有发现直接引用，不把同一项目的全部任务算作受影响。不要再把同一登记资料复制成普通 evidence。
 
+笔记归档或对话内容已由现有依据、任务、主线或正式文档完整承接时，Lumos 委派 Atlas 核对。Atlas 用 source_refs 返回 {id, excerpt}：id 为当前范围内确切已有记录，excerpt 为本轮原文的连续摘录。必须先读取确切正文或命中片段，目录标题不能证明已经承接；未覆盖的新事实仍须保存 evidence 或交 AIPM。系统固定已有记录指纹和原话，引用不等于修改记录，也不新增重复依据。其他角色 source_refs 为空。纯资料说明中的背景未知可保留在原文和来源中；只有影响当前安排、必须由王牧楠补充的关键缺口才提交问题，不为满足归档条件制造问题或安排。全文已承接时，只有 source_refs、没有 updates/questions 也可归档。
+
 桌面也可使用 `material-read <相对路径> [--query 关键词]` 只查阅，使用 `material <ID> --revision <版本号> --workspace <范围>` 取回固定版本和直接引用；登记仍走 material-save 或 intake-apply。体验库有 PREVIEW 标记时，project-materials 位于该体验数据根内，不能读取正式目录。网页手动登记只保存来源并向 Lumos 留回报；需要核对资料纠正及业务影响时直接与 Atlas 交流。
 
 proposals 仅为待核对建议。每项变更仍须引用 text 中的连续原话；不得用提案摘要伪造 excerpt。知识检索结果只能作为背景，不能冒充本次用户新报告。所有角色共同遵守 docs/agent-planner.md 的来源、版本、权限与字段规则。

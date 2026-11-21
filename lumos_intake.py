@@ -62,6 +62,12 @@ def validate_intake(data, nodes):
     require(isinstance(data.get('questions', []), list) and all(isinstance(q, str) and len(q) <= 2000 for q in data.get('questions', [])), 'Invalid questions')
     from lumos_followup import validate_question_options
     validate_question_options(data.get('question_options', []), data.get('questions', []), pinned=True)
+    refs = data.get('source_refs', [])
+    require(isinstance(refs, list) and len(refs) <= 20, 'Invalid source references')
+    for ref in refs:
+        require(isinstance(ref, dict) and set(ref) == {'id', 'excerpt', 'basis', 'title'}
+                and all(isinstance(v, str) and v for v in ref.values())
+                and len(ref['excerpt']) <= 20000 and re.fullmatch('[a-f0-9]{64}', ref['basis']), 'Invalid pinned source reference')
     answers = data.get('resolutions', [])
     require(isinstance(answers, list), 'Invalid resolutions')
     indices = set()
@@ -455,7 +461,7 @@ def apply_intake(store, request):
     require(isinstance(request, dict) and set(request) == {'id', 'claim', 'basis', 'plan'}, 'Invalid reconciliation envelope')
     plan = request['plan']
     require(isinstance(plan, dict) and {'summary', 'questions', 'updates'} <= set(plan)
-            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions', 'reply', 'task_reviews', 'note_format', 'findings', 'question_options', 'material_registrations'}, 'Invalid reconciliation plan')
+            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions', 'reply', 'task_reviews', 'note_format', 'findings', 'question_options', 'material_registrations', 'source_refs'}, 'Invalid reconciliation plan')
     require(isinstance(plan.get('reply', ''), str) and len(plan.get('reply', '')) <= 20000, 'Invalid chat reply')
     require(isinstance(plan['summary'], str) and 0 < len(plan['summary']) <= 4000, 'Receipt summary required')
     require(isinstance(plan['questions'], list) and all(isinstance(q, str) and 0 < len(q) <= 2000 for q in plan['questions']), 'Invalid questions')
@@ -508,7 +514,7 @@ def apply_intake(store, request):
         source = {'type': 'agent', 'ref': '自主整理 '+old['id'], 'intake_id': old['id'], 'authorization': POLICY,
                   'episode_id': old['id'], 'agent_role': role, 'operation_id': plan_hash}
         if job.get('note_mode') == 'format':
-            require(source_note and not (plan['updates'] or plan['questions'] or resolutions or plan.get('material_registrations')), '笔记润色不能修改业务记录或提出主线问题')
+            require(source_note and not (plan['updates'] or plan['questions'] or resolutions or plan.get('material_registrations') or plan.get('source_refs')), '笔记润色不能修改业务记录或提出主线问题')
             formatted = plan.get('note_format')
             require(isinstance(formatted, dict) and set(formatted) == {'title', 'body', 'related_ids'}, 'Invalid note formatting result')
             refs = formatted['related_ids']
@@ -528,6 +534,19 @@ def apply_intake(store, request):
             commit_tasks(store, nodes, {'reason': 'reconcile:'+old['id']+':'+plan_hash, 'updates': [note, receipt]}, old['id'])
             return {'intake': receipt, 'replayed': False}
         require('note_format' not in plan, '只有笔记润色可以改写笔记正文')
+        pinned_refs, scoped = [], scoped_nodes(nodes, job['workspace'])
+        source_refs = plan.get('source_refs', [])
+        require(isinstance(source_refs, list) and len(source_refs) <= 20, 'Invalid source references')
+        for ref in source_refs:
+            require(isinstance(ref, dict) and set(ref) == {'id', 'excerpt'}
+                    and all(isinstance(v, str) and v.strip() for v in ref.values())
+                    and 0 < len(ref['excerpt']) <= 20000 and ref['excerpt'] in text, '来源引用必须包含本轮连续原话')
+            target = scoped.get(ref['id'])
+            require(target and target['kind'] in {'evidence', 'action', 'mainline', 'document'}, '来源必须属于当前资料范围')
+            if job.get('agent_steps'):
+                require(any(s.get('role') == 'librarian' and s.get('claim') == request['claim']
+                            and ref in s.get('proposal', {}).get('source_refs', []) for s in job['agent_steps']), '来源引用缺少 Atlas 的确切候选')
+            pinned_refs.append({**ref, 'basis': fingerprint(target), 'title': (target['data'].get('title') or target['data'].get('text') or target['id'])[:300]})
         management = management_enabled(nodes, job['workspace'])
         full_review = job.get('task_review', False)
         require('task_reviews' not in plan or full_review, '只有全量复核才能提交逐任务回执')
@@ -698,11 +717,11 @@ def apply_intake(store, request):
         if full_review:
             from lumos_task_review import complete_task_review
             complete_task_review(nodes, updates, old, plan.get('task_reviews'), plan['questions'], open_questions(nodes, job['workspace']), today())
-        require(updates or plan['questions'] or job.get('chat_id') or full_review or role == 'maintainer', '不能把未承接的内容标为已整理')
+        require(updates or pinned_refs or plan['questions'] or job.get('chat_id') or full_review or role == 'maintainer', '不能把未承接的内容标为已整理')
         receipt = {**old, 'data': {**job, 'status': 'needs_review' if plan['questions'] else 'done',
                    'summary': plan['summary'], 'questions': plan['questions'], 'destinations': [n['id'] for n in updates],
                    'applied_hash': plan_hash, 'revision': job['revision']+1, 'updated_at': now(), 'error': '',
-                   'question_options': options, **report}}
+                   'question_options': options, 'source_refs': pinned_refs, **report}}
         if job.get('ops_report'):
             receipt['data']['ops_report'] = {**job['ops_report'], 'status': 'recovered', 'recovered_at': now(),
                 'impact': '该次处理已成功接续；不代表底层故障已永久修复。'}
@@ -726,7 +745,10 @@ def apply_intake(store, request):
                 updates.append(updated)
         updates.append(receipt)
         if source_note and (not plan['questions'] or job.get('note_mode') == 'archive'):
-            data = {**source_note['data'], 'status': 'archived', 'archive_mode': 'lumos', 'archive_reason': plan['summary'][:1000]+'；去向：'+', '.join(receipt['data']['destinations'])[:900],
+            destinations = receipt['data']['destinations'] + ['已有来源 '+r['id'] for r in pinned_refs]
+            if plan['questions']:
+                destinations.append('待答问题 '+old['id'])
+            data = {**source_note['data'], 'status': 'archived', 'archive_mode': 'lumos', 'archive_reason': plan['summary'][:1000]+'；去向：'+', '.join(destinations)[:900],
                     'revision': source_note['data']['revision']+1, 'checkpoint': False, 'updated_at': now(), 'source': source}
             updates.append({**source_note, 'data': data})
         from lumos_followup import synchronize_followups
