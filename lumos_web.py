@@ -104,7 +104,7 @@ def make_server(store, port=8765):
                     self.reply(200, note_detail(store, query.get("id", [""])[0], int(revision) if revision else None))
                 elif path.path == "/api/health":
                     self.reply(200, {"app": "lumos", "root": str(store.root), 'preview': (store.root/'PREVIEW').is_file(), 'role_spaces': True})
-                elif path.path in {'/role-navigation.js', '/role-navigation.css', '/role-chat.js', '/role-reports.js', '/role-reports.css', '/role-knowledge.js', '/role-knowledge.css'}:
+                elif path.path in {'/role-navigation.js', '/role-navigation.css', '/role-chat.js', '/role-reports.js', '/role-reports.css', '/role-knowledge.js', '/role-knowledge.css', '/role-ui.js', '/role-ui.css'}:
                     name = path.path[1:]
                     self.reply(200, (ENGINE/'web'/name).read_bytes(),
                                ('text/javascript' if name.endswith('.js') else 'text/css')+'; charset=utf-8')
@@ -128,6 +128,9 @@ def make_server(store, port=8765):
                     raw = (ENGINE / 'web' / name).read_bytes()
                     if name.endswith('.html'):
                         raw = raw.replace(b'/navigation.js', b'/role-navigation.js').replace(b'/navigation.css', b'/role-navigation.css')
+                        if name in {'overview.html', 'index.html', 'notes.html', 'people.html'}:
+                            raw = raw.replace(b'<script src="/role-navigation.js" defer></script>', b'<script src="/role-navigation.js" defer></script><script src="/role-ui.js" defer></script>')
+                            raw = raw.replace(b'</head>', b'<link rel="stylesheet" href="/role-ui.css"></head>')
                     self.reply(200, raw, content_type + "; charset=utf-8")
                 else:
                     self.reply(404, {"error": "Not found"})

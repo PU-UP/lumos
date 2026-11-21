@@ -710,6 +710,7 @@ function restoreTaskDraft() {
 }
 
 function disclosure(title, parent) {
+  if(window.LumosRoleUI)return window.LumosRoleUI.panel(title,parent);
   const node = element('details', undefined, 'detail-fold');
   node.append(element('summary', title));
   parent.append(node);
@@ -862,7 +863,7 @@ function renderTask(data) {
   for (const [key, title] of [['progress', '当前摘要'], ['next_step', '下一步'], ['details', '背景与详细内容'], ['condition', '怎样算完成']]) {
     if (!data[key]) continue;
     const longProgress = key === 'progress' && data[key].length > 300;
-    const folded = key === 'details' || key === 'condition' || longProgress;
+    const folded = !window.LumosRoleUI && (key === 'details' || key === 'condition' || longProgress);
     const section = element(folded ? 'details' : 'section', undefined, 'task-section');
     section.append(element(folded ? 'summary' : 'h3', longProgress ? '详细进展（待整理为当前摘要）' : title));
     renderDocument(data[key], section);
@@ -884,6 +885,7 @@ async function openTask(id = null) {
     $('close').textContent = '关闭';
     form.reset();
     const workspace = detail ? workspaceOf(detail.task.data.context) : $('workspace').value;
+    if(window.LumosRoleUI&&workspace!==$('workspace').value){window.LumosRoleUI.scope(workspace);render();}
     draftKey='lumos.task-draft.v1.'+(id || 'new.'+workspace);
     setTaskWorkspace(workspace, detail?.task.data.context);
     const data = detail?.task.data || {context: form.elements.namedItem('context').value,

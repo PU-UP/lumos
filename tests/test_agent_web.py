@@ -13,10 +13,15 @@ class AgentWebTest(BaseStoreCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
         base = 'http://127.0.0.1:'+str(server.server_port)
         try:
-            for page in ('agents', 'knowledge', 'agents.js', 'knowledge.js', 'navigation.js', 'navigation.css'):
+            for page in ('agents', 'knowledge', 'agents.js', 'knowledge.js', 'navigation.js', 'navigation.css', 'role-ui.js', 'role-ui.css'):
                 with urlopen(base+'/'+page) as response:
                     self.assertEqual(response.status, 200)
                     self.assertIn("frame-ancestors 'none'", response.headers['Content-Security-Policy'])
+            for page in ('', 'tasks', 'notes', 'people'):
+                with urlopen(base+'/'+page) as response:
+                    html=response.read().decode()
+                    self.assertIn('src="/role-ui.js"', html)
+                    self.assertLess(html.index('src="/role-ui.js"'), html.index('src="/'+('overview' if not page else 'board' if page=='tasks' else page)+'.js"'))
             with urlopen(base+'/api/knowledge?query=%E6%A0%87%E5%AE%9A') as response:
                 result = json.load(response)
                 self.assertEqual(result['total'], 2)

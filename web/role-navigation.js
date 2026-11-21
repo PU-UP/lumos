@@ -11,6 +11,7 @@ function pageRole(url){return roleSpaces[url.searchParams.get('role')]?url.searc
 if(typeof module!=='undefined')module.exports={roleSpaces,pageRole};
 if(typeof document!=='undefined'){
   const url=new URL(location.href),role=pageRole(url),info=roleSpaces[role],space=url.searchParams.get('workspace')==='lumos'?'lumos':'lingguang';
+  url.searchParams.set('workspace',space);history.replaceState(null,'',url);
   const el=(tag,text)=>{const e=document.createElement(tag);if(text)e.textContent=text;return e;};
   const target=(path,r)=>{const u=new URL(path,location.href);u.searchParams.set('role',r);u.searchParams.set('workspace',space);return u.pathname+u.search;};
   const nav=document.querySelector('.view-nav');nav.replaceChildren();nav.setAttribute('aria-label','四个助手');
@@ -19,7 +20,9 @@ if(typeof document!=='undefined'){
   for(const [name,path] of info.links){const a=el('a',name);a.href=target(path,role);const u=new URL(a.href,location.href);if(u.pathname===url.pathname&&u.searchParams.get('materials')===url.searchParams.get('materials')&&u.searchParams.get('view')===url.searchParams.get('view'))a.setAttribute('aria-current','page');local.append(a);}
   nav.after(local);
   const picker=document.querySelector('#workspace, #note-workspace, #chat-workspace');
-  if(picker){picker.value=space;const label=picker.closest('label');if(url.pathname==='/chat')label.hidden=true;else{label.classList.add('role-scope');local.append(label);}}
+  const scopeCaption=el('span','资料范围：'+(space==='lumos'?'Lumos 仓库维护':'灵光'));scopeCaption.className='role-scope-text';
+  if(picker){picker.value=space;picker.closest('label').hidden=true;if(url.pathname!=='/chat')local.append(scopeCaption);}
+  window.addEventListener('lumos-scope',e=>{if(!['lingguang','lumos'].includes(e.detail))return;picker.value=e.detail;scopeCaption.textContent='资料范围：'+(e.detail==='lumos'?'Lumos 仓库维护':'灵光');const current=new URL(location.href);current.searchParams.set('workspace',e.detail);history.replaceState(null,'',current);for(const a of document.querySelectorAll('.view-nav a,.role-tools a')){const u=new URL(a.href,location.href);u.searchParams.set('workspace',e.detail);a.href=u.pathname+u.search;}});
   const header=document.querySelector('header');
   for(const n of document.querySelectorAll('.section-links'))n.hidden=true;
   const divider=header.querySelector('.divider');if(divider){divider.nextElementSibling?.remove();divider.remove();}

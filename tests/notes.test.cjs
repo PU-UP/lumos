@@ -32,6 +32,14 @@ function edit(p,text){p.get('note-body').value=text;p.get('note-body').events.in
 async function confirmAction(p,id,confirm){const action=p.get(id).onclick();await tick();assert.equal(p.get('note-confirm').open,true);p.get('note-confirm').close(confirm?'confirm':'cancel');await action;}
 function saved(req){return {note:{id:req.id,kind:'note',data:{...req.changes,...(req.operation==='archive'?{status:'archived',archive_reason:'普通归档'}:req.operation==='delete'?{status:'deleted'}:{}),recording:['finish','archive','delete'].includes(req.operation)?'finished':req.operation==='edit'?'editing':req.recording || 'editing',revision:req.expected_revision+1}}};}
 
+test('role note history selects the exact version without folded rows or rewriting the editor',async()=>{
+ const p=await page();p.world.window.LumosRoleUI={scope(){}};p.get('note-body').value='当前未保存原话';
+ const history=[{at:'2026-11-21',data:{revision:2,title:'新版本',body:'新正文',source:{type:'agent',ref:'整理'}}},{at:'2026-11-20',data:{revision:1,title:'原稿',body:'<script>原文</script>',source:{type:'user',ref:'原话'}}}];
+ p.world.renderHistory({tasks:[],history});const host=p.get('history-content'),select=host.children[0].children[0],body=host.children[1];
+ select.value='1';select.onchange();assert.equal(body.children.at(-1).textContent,'原稿\n<script>原文</script>');assert.equal(p.get('note-body').value,'当前未保存原话');
+ p.world.renderHistory({tasks:[],history:[]});assert.match(p.get('history-content').children[0].textContent,/尚无旧版本/);
+});
+
 test('archived note edits, autosaves and finishes without restoring or losing its reason',async()=>{
  const p=await page();let latest={id:'note-archived',data:{title:'归档笔记',body:'错名',date:'2026-11-09',workspace:'lingguang',status:'archived',archive_reason:'已整理',recording:'finished',revision:3}};
  const requests=[];

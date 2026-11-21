@@ -203,6 +203,7 @@ if (typeof document !== 'undefined') {
     return link;
   }
   function fold(title, parent, key='', initiallyOpen=false) {
+    if(window.LumosRoleUI){const necessary=initiallyOpen||/^(risk:|schedule:|questions:rest|delivery:past)|:tasks$/.test(key);return window.LumosRoleUI[necessary?'section':'panel'](title,parent);}
     const d=el('details');
     if(key)window.LumosDisclosure.remember(d,'overview:'+$('workspace').value+':'+key,initiallyOpen);
     d.append(el('summary',title));parent.append(d);return d;
@@ -306,6 +307,8 @@ if (typeof document !== 'undefined') {
     try {
       const detail=await read('/api/mainline?id='+encodeURIComponent(id));if(request!==detailRequest || !dialog.open)return;
       const d=detail.mainline.data;body.replaceChildren();
+      const scope=state.contexts.find(c=>c.id===d.context)?.data.workspace||(d.context==='lumos-maintenance'?'lumos':'lingguang');
+      if(window.LumosRoleUI&&scope!==$('workspace').value){window.LumosRoleUI.scope(scope);render();}
       if(d.priority)body.append(el('p',`优先级 ${d.priority}${d.priority_basis==='agent'?' · Lumos安排':''}${d.priority_reason?'：'+d.priority_reason:''}`));
       body.append(el('h3','目标'),el('p',d.goal),el('h3','当前结论'),el('p',d.summary),el('p','摘要依据 '+(d.as_of||'日期未记录'),'muted'),reviewControl(detail.mainline));
       const live=detail.tasks.filter(t=>!['archived','retained'].includes(t.context_status));

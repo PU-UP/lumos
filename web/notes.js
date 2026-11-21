@@ -81,6 +81,7 @@ function controls() {
   $('save-note').disabled ||= transitioning || deleted;
 }
 function fill(data) {
+  if(window.LumosRoleUI)window.LumosRoleUI.scope(current.data.workspace);
   remote = null; $('conflict').hidden = true;
   $('note-related').replaceChildren();
   for (const [k,id] of Object.entries(fieldIds)) $(id).value = data[k] || '';
@@ -114,6 +115,12 @@ function renderHistory(detail) {
   for(const ref of detail.suggestions||[]){const a=node('a',ref.title);a.href=ref.kind==='action'?'/tasks?task='+encodeURIComponent(ref.id):'/?line='+encodeURIComponent(ref.id);const row=node('p','相关'+(ref.kind==='action'?'任务：':'主线：'));row.append(a);$('note-related').append(row);}
   $('history-content').replaceChildren();
   for (const t of detail.tasks) $('history-content').append(node('p', '关联任务：' + t.title));
+  if(window.LumosRoleUI){
+    if(!detail.history.length){$('history-content').append(node('p','尚无旧版本；当前内容保留在笔记正文中。'));return;}
+    const label=node('label','选择历史版本'),select=node('select'),body=node('article');select.id='note-version-picker';label.append(select);$('history-content').append(label,body);
+    for(const [index,h] of detail.history.entries()){const option=node('option','修订 '+h.data.revision+' · '+new Date(h.at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})+' · '+(h.data.source.type==='agent'?'自动整理':'原始记录'));option.value=String(index);select.append(option);}
+    const show=()=>{const h=detail.history[Number(select.value)];body.replaceChildren();if(h)body.append(node('p',h.data.source.ref),node('p',h.data.archive_reason||''),node('pre',h.data.title+'\n'+h.data.body));};select.onchange=show;show();return;
+  }
   for (const h of detail.history) {
     const fold = document.createElement('details');
     fold.append(node('summary', (h.data.checkpoint === undefined ? '已有历史 · 修订 ' + h.data.revision : h.data.source.type === 'agent' ? 'Lumos润色' : '原始记录') + ' · ' + new Date(h.at).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai'}) + ' · ' + (h.data.source.type === 'agent' ? 'Agent' : '用户/来源')),
@@ -125,7 +132,7 @@ async function openNote(id, revision) {
   const detail = await api('/api/note?' + new URLSearchParams({id, ...(revision ? {revision} : {})}));
   current=detail.note; dirty=false; pending=null; paused=false; historical=!!revision;
   message(); fill(current.data); renderHistory(detail);
-  history.replaceState(null,'','/notes?id=' + encodeURIComponent(id) + (revision ? '&revision='+revision : ''));
+  history.replaceState(null,'','/notes?id=' + encodeURIComponent(id) + (revision ? '&revision='+revision : '')+(window.LumosRoleUI?'&workspace='+current.data.workspace:''));
 }
 async function navigate(action) {
   if (navigating) return;
