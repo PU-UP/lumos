@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import zipfile
+import tempfile
 from xml.etree import ElementTree
 from html.parser import HTMLParser
 
@@ -66,19 +67,80 @@ def extracted(path, suffix=None):
     return '', '暂不解析此格式，仅登记原件'
 
 
-def material_files():
-    if not MATERIAL_ROOT.exists():
+def material_root(store=None):
+    return store.root/'project-materials' if store and (store.root/'PREVIEW').is_file() else MATERIAL_ROOT
+
+
+def material_files(store=None):
+    root = material_root(store)
+    if not root.exists():
         return []
-    require(not MATERIAL_ROOT.is_symlink() and not MATERIAL_ROOT.is_junction(), '资料目录不能是链接')
+    require(not root.is_symlink() and not root.is_junction(), '资料目录不能是链接')
     files = []
-    for folder, dirs, names in os.walk(MATERIAL_ROOT, followlinks=False):
+    for folder, dirs, names in os.walk(root, followlinks=False):
         for name in dirs + names:
-            rel = (Path(folder)/name).relative_to(MATERIAL_ROOT).as_posix()
-            path = safe_path(MATERIAL_ROOT, rel)
+            rel = (Path(folder)/name).relative_to(root).as_posix()
+            path = safe_path(root, rel)
             if path.is_file():
                 files.append({'path': rel, 'size': path.stat().st_size})
                 require(len(files) <= 2000, '资料超过2000份，请先缩小 project-materials 范围')
     return sorted(files, key=lambda f: f['path'])
+
+
+def material_bytes(store, relative):
+    root = material_root(store)
+    require(not root.is_symlink() and not root.is_junction(), '资料目录不能是链接')
+    path = safe_path(root, relative)
+    require(path.is_file() and path.stat().st_size <= MAX_BYTES, '资料不存在或超过20MB')
+    raw = path.read_bytes()
+    require(len(raw) <= MAX_BYTES, '资料超过20MB')
+    return path, raw
+
+
+def read_material(store, relative, query=''):
+    path, raw = material_bytes(store, relative)
+    cache = store.root/'cache'/'material-read'; cache.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=cache) as folder:
+        copied = Path(folder)/('source'+path.suffix.lower()); copied.write_bytes(raw)
+        text, state = extracted(copied)
+    index = text.casefold().find(query.casefold().split()[0]) if query.strip() else 0
+    start = max(0, index-100)
+    return {'path': path.relative_to(material_root(store)).as_posix(), 'sha256': digest(raw), 'size': len(raw),
+            'extraction': state, 'excerpt': text[start:start+10000], 'truncated': len(text) > 10000,
+            'operation': 'read_only'}
+
+
+def material_catalog(store, workspace='lingguang'):
+    require(workspace in {'lingguang', 'lumos'}, 'Invalid workspace')
+    with store.db() as db:
+        nodes = store.nodes(db)
+    saved = [n for n in nodes.values() if n['kind'] == 'evidence' and n['data'].get('material')
+             and context_workspace(nodes[n['data']['context']]) == workspace
+             and nodes[n['data']['context']]['data'].get('status', 'active') in {'active', 'waiting'}]
+    return [{**f, 'registrations': [{'id': n['id'], 'context': n['data']['context'], 'revision': n['data']['revision'],
+              'extraction': n['data']['material']['extraction'], 'has_text': bool(n['data'].get('text'))}
+              for n in saved if n['data']['material']['path'] == f['path']]} for f in material_files(store)]
+
+
+def prepare_material(store, nodes, request, expected_sha=None):
+    context = nodes.get(request['context'], {})
+    require(context.get('kind') == 'context' and context['data'].get('status', 'active') in {'active', 'waiting'}, '需要当前脉络承接资料')
+    path, raw = material_bytes(store, request['path'])
+    sha = digest(raw)
+    require(expected_sha is None or sha == expected_sha, '资料文件已变化，请重新读取后登记；未保存旧结果')
+    rel = 'sources/materials/'+sha+path.suffix.lower()
+    target = safe_path(store.root, rel)
+    if target.exists():
+        require(digest(target.read_bytes()) == sha, '已保存的资料版本损坏')
+    else:
+        atomic(target, raw)
+    text, state = extracted(target)
+    canonical = path.relative_to(material_root(store)).as_posix()
+    ident = 'material-'+digest((request['context']+'\n'+(canonical.casefold() if os.name == 'nt' else canonical)).encode())[:32]
+    old = nodes.get(ident, {}).get('data', {})
+    return {'id': ident, 'kind': 'evidence', 'data': {'context': request['context'], 'title': path.name,
+        'text': text, 'source': request['source'], 'material': {'path': canonical, 'version': rel,
+            'sha256': sha, 'size': len(raw), 'extraction': state}, 'revision': old.get('revision', 0)+1, 'updated_at': now()}}
 
 
 def register_material(store, request):
@@ -93,29 +155,39 @@ def register_material(store, request):
                 require(replay[0] == reason, 'Request ID reused with different content')
                 return {'material': json.loads(replay[1])['request']['updates'][0], 'replayed': True}
             nodes = store.nodes(db)
-        context = nodes.get(request['context'], {})
-        require(context.get('kind') == 'context' and context['data'].get('status', 'active') in {'active', 'waiting'}, '需要当前脉络承接资料')
-        require(not MATERIAL_ROOT.is_symlink() and not MATERIAL_ROOT.is_junction(), '资料目录不能是链接')
-        path = safe_path(MATERIAL_ROOT, request['path'])
-        require(path.is_file() and path.stat().st_size <= MAX_BYTES, '资料不存在或超过20MB')
-        raw = path.read_bytes()
-        require(len(raw) <= MAX_BYTES, '资料超过20MB')
-        sha = digest(raw)
-        rel = 'sources/materials/'+sha+path.suffix.lower()
-        target = safe_path(store.root, rel)
-        if target.exists():
-            require(digest(target.read_bytes()) == sha, '已保存的资料版本损坏')
-        else:
-            atomic(target, raw)
-        text, state = extracted(target)
-        canonical = path.relative_to(MATERIAL_ROOT).as_posix()
-        ident = 'material-'+digest((request['context']+'\n'+(canonical.casefold() if os.name == 'nt' else canonical)).encode())[:32]
-        old = nodes.get(ident, {}).get('data', {})
-        node = {'id': ident, 'kind': 'evidence', 'data': {'context': request['context'], 'title': path.name,
-            'text': text, 'source': request['source'], 'material': {'path': request['path'], 'version': rel,
-                'sha256': sha, 'size': len(raw), 'extraction': state}, 'revision': old.get('revision', 0)+1, 'updated_at': now()}}
-        commit_tasks(store, nodes, {'reason': reason, 'updates': [node]}, ident)
+        node = prepare_material(store, nodes, request)
+        workspace = context_workspace(nodes[node['data']['context']])
+        summary = '已登记 '+node['data']['material']['path']+'；'+node['data']['material']['extraction']+'。未修改任务；资料编号：'+node['id']
+        receipt = {'id': 'intake-material-'+request['request_id'], 'kind': 'intake', 'data': {
+            'title': '资料登记 · '+node['data']['title'], 'workspace': workspace, 'agent_role': 'librarian',
+            'status': 'done', 'revision': 1, 'created_at': now(), 'updated_at': now(), 'source': request['source'],
+            'text': '登记文件 '+request['path']+' 到 '+request['context'], 'summary': summary, 'questions': [], 'destinations': [node['id']],
+            'lumos_report': {'from_role': 'librarian', 'to_role': 'lumos', 'status': 'received', 'at': now(), 'summary': summary, 'decision': None}}}
+        commit_tasks(store, nodes, {'reason': reason, 'updates': [node, receipt]}, node['id'])
         return {'material': node, 'replayed': False}
+
+
+def material_detail(store, ident, workspace='lingguang', revision=None):
+    with process_lock(store.root), store.db() as db:
+        nodes = store.nodes(db); current = nodes.get(ident, {})
+        require(current.get('kind') == 'evidence' and current['data'].get('material')
+                and context_workspace(nodes[current['data']['context']]) == workspace, '资料不属于当前范围')
+        versions = {current['data']['revision']: current}
+        for before, after in db.execute('SELECT before,after FROM history WHERE node=?', (ident,)):
+            for raw in (before, after):
+                n = json.loads(raw)
+                if n and n['data'].get('material'):
+                    versions[n['data']['revision']] = n
+        chosen = versions.get(revision or current['data']['revision'])
+        require(chosen, '资料版本不存在')
+        file = safe_path(store.root, chosen['data']['material']['version'])
+        require(digest(file.read_bytes()) == chosen['data']['material']['sha256'], '资料固定版本损坏')
+        linked = {b if a == ident else a for a, b, _ in db.execute('SELECT src,dst,relation FROM links WHERE src=? OR dst=?', (ident, ident))}
+        linked.update(n['id'] for n in nodes.values() if n['kind'] == 'mainline' and ident in n['data'].get('source_ids', []))
+        affected = [nodes[i] for i in sorted(linked) if i in nodes and nodes[i]['kind'] in {'action', 'mainline'}
+                    and context_workspace(nodes[nodes[i]['data']['context']]) == workspace]
+        return {'material': chosen, 'versions': [{'revision': r, 'at': n['data']['updated_at'], 'sha256': n['data']['material']['sha256']}
+                                               for r, n in sorted(versions.items(), reverse=True)], 'affected': affected}
 
 
 def search_knowledge(store, workspace='lingguang', query='', archived=False):

@@ -447,7 +447,7 @@ def apply_intake(store, request):
     require(isinstance(request, dict) and set(request) == {'id', 'claim', 'basis', 'plan'}, 'Invalid reconciliation envelope')
     plan = request['plan']
     require(isinstance(plan, dict) and {'summary', 'questions', 'updates'} <= set(plan)
-            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions', 'reply', 'task_reviews', 'note_format', 'findings', 'question_options'}, 'Invalid reconciliation plan')
+            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions', 'reply', 'task_reviews', 'note_format', 'findings', 'question_options', 'material_registrations'}, 'Invalid reconciliation plan')
     require(isinstance(plan.get('reply', ''), str) and len(plan.get('reply', '')) <= 20000, 'Invalid chat reply')
     require(isinstance(plan['summary'], str) and 0 < len(plan['summary']) <= 4000, 'Receipt summary required')
     require(isinstance(plan['questions'], list) and all(isinstance(q, str) and 0 < len(q) <= 2000 for q in plan['questions']), 'Invalid questions')
@@ -499,7 +499,7 @@ def apply_intake(store, request):
         source = {'type': 'agent', 'ref': '自主整理 '+old['id'], 'intake_id': old['id'], 'authorization': POLICY,
                   'episode_id': old['id'], 'agent_role': role, 'operation_id': plan_hash}
         if job.get('note_mode') == 'format':
-            require(source_note and not (plan['updates'] or plan['questions'] or resolutions), '笔记润色不能修改业务记录或提出主线问题')
+            require(source_note and not (plan['updates'] or plan['questions'] or resolutions or plan.get('material_registrations')), '笔记润色不能修改业务记录或提出主线问题')
             formatted = plan.get('note_format')
             require(isinstance(formatted, dict) and set(formatted) == {'title', 'body', 'related_ids'}, 'Invalid note formatting result')
             refs = formatted['related_ids']
@@ -529,6 +529,30 @@ def apply_intake(store, request):
             require(review_matches(nodes, review), '复核安排已变化，请重新整理')
             require(not resolutions, '系统复核没有新答复，不能关闭旧问题')
         updates, seen = [], set()
+        registrations = plan.get('material_registrations', [])
+        require(isinstance(registrations, list) and len(registrations) <= 3, '每轮最多登记三份确切资料')
+        require(not registrations or not (source_note or full_review or review), '笔记整理和定时复核不能登记项目文件')
+        for registration in registrations:
+            require(isinstance(registration, dict) and set(registration) == {'path', 'context', 'sha256', 'excerpt', 'reason'}
+                    and all(isinstance(v, str) and v.strip() for v in registration.values()), 'Invalid material registration')
+            require(registration['excerpt'] in text and len(registration['excerpt']) <= 20000, '资料登记必须引用本轮原话')
+            require(len(registration['path']) <= 1000 and len(registration['reason']) <= 2000
+                    and re.fullmatch('[a-f0-9]{64}', registration['sha256']), 'Invalid material identity/reason')
+            from pathlib import PurePosixPath
+            require(PurePosixPath(registration['path']).name in text, '请在本轮消息中明确要登记的文件名')
+            context = nodes.get(registration['context'], {})
+            require(context.get('kind') == 'context' and context_workspace(context) == job['workspace']
+                    and authorized(nodes, registration['context']), '资料登记项目超出当前授权范围')
+            if job.get('agent_steps'):
+                require(any(s['claim'] == job.get('claim') and s['role'] == 'librarian' and s['status'] == 'proposed'
+                            and registration in s.get('proposal', {}).get('material_registrations', []) for s in job['agent_steps']), '资料登记缺少 Atlas 的确切候选')
+            else:
+                require(role in {'lumos', 'librarian'}, '资料登记须交 Atlas 处理')
+            from lumos_knowledge import prepare_material
+            material = prepare_material(store, nodes, {**registration, 'source': {**source, 'quote': registration['excerpt'],
+                'reason': registration['reason'], 'agent_role': 'librarian'}}, registration['sha256'])
+            require(material['id'] not in seen, '同一资料不能重复登记')
+            seen.add(material['id']); updates.append(material)
         for item in plan['updates']:
             require(isinstance(item, dict) and set(item) == {'id', 'kind', 'changes', 'reason', 'excerpt', 'mode'}, 'Invalid update item')
             ident, kind, changes = item['id'], item['kind'], item['changes']

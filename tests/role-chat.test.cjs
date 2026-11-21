@@ -91,6 +91,17 @@ test('new conversation persists title and explicit scope before sending',async()
   assert.equal(p.posts[0].agent_role,'maintainer');assert.equal(p.posts[0].workspace,'lumos');assert.equal(p.posts[0].title,'排查保存问题');
   p.edit('仅诊断');await p.submit();assert.equal(p.posts[1].chat_id,p.posts[0].chat_id);assert.equal(p.posts[1].workspace,'lumos');
 });
+test('material handoff prepares an explicit read-only draft without sending again on reload',async()=>{
+  const p=await page(new Map(),'http://127.0.0.1/chat?agent=librarian&material='+encodeURIComponent('条件.md'));
+  assert.match(p.get('chat-text').value,/条件.md/);assert.match(p.get('chat-text').value,/只查阅/);assert.equal(p.posts.length,0);
+  assert.equal(new URL(p.world.window.location.href).searchParams.has('material'),false);
+});
+test('a rejected new conversation can be corrected without replaying its rejected title',async()=>{
+  const p=await page(),normal=p.world.fetch;p.get('new-title').value='被拒绝';
+  p.world.fetch=async()=>response({error:'invalid'},400);await p.get('new-conversation-form').onsubmit({preventDefault(){}});
+  p.world.fetch=normal;p.get('new-title').value='修正标题';await p.get('new-conversation-form').onsubmit({preventDefault(){}});
+  assert.equal(p.posts[0].title,'修正标题');
+});
 test('server binding wins over an incorrect role in a bookmarked link',async()=>{
   const id='a'.repeat(32),job={id:'old',data:{chat_id:id,agent_role:'librarian',workspace:'lingguang',title:'旧资料',text:'旧原话',created_at:'2026-11-20T00:00:00Z',status:'done'}};
   const p=await page(new Map(),'http://127.0.0.1/chat?role=aipm&id='+id,[job]);

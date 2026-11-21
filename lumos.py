@@ -629,6 +629,13 @@ def main():
     command.add_argument('--workspace', default='lingguang')
     command.add_argument('--archived', action='store_true')
     subs.add_parser('materials')
+    command = subs.add_parser('material-read')
+    command.add_argument('path')
+    command.add_argument('--query', default='')
+    command = subs.add_parser('material')
+    command.add_argument('id')
+    command.add_argument('--workspace', default='lingguang')
+    command.add_argument('--revision', type=int)
     subs.add_parser('conversations')
     command = subs.add_parser('conversation-save')
     command.add_argument('request', type=Path)
@@ -711,12 +718,16 @@ def main():
             elif args.command in {'agents', 'agent-inspect'}:
                 from lumos_agents import episodes, inspect_once
                 result = episodes(store, args.workspace) if args.command == 'agents' else inspect_once(store, read_json(args.request))
-            elif args.command in {'knowledge', 'materials', 'material-save'}:
-                from lumos_knowledge import search_knowledge, material_files, register_material
+            elif args.command in {'knowledge', 'materials', 'material-save', 'material-read', 'material'}:
+                from lumos_knowledge import search_knowledge, material_files, register_material, read_material, material_detail
                 if args.command == 'knowledge':
                     result = search_knowledge(store, args.workspace, args.query, args.archived)
                 elif args.command == 'materials':
-                    result = {'files': material_files()}
+                    result = {'files': material_files(store)}
+                elif args.command == 'material-read':
+                    result = read_material(store, args.path, args.query)
+                elif args.command == 'material':
+                    result = material_detail(store, args.id, args.workspace, args.revision)
                 else:
                     result = register_material(store, read_json(args.request))
             elif args.command in {"tasks", "task", "task-save"}:

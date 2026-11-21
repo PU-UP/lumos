@@ -16,9 +16,8 @@ if(typeof document!=='undefined'){
   const nav=document.querySelector('.view-nav');nav.replaceChildren();nav.setAttribute('aria-label','四个助手');
   for(const [id,r] of Object.entries(roleSpaces)){const a=el('a');a.href=target(url.pathname==='/chat'?'/chat':r.home,id);a.append(el('strong',r.name),el('small',r.purpose));if(id===role)a.setAttribute('aria-current','page');nav.append(a);}
   const local=el('nav');local.className='role-tools';local.setAttribute('aria-label',info.name+'工作区');
-  for(const [name,path] of info.links){const a=el('a',name);a.href=target(path,role);if(new URL(a.href,location.href).pathname===url.pathname)a.setAttribute('aria-current','page');local.append(a);}
+  for(const [name,path] of info.links){const a=el('a',name);a.href=target(path,role);const u=new URL(a.href,location.href);if(u.pathname===url.pathname&&u.searchParams.get('materials')===url.searchParams.get('materials')&&u.searchParams.get('view')===url.searchParams.get('view'))a.setAttribute('aria-current','page');local.append(a);}
   nav.after(local);
-  if(url.pathname==='/knowledge'&&url.searchParams.get('materials')==='1')window.addEventListener('DOMContentLoaded',()=>{const panel=document.getElementById('material-panel');panel.open=true;panel.scrollIntoView({block:'start'});});
   const picker=document.querySelector('#workspace, #note-workspace, #chat-workspace');
   if(picker){picker.value=space;const label=picker.closest('label');if(url.pathname==='/chat')label.hidden=true;else{label.classList.add('role-scope');local.append(label);}}
   const header=document.querySelector('header');

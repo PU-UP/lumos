@@ -75,8 +75,13 @@ def make_server(store, port=8765):
                         store, workspace, query.get('query', [''])[0], query.get('archived', ['false'])[0] == 'true')
                     self.reply(200, {**data, 'token': token})
                 elif path.path == "/api/materials":
-                    from lumos_knowledge import material_files
-                    self.reply(200, {'files': material_files(), 'token': token})
+                    from lumos_knowledge import material_catalog
+                    self.reply(200, {'files': material_catalog(store, parse_qs(path.query).get('workspace', ['lingguang'])[0]), 'token': token})
+                elif path.path == '/api/material':
+                    from lumos_knowledge import material_detail
+                    query = parse_qs(path.query)
+                    revision = query.get('revision', [None])[0]
+                    self.reply(200, material_detail(store, query.get('id', [''])[0], query.get('workspace', ['lingguang'])[0], int(revision) if revision else None))
                 elif path.path == "/api/intakes":
                     query = parse_qs(path.query)
                     data = list_intakes(store, query.get("workspace", ["lingguang"])[0])
@@ -99,7 +104,7 @@ def make_server(store, port=8765):
                     self.reply(200, note_detail(store, query.get("id", [""])[0], int(revision) if revision else None))
                 elif path.path == "/api/health":
                     self.reply(200, {"app": "lumos", "root": str(store.root), 'preview': (store.root/'PREVIEW').is_file(), 'role_spaces': True})
-                elif path.path in {'/role-navigation.js', '/role-navigation.css', '/role-chat.js', '/role-reports.js', '/role-reports.css'}:
+                elif path.path in {'/role-navigation.js', '/role-navigation.css', '/role-chat.js', '/role-reports.js', '/role-reports.css', '/role-knowledge.js', '/role-knowledge.css'}:
                     name = path.path[1:]
                     self.reply(200, (ENGINE/'web'/name).read_bytes(),
                                ('text/javascript' if name.endswith('.js') else 'text/css')+'; charset=utf-8')
@@ -118,6 +123,8 @@ def make_server(store, port=8765):
                         name = 'role-chat.html'
                     if name == 'agents.html':
                         name = 'role-reports.html'
+                    if name == 'knowledge.html':
+                        name = 'role-knowledge.html'
                     raw = (ENGINE / 'web' / name).read_bytes()
                     if name.endswith('.html'):
                         raw = raw.replace(b'/navigation.js', b'/role-navigation.js').replace(b'/navigation.css', b'/role-navigation.css')

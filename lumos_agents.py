@@ -33,6 +33,10 @@ def check_plan(role, plan, *, coordinator=False):
     require(kinds <= allowed, ROLES[role]['name']+'不能提交这些业务变更')
     from lumos_followup import validate_question_options
     validate_question_options(plan.get('question_options', []), plan.get('questions', []))
+    reads, registrations = plan.get('material_reads', []), plan.get('material_registrations', [])
+    require(isinstance(reads, list) and len(reads) <= 3 and all(isinstance(p, str) and 0 < len(p) <= 1000 for p in reads), '每轮最多读取三份确切资料')
+    require(isinstance(registrations, list) and len(registrations) <= 3, '每轮最多登记三份确切资料')
+    require(not (reads or registrations) or role == 'librarian' or coordinator, '项目文件须交 Atlas 读取或登记')
     if role != 'aipm' and not coordinator:
         require(not (plan.get('questions') or plan.get('resolutions') or plan.get('task_reviews')),
                 '主线问题与任务复核须由 AIPM 承接')
@@ -80,7 +84,7 @@ def missing_followups(plan, records):
 def execution_hashes():
     return {'rules_hash': digest(b''.join((ENGINE/f).read_bytes() for f in
             ('docs/agent-roles.md', 'docs/agent-planner.md', 'docs/chat-planner.md', 'docs/task-review-planner.md', 'docs/note-format-planner.md'))),
-            'code_hash': digest(b''.join((ENGINE/f).read_bytes() for f in ('lumos_agents.py', 'lumos_worker.py', 'lumos_intake.py', 'lumos_followup.py')))}
+            'code_hash': digest(b''.join((ENGINE/f).read_bytes() for f in ('lumos_agents.py', 'lumos_worker.py', 'lumos_intake.py', 'lumos_followup.py', 'lumos_knowledge.py')))}
 
 
 def record_step(store, ident, claim, role, phase, basis='', *, attempt=None, plan=None, error=None, input_hash='', reused_from=''):

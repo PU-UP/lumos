@@ -359,6 +359,50 @@ class AgentsTest(BaseStoreCase):
         self.assertEqual([s['status'] for s in result['data']['agent_steps']], ['failed', 'proposed'])
         self.assertEqual([s['attempt'] for s in result['data']['agent_steps']], [1, 2])
 
+    def test_atlas_reads_registers_and_passes_exact_material_to_decision(self):
+        from lumos_knowledge import material_catalog
+        (self.root/'PREVIEW').touch(); folder = self.root/'project-materials'; folder.mkdir()
+        (folder/'条件.md').write_text('标定要求 25ms；实测未知。', encoding='utf-8')
+        text = '登记条件.md到模拟建图定位；同步条件已核对。'
+        save_intake(self.store, {'request_id': uuid.uuid4().hex, 'agent_role': 'librarian',
+            'text': text, 'source': self.source, 'chat_id': uuid.uuid4().hex})
+        calls = []
+        def planner(context, root):
+            role, phase = context['agent']['role'], context['agent']['phase']; calls.append((role, phase))
+            if role == 'librarian' and phase == 'work':
+                self.assertEqual(context['material_catalog'][0]['path'], '条件.md')
+                return self.plan(material_reads=['条件.md'])
+            read = context['material_reads'][0]
+            self.assertEqual(read['excerpt'], '标定要求 25ms；实测未知。')
+            if role == 'librarian':
+                return self.plan(delegate_to=['aipm'], material_registrations=[{'path': '条件.md', 'context': 'mapping',
+                    'sha256': read['sha256'], 'excerpt': text, 'reason': '确切登记请求'}])
+            return self.plan(updates=[self.update()])
+        result = run_once(self.store, planner)['intake']
+        self.assertEqual(result['data']['status'], 'done')
+        self.assertEqual(calls, [('librarian','work'), ('librarian','retrieve'), ('aipm','work'), ('lumos','decide')])
+        self.assertEqual(material_catalog(self.store)[0]['registrations'][0]['revision'], 1)
+        self.assertEqual(result['data']['lumos_report']['status'], 'received')
+
+    def test_changed_material_refuses_entire_batch(self):
+        from lumos_knowledge import material_catalog
+        (self.root/'PREVIEW').touch(); folder = self.root/'project-materials'; folder.mkdir()
+        file = folder/'条件.md'; file.write_text('旧条件', encoding='utf-8')
+        text = '登记条件.md到模拟建图定位；同步条件已核对。'
+        save_intake(self.store, {'request_id': uuid.uuid4().hex, 'agent_role': 'librarian', 'text': text, 'source': self.source})
+        before = task_detail(self.store, 'talk')['task']
+        def planner(context, root):
+            if context['agent']['role'] != 'librarian':
+                return self.plan(updates=[self.update()])
+            if context['agent']['phase'] == 'work':
+                return self.plan(material_reads=['条件.md'])
+            sha = context['material_reads'][0]['sha256']; file.write_text('读取后人工改动', encoding='utf-8')
+            return self.plan(delegate_to=['aipm'], material_registrations=[{'path': '条件.md', 'context': 'mapping',
+                'sha256': sha, 'excerpt': text, 'reason': '确切登记请求'}])
+        self.assertEqual(run_once(self.store, planner)['status'], 'failed')
+        self.assertEqual(task_detail(self.store, 'talk')['task'], before)
+        self.assertEqual(material_catalog(self.store)[0]['registrations'], [])
+
     def test_external_specialist_cannot_bypass_field_ownership(self):
         for role in ('librarian', 'maintainer'):
             job = self.create(role)

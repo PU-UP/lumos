@@ -35,6 +35,11 @@ SCHEMA['properties']['question_options'] = {'type': 'array', 'maxItems': 5, 'ite
             'type': 'object', 'additionalProperties': False, 'required': ['text', 'basis_ids'], 'properties': {
                 'text': {'type': 'string', 'maxLength': 160},
                 'basis_ids': {'type': 'array', 'minItems': 1, 'maxItems': 5, 'items': {'type': 'string'}}}}}}}}
+SCHEMA['required'].extend(['material_reads', 'material_registrations'])
+SCHEMA['properties']['material_reads'] = {'type': 'array', 'maxItems': 3, 'items': {'type': 'string'}}
+SCHEMA['properties']['material_registrations'] = {'type': 'array', 'maxItems': 3, 'items': {
+    'type': 'object', 'additionalProperties': False, 'required': ['path', 'context', 'sha256', 'excerpt', 'reason'],
+    'properties': {k: {'type': 'string'} for k in ('path', 'context', 'sha256', 'excerpt', 'reason')}}}
 
 
 # Partial answers keep the same question identity and retain the answer history.
@@ -116,6 +121,9 @@ def plan_with_codex(context, root):
                 response_schema['required'].append('search_query')
                 response_schema['properties']['search_query'] = {'type': 'string'}
                 role, phase = agent['role'], agent.get('phase', 'work')
+                if role != 'librarian':
+                    for field in ('material_reads', 'material_registrations'):
+                        response_schema['properties'][field]['maxItems'] = 0
                 allowed = {'aipm': {'action', 'mainline', 'person'}, 'librarian': {'evidence'}}.get(role, set())
                 if role == 'lumos' and phase == 'decide':
                     allowed = {'action', 'mainline', 'person'}
@@ -172,8 +180,10 @@ def collaborate(store, job, context, planner):
     """Sequential specialists propose; one validated transaction commits the result."""
     role = role_for(job['data'])
     results = {}
+    material_reads = []
 
-    def run(actor, phase, proposals=None, query=''):
+    def run(actor, phase, proposals=None, query='', paths=None):
+        nonlocal material_reads
         from lumos_intake import fingerprint
         current = {**context, 'agent': {'role': actor, 'phase': phase, **ROLES[actor]}}
         current['intake'] = {**job, 'data': {k: v for k, v in job['data'].items() if k in
@@ -182,10 +192,26 @@ def collaborate(store, job, context, planner):
         if proposals:
             current['proposals'] = copy.deepcopy(proposals)
         if actor == 'librarian' and job['data'].get('note_mode') != 'format':
-            from lumos_knowledge import search_knowledge
+            from lumos_knowledge import search_knowledge, material_catalog, read_material, material_detail
             found = search_knowledge(store, job['data']['workspace'], query)
             current['knowledge'] = found if query else {'catalog': [
                 {k: h[k] for k in ('id', 'title', 'kind', 'citation', 'extraction')} for h in found['results']]}
+            catalog = material_catalog(store, job['data']['workspace'])
+            current['material_catalog'] = catalog
+            if paths:
+                require(len(set(paths)) == len(paths) and all(p in {f['path'] for f in catalog} for p in paths), '请从当前项目资料目录选择确切文件')
+                current['material_reads'] = [read_material(store, p, query) for p in paths]
+                for read in current['material_reads']:
+                    read['previous'] = []
+                    for registered in next(f['registrations'] for f in catalog if f['path'] == read['path']):
+                        detail = material_detail(store, registered['id'], job['data']['workspace'])
+                        old = detail['material']
+                        read['previous'].append({'id': old['id'], 'context': old['data']['context'], 'sha256': old['data']['material']['sha256'],
+                            'excerpt': old['data']['text'][:10000], 'truncated': len(old['data']['text']) > 10000,
+                            'affected': [{'id': n['id'], 'kind': n['kind'], 'title': n['data'].get('title') or n['data'].get('text')} for n in detail['affected']]})
+                material_reads = current['material_reads']
+        if material_reads and actor in {'lumos', 'aipm'}:
+            current['material_reads'] = copy.deepcopy(material_reads)
         if actor == 'maintainer':
             current = {k: v for k, v in current.items() if k not in {'records', 'open_questions', 'chat_history', 'lumos_reports', 'proposals'}}
         else:
@@ -200,6 +226,12 @@ def collaborate(store, job, context, planner):
         try:
             plan = copy.deepcopy(cached['proposal']) if cached else planner(current, store.root)
             check_plan('aipm' if phase == 'decide' else actor, plan, coordinator=actor == 'lumos' and phase == 'coordinate')
+            if actor == 'librarian' and phase == 'retrieve':
+                require(not plan.get('material_reads'), '本轮资料读取已完成，未读取的资料请留到后续处理')
+            if actor == 'librarian' and plan.get('material_registrations'):
+                require(all(any(r.get('path') == read['path'] and r.get('sha256') == read['sha256']
+                                for read in current.get('material_reads', [])) for r in plan['material_registrations']),
+                        '登记前须读取本轮确切文件版本')
             if phase in {'synthesize', 'decide'}:
                 require(not plan.get('delegate_to'), '汇总不能重新派发')
             record_step(store, job['id'], job['data']['claim'], actor, phase, attempt=attempt, plan=plan)
@@ -213,8 +245,8 @@ def collaborate(store, job, context, planner):
     if job['data'].get('note_mode') == 'format':
         first.pop('delegate_to', None)
         return first
-    if role == 'librarian' and first.get('search_query'):
-        first = run(role, 'retrieve', query=first['search_query'])
+    if role == 'librarian' and (first.get('search_query') or first.get('material_reads')):
+        first = run(role, 'retrieve', query=first.get('search_query', ''), paths=first.get('material_reads'))
     pending = list(first.get('delegate_to', []))
     if role == 'lumos':
         if any(i['kind'] == 'evidence' for i in first['updates']):
@@ -230,17 +262,18 @@ def collaborate(store, job, context, planner):
             continue
         visited.add(actor)
         result = run(actor, 'work', {'coordinator': first, 'specialists': results}, first.get('search_query', ''))
-        if actor == 'librarian' and result.get('search_query') and result['search_query'] != first.get('search_query', ''):
-            result = run(actor, 'retrieve', {'coordinator': first, 'specialists': results}, result['search_query'])
+        if actor == 'librarian' and (result.get('material_reads') or (result.get('search_query') and result['search_query'] != first.get('search_query', ''))):
+            result = run(actor, 'retrieve', {'coordinator': first, 'specialists': results}, result.get('search_query', ''), result.get('material_reads'))
         results[actor] = result
         pending.extend(r for r in result.get('delegate_to', []) if r not in visited)
-    final = {k: copy.deepcopy(v) for k, v in first.items() if k not in {'delegate_to', 'search_query', 'updates', 'questions', 'resolutions', 'question_options'}}
-    final.update(updates=[], questions=[], resolutions=[], question_options=[])
+    final = {k: copy.deepcopy(v) for k, v in first.items() if k not in {'delegate_to', 'search_query', 'updates', 'questions', 'resolutions', 'question_options', 'material_reads', 'material_registrations'}}
+    final.update(updates=[], questions=[], resolutions=[], question_options=[], material_registrations=[])
     if not results:
         return final
     for actor, result in results.items():
         offset = len(final['questions'])
         final['question_options'].extend({**g, 'index': g['index']+offset} for g in result.get('question_options', []))
+        final['material_registrations'].extend(result.get('material_registrations', []))
         for field in ('updates', 'questions', 'resolutions'):
             final[field].extend(result.get(field, []))
         if 'task_reviews' in result:
