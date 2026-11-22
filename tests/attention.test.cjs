@@ -1,8 +1,23 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {attentionThreads}=require('../web/attention.js');
+const {attentionThreads,noticeText}=require('../web/attention.js');
 const {pageRole,roleSpaces}=require('../web/role-navigation.js');
 const chat=(role,id,notices,extra={})=>({data:{agent_role:role,chat_id:id,title:id,workspace:'lingguang',notices,...extra}});
 const notice=(id,extra={})=>({id,text:id,active:true,seen_at:'',at:'2026-11-22',...extra});
+test('Ops audit references read as a receipt count without changing the original message or business text',()=>{
+  const first='intake-'+'a'.repeat(32),second='intake-'+'b'.repeat(32);
+  const item={kind:'ops',text:`整理执行器调用了计划外工具，结果未应用。\nOps 核对结果：后续已保存并涉及此主线的回执：${first}、${second}、${first}。还需确认权限。`,active:false,seen_at:'read'};
+  const before=JSON.stringify(item),text=noticeText(item);
+  assert.match(text,/已核对 2 条相关的后续处理记录/);assert.match(text,/还需确认权限/);assert.doesNotMatch(text,/intake-/);
+  assert.equal(JSON.stringify(item),before);assert.equal(noticeText({...item,kind:'question'}),item.text);
+  assert.equal(noticeText({kind:'ops',text:'请核对 '+first+' 的权限；当前仍失败。'}),'请核对 关联处理记录 的权限；当前仍失败。');
+  assert.match(noticeText({kind:'ops',text:'后续已保存并涉及此主线的回执：未找到后续回执。'}),/当时未找到/);
+  assert.match(noticeText({kind:'ops',text:'后续已保存并涉及此主线的回执：'+first+'，但内容冲突。'}),/但内容冲突/);
+});
+test('Ops recovery notification keeps its limited claim and does not imply permanent repair',()=>{
+  const text=noticeText({kind:'ops',text:'运行情况已更新：该次处理已成功接续；不代表底层故障已永久修复。'});
+  assert.match(text,/无需为此重新提交/);assert.match(text,/不代表同类故障已永久排除/);
+  assert.equal(noticeText({kind:'ops',text:'权限尚未恢复，需要你授权。'}),'权限尚未恢复，需要你授权。');
+});
 test('each role counts only its own active unread messages and retains its read history',()=>{
   const chats=[chat('lumos','l',[notice('l1'),notice('l2')]),chat('aipm','a',[notice('a1')]),
     chat('librarian','t',[notice('t1',{seen_at:'read'})]),chat('maintainer','o',[notice('o1'),notice('old',{active:false})]),
@@ -42,4 +57,9 @@ test('a slow old response cannot overwrite the newly selected role or empty-stat
   assert.equal(p.panel.children[1].children[0].textContent,'AIPM 暂时没有新消息。');
   p.world.location.search='?role=maintainer';p.events['lumos-role']();await finish(p.requests[2],[]);
   assert.equal(p.panel.children[1].children[0].textContent,'Ops 暂时没有新消息。');
+});
+test('Ops message preview uses the same readable text as the chat',async()=>{
+  const p=inbox('http://localhost/agents'),item=notice('o',{kind:'ops',text:'后续已保存并涉及此主线的回执：intake-'+'a'.repeat(32)+'。'});
+  await finish(p.requests[0],[chat('maintainer','ops',[item])]);
+  assert.equal(p.panel.children[1].children[0].children[2].textContent,noticeText(item));
 });

@@ -72,6 +72,9 @@ class WorkspaceTest(BaseStoreCase):
             with urlopen(base+'/chat?workspace=lumos') as r:
                 html = r.read().decode()
                 self.assertLess(html.index('/workspace-mode.js'), html.index('/role-navigation.js'))
+                self.assertLess(html.index('/role-navigation.js'), html.index('/attention.js'))
+                self.assertLess(html.index('/attention.js'), html.index('/role-chat.js'))
+                self.assertEqual(html.count('src="/attention.js"'), 1)
         finally:
             server.shutdown(); server.server_close(); thread.join()
 

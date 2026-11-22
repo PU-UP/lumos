@@ -137,7 +137,7 @@ if(typeof document!=='undefined'){
     $('chat-text').placeholder=roleConversation[agentRole].hint;
     $('choose-subjects').hidden=!['lumos','aipm'].includes(agentRole);
     const resource=$('role-resource');resource.hidden=['lumos','aipm'].includes(agentRole);resource.textContent=agentRole==='librarian'?'查找资料':'运行问题';resource.href=(agentRole==='librarian'?'/knowledge?role=librarian':'/agents?role=maintainer')+'&workspace='+workspace;
-    $('episode-reference').textContent=episodeRef?'正在反馈一次执行：'+episodeRef:'';
+    $('episode-reference').textContent=episodeRef?'正在接续：'+(jobs.find(n=>n.id===episodeRef)?.data.title||currentSession()?.data.title||'这次运行情况'):'';
     $('chat-workspace').disabled=busy;$('new-chat').disabled=busy;$('choose-subjects').disabled=busy||!!pending;
     const question=$('selected-question');question.replaceChildren();
     if(selectedQuestion){const copy=el('div',undefined,'selected-question-copy');copy.append(el('p','正在回答：'+selectedQuestion.text));if(selectedQuestion.answer)copy.append(el('p','已选：'+selectedQuestion.answer,'chosen-answer'));question.append(copy);const clear=el('button','取消选择');clear.type='button';clear.disabled=busy||!!pending;clear.onclick=()=>{selectedQuestion=null;changedSelection();};question.append(clear);}
@@ -238,9 +238,9 @@ if(typeof document!=='undefined'){
   function renderNotice(host,item){
     const card=el('article',undefined,'proactive-message');
     const head=el('div',undefined,'notice-heading');head.append(el('strong',agentNames[agentRole]),el('span',item.seen_at?'已读':'● 未读',item.seen_at?'muted':'unread-label'));
-    card.append(head);for(const block of replyBlocks(item.text)){if(block.kind==='list'){const list=el('ul');for(const text of block.items)list.append(el('li',text));card.append(list);}else card.append(el('p',block.text));}
+    card.append(head);for(const block of replyBlocks(noticeText(item))){if(block.kind==='list'){const list=el('ul');for(const text of block.items)list.append(el('li',text));card.append(list);}else card.append(el('p',block.text));}
     const actions=el('div',undefined,'notice-actions');actions.dataset.noticeId=item.id;
-    if(item.active){const reply=el('button','答复');reply.type='button';reply.disabled=busy||!!pending||readOnly();reply.onclick=()=>{
+    if(item.active){const reply=el('button',item.kind==='ops'?'继续聊':'答复');reply.type='button';reply.disabled=busy||!!pending||readOnly();reply.onclick=()=>{
       if(item.kind==='ops')episodeRef=item.source_id;
       if(item.question_key)selectedQuestion={key:item.question_key,title:'接续问题',text:item.text,related_ids:item.related_ids};
       else selected=item.related_ids.map(id=>({id,title:taskState?.tasks?.find(n=>n.id===id)?.data.text||'相关事项'}));

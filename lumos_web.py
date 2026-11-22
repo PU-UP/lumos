@@ -171,7 +171,8 @@ def make_server(store, port=8765):
                         raw = raw.replace(b'<head>', b'<head><script src="/workspace-mode.js"></script>')
                         raw = raw.replace(b'/navigation.js', b'/role-navigation.js').replace(b'/navigation.css', b'/role-navigation.css')
                         raw = raw.replace(b'<script src="/role-navigation.js"', b'<script src="/role-models.js" defer></script><script src="/role-navigation.js"')
-                        raw = raw.replace(b'</head>', b'<link rel="stylesheet" href="/workspace.css"><script src="/workspace.js" defer></script><script src="/attention.js" defer></script></head>')
+                        raw = raw.replace(b'<script src="/role-navigation.js" defer></script>', b'<script src="/role-navigation.js" defer></script><script src="/attention.js" defer></script>')
+                        raw = raw.replace(b'</head>', b'<link rel="stylesheet" href="/workspace.css"><script src="/workspace.js" defer></script></head>')
                         if name in {'overview.html', 'index.html', 'notes.html', 'people.html'}:
                             raw = raw.replace(b'<script src="/role-navigation.js" defer></script>', b'<script src="/role-navigation.js" defer></script><script src="/role-ui.js" defer></script>')
                             raw = raw.replace(b'</head>', b'<link rel="stylesheet" href="/role-ui.css"></head>')
