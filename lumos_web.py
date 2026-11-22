@@ -13,6 +13,7 @@ from lumos_mainlines import mainline_detail, save_review
 from lumos_intake import list_intakes, save_intake
 from lumos_conversations import list_conversations, save_conversation
 from lumos_attention import read_attention
+from lumos_models import role_models, save_role_models
 
 
 def make_server(store, port=8765):
@@ -52,7 +53,7 @@ def make_server(store, port=8765):
                 require(self.headers.get("Sec-Fetch-Site") not in {"cross-site"}, "Cross-site request refused")
                 path = urlsplit(self.path)
                 if write:
-                    require(path.path in {"/api/tasks", "/api/notes", "/api/intakes", "/api/mainline-review", "/api/task-review", "/api/materials", "/api/agent-inspect", "/api/conversations", "/api/conversation-read"}, "Unknown route")
+                    require(path.path in {"/api/tasks", "/api/notes", "/api/intakes", "/api/mainline-review", "/api/task-review", "/api/materials", "/api/agent-inspect", "/api/conversations", "/api/conversation-read", "/api/role-models"}, "Unknown route")
                     require(self.headers.get("Origin") == "http://" + host, "Invalid origin")
                     require(secrets.compare_digest(self.headers.get("X-Lumos-Token", ""), token), "Invalid token")
                     require(self.headers.get("Content-Type", "").split(";")[0] == "application/json", "Expected JSON")
@@ -63,7 +64,7 @@ def make_server(store, port=8765):
                     from lumos_knowledge import register_material
                     save = {"/api/tasks": save_task, "/api/notes": save_note, "/api/intakes": save_intake, "/api/mainline-review": save_review, "/api/task-review": request_task_review,
                             "/api/materials": register_material, "/api/agent-inspect": inspect_once,
-                            "/api/conversations": save_conversation, "/api/conversation-read": read_attention}[path.path]
+                            "/api/conversations": save_conversation, "/api/conversation-read": read_attention, "/api/role-models": save_role_models}[path.path]
                     self.reply(200, save(store, request))
                 elif path.path == "/api/agents":
                     from lumos_agents import episodes
@@ -95,6 +96,8 @@ def make_server(store, port=8765):
                 elif path.path == "/api/codex-models":
                     from lumos_worker import codex_models
                     self.reply(200, codex_models())
+                elif path.path == '/api/role-models':
+                    self.reply(200, {'models': role_models(store), 'token': token})
                 elif path.path == "/api/notes":
                     query = parse_qs(path.query)
                     self.reply(200, {**list_notes(store, query.get("workspace", ["lingguang"])[0],
@@ -105,7 +108,9 @@ def make_server(store, port=8765):
                     revision = query.get("revision", [None])[0]
                     self.reply(200, note_detail(store, query.get("id", [""])[0], int(revision) if revision else None))
                 elif path.path == "/api/health":
-                    self.reply(200, {"app": "lumos", "root": str(store.root), 'preview': (store.root/'PREVIEW').is_file(), 'role_spaces': True})
+                    worker = getattr(self.server, 'worker', None)
+                    self.reply(200, {"app": "lumos", "root": str(store.root), 'preview': (store.root/'PREVIEW').is_file(), 'role_spaces': True,
+                                     'worker': worker.health() if worker else {'state': 'offline', 'error': '', 'last_check': ''}})
                 elif path.path in {'/attention.js', '/role-models.js', '/role-navigation.js', '/role-navigation.css', '/role-chat.js', '/role-reports.js', '/role-reports.css', '/role-knowledge.js', '/role-knowledge.css', '/role-ui.js', '/role-ui.css', '/workspace.js', '/workspace.css'}:
                     name = path.path[1:]
                     self.reply(200, (ENGINE/'web'/name).read_bytes(),

@@ -138,6 +138,17 @@ test('open conversations receive model choices from the role work page without l
   await p.submit();assert.equal(p.posts.at(-1).model,'test-model');
 });
 
+test('chat uses saved server models and displays background pauses without losing the draft',async()=>{
+  const p=await page();p.edit('保留未发送的正文');let selected='server-model';
+  p.world.window.LumosModels={get:()=>selected,receipt:()=>selected,error:'',loading:false,busy:false,
+    save:async(role,value)=>{assert.equal(role,'lumos');selected=value;}};
+  p.events['lumos-model']();assert.equal(p.get('chat-model').value,'server-model');
+  p.get('chat-model').value='changed';await p.get('chat-model').onchange();
+  assert.equal(p.get('chat-model').value,'changed');
+  for(const state of ['waiting','stopped']){p.listing.executor=state;await p.poll();assert.match(p.get('chat-status').textContent,/后台处理暂停或未运行/);}
+  assert.equal(p.get('chat-text').value,'保留未发送的正文');await p.submit();assert.equal(p.posts[0].model,'changed');
+});
+
 test('embedded chat notifies the overview only after a newly completed turn, not on opening history',async()=>{
   const job=choiceJob(),href='http://127.0.0.1/chat?role=aipm&embedded=1&id='+job.data.chat_id;
   const history=await page(new Map(),href,[job]);assert.equal(history.notifications.length,0);

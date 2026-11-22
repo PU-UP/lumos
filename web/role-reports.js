@@ -28,10 +28,10 @@ if(typeof document!=='undefined'){
     const schedule=data.inspection;
     $('inspection-status').hidden=role!=='maintainer';
     if(role==='maintainer'&&schedule)$('inspection-status').textContent=(schedule.last_at?'上次检查：'+new Date(schedule.last_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})+(schedule.last_status==='failed'?'，未完成。':'。'):'尚未完成检查。')+(schedule.enabled?(schedule.active_id?' 当前检查等待接续。':schedule.due?' 本周检查尚未执行，空闲时补查一次。':' 下次检查：'+new Date(schedule.next_at).toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai'})+'。'):' 每周检查未启用，可手动检查。');
-    $('report-count').textContent=items.length+' 项'+(data.executor==='offline'?' · 执行器离线，输入仍保留':'');
+    $('report-count').textContent=items.length+' 项'+(['offline','waiting','stopped'].includes(data.executor)?' · 执行器离线，输入仍保留':'');
     $('current-reports').setAttribute('aria-pressed',String(!history));$('report-history').setAttribute('aria-pressed',String(history));
     const host=$('report-list');host.replaceChildren();
-    if(!items.length)host.append(el('p',history?'暂无处理历史。':role==='lumos'?'暂无处理记录。':data.executor==='offline'?'执行器离线，已保存的输入会在恢复后继续处理。':'当前未发现待处理异常。','report-empty'));
+    if(!items.length)host.append(el('p',history?'暂无处理历史。':role==='lumos'?'暂无处理记录。':['offline','waiting','stopped'].includes(data.executor)?'执行器离线，已保存的输入会在恢复后继续处理。':'当前未发现待处理异常。','report-empty'));
     for(const item of items.slice(0,limit)){
       const id=item.episode_id||item.id,card=el('article',undefined,'report-card');
       const head=el('div',undefined,'report-card-heading');head.append(el('h2',item.title),el('span',reportLabel(item,role,history),'report-state'));card.append(head);

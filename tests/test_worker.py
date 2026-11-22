@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -9,6 +10,28 @@ from lumos_worker import codex_models, plan_with_codex, SCHEMA
 
 
 class WorkerTest(unittest.TestCase):
+    def test_worker_survives_database_and_unexpected_errors_and_reports_dead_thread(self):
+        from lumos_worker import Worker
+        for failure in (sqlite3.OperationalError('database is locked'), ValueError('bad record')):
+            worker = Worker(None); states = []
+            def wait(_):
+                states.append(worker.health())
+                if len(states) == 2:
+                    worker.stop.set()
+            with patch('lumos_worker.executable', return_value='codex'), \
+                 patch('lumos_worker.run_once', side_effect=[failure, {'status': 'idle'}]) as run, \
+                 patch('lumos_attention.synchronize_attention'), patch.object(worker.stop, 'wait', side_effect=wait), \
+                 self.assertLogs('lumos_worker', level='ERROR'):
+                worker.thread.start(); worker.thread.join(2)
+                self.assertFalse(worker.thread.is_alive())
+                self.assertEqual(run.call_count, 2)
+            self.assertEqual([s['state'] for s in states], ['waiting', 'available'])
+            self.assertIn(type(failure).__name__, states[0]['error'])
+            self.assertEqual(states[1]['error'], '')
+            self.assertTrue(states[0]['last_check'])
+            worker._state = 'available'
+            self.assertEqual(worker.state, 'stopped')
+
     def test_lumos_decision_schema_can_decide_tasks_but_cannot_change_evidence(self):
         def run(command, **kwargs):
             schema = json.loads(Path(command[command.index('--output-schema')+1]).read_text())

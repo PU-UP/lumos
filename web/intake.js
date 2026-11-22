@@ -13,7 +13,7 @@ window.LumosIntake = (() => {
         if(onUpdate)await onUpdate(data);
         if(current!==generation)return;
         host.replaceChildren();
-        host.append(el('p',!data.enabled?'此空间尚未启用自主整理。':data.executor==='offline'?'整理执行器未运行；内容会保留为待整理。':'自动整理会重写笔记并简短补查疑问；Lumos 归档才更新工作记录。'));
+        host.append(el('p',!data.enabled?'此空间尚未启用自主整理。':['offline','waiting','stopped'].includes(data.executor)?'整理执行器未运行；内容会保留为待整理。':'自动整理会重写笔记并简短补查疑问；Lumos 归档才更新工作记录。'));
         const all=data.intakes.filter(n=>!noteId || n.data.note?.id===noteId);
         const jobs=noteId?all.slice(0,1):all;
         if(!jobs.length)host.append(el('p','暂无整理记录。'));

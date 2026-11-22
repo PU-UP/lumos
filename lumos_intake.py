@@ -59,6 +59,9 @@ def validate_intake(data, nodes):
                 and nodes[parent]['data']['workspace'] == data['workspace'])), 'Invalid chat parent')
     model = data.get('model', '')
     require(isinstance(model, str) and (not model or re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,99}', model)), 'Invalid Codex model')
+    if 'role_models' in data:
+        from lumos_models import validate_models
+        validate_models(data['role_models'])
     require(isinstance(data.get('questions', []), list) and all(isinstance(q, str) and len(q) <= 2000 for q in data.get('questions', [])), 'Invalid questions')
     from lumos_followup import validate_question_options
     validate_question_options(data.get('question_options', []), data.get('questions', []), pinned=True)
@@ -427,6 +430,8 @@ def claim_intake(store, ident=None):
                 'revision': old['data']['revision']+1, 'updated_at': now()}}
         node['data']['agent_steps'] = [{**s, 'status': 'interrupted', 'finished_at': now()} if s['status'] == 'running' else s
                                       for s in old['data'].get('agent_steps', [])]
+        from lumos_models import job_models
+        node['data']['role_models'] = job_models(store, node['data'])
         from lumos_agents import role_for
         if role_for(node['data']) == 'maintainer' and node['data'].get('episode_ref'):
             node['data']['episode_claim'] = nodes[node['data']['episode_ref']]['data'].get('claim', '')

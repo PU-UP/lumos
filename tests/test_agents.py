@@ -11,6 +11,43 @@ from test_core import BaseStoreCase
 
 
 class AgentsTest(BaseStoreCase):
+    def test_ops_continuation_keeps_own_exact_history_without_business_records(self):
+        first = self.create('maintainer')
+        run_once(self.store, lambda *_: self.plan(reply='确切错误标记：91827'))
+        second = save_intake(self.store, {'request_id': uuid.uuid4().hex, 'agent_role': 'maintainer',
+            'text': '刚才的具体错误是什么？', 'source': self.source,
+            'chat_id': first['data']['chat_id'], 'chat_parent': first['id']})['intake']
+        def planner(context, root):
+            self.assertEqual(context['chat_history'][0]['reply'], '确切错误标记：91827')
+            self.assertEqual(context['chat_history'][0]['id'], first['id'])
+            for field in ('records', 'open_questions', 'lumos_reports', 'proposals'):
+                self.assertNotIn(field, context)
+            return self.plan()
+        result = run_once(self.store, planner)['intake']
+        self.assertEqual((result['id'], result['data']['status']), (second['id'], 'done'))
+
+    def test_handoff_models_are_role_specific_pinned_for_retry_and_recorded(self):
+        from lumos_models import save_role_models
+        save_role_models(self.store, {'models': {'aipm': 'project-model', 'lumos': 'coordinator-model'},
+                                     'expected': {'aipm': None, 'lumos': None}})
+        job = self.create('aipm'); calls = []
+        def planner(context, root):
+            role = context['agent']['role']; calls.append((role, context['intake']['data']['model']))
+            if role == 'lumos' and len(calls) == 2:
+                raise lumos.Error('isolated first decision failure')
+            return self.plan(updates=[self.update()])
+        failed = run_once(self.store, planner)
+        self.assertEqual(failed['status'], 'failed')
+        save_role_models(self.store, {'models': {'lumos': 'new-coordinator'}, 'expected': {'lumos': 'coordinator-model'}})
+        with self.store.db() as db:
+            revision = self.store.nodes(db)[job['id']]['data']['revision']
+        save_intake(self.store, {'request_id': uuid.uuid4().hex, 'id': job['id'], 'expected_revision': revision})
+        done = run_once(self.store, planner)['intake']['data']
+        self.assertEqual(done['status'], 'done')
+        self.assertEqual(calls, [('aipm', 'project-model'), ('lumos', 'coordinator-model'), ('lumos', 'coordinator-model')])
+        self.assertEqual({s['model'] for s in done['agent_steps'] if s['role'] == 'lumos'}, {'coordinator-model'})
+        self.assertEqual(done['role_models']['lumos'], 'coordinator-model')
+
     def test_atlas_references_existing_source_without_business_decision_or_duplicate_record(self):
         job = self.create('lumos')
         before = task_detail(self.store, 'talk')['task']

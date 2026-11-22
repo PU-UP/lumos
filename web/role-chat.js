@@ -125,9 +125,9 @@ if(typeof document!=='undefined'){
     const latest=chatTurns(jobs,chatId).at(-1),waiting=latest && ['pending','running','failed'].includes(latest.data.status);
     $('chat-text').readOnly=busy||!!pending||readOnly();
     $('chat-text').required=!selectedQuestion?.answer;
-    $('send-chat').disabled=!loaded||!modelsReady||!enabled||busy||readOnly()||(!pending && (waiting||!answerText($('chat-text').value,selectedQuestion)));
+    $('send-chat').disabled=!loaded||!modelsReady||!enabled||busy||(!pending&&(window.LumosModels?.loading||window.LumosModels?.busy||!!window.LumosModels?.error))||readOnly()||(!pending && (waiting||!answerText($('chat-text').value,selectedQuestion)));
     $('send-chat').textContent=pending?'重试确认':busy?'发送中…':'发送';
-    $('chat-model').disabled=busy||!!pending||!modelsReady;
+    $('chat-model').disabled=busy||!!pending||!modelsReady||window.LumosModels?.loading||window.LumosModels?.busy;
     $('role-heading').textContent=agentNames[agentRole]||'历史对话';
     $('role-description').textContent=typeof roleSpaces!=='undefined'?roleSpaces[agentRole]?.purpose||'混合历史保留原样':'';
     $('conversation-scope').textContent='资料范围：'+(workspace==='lumos'?'Lumos 仓库维护':'灵光')+(readOnly()?' · 只读历史':'');
@@ -142,7 +142,7 @@ if(typeof document!=='undefined'){
     if(selectedQuestion){const copy=el('div',undefined,'selected-question-copy');copy.append(el('p','正在回答：'+selectedQuestion.text));if(selectedQuestion.answer)copy.append(el('p','已选：'+selectedQuestion.answer,'chosen-answer'));question.append(copy);const clear=el('button','取消选择');clear.type='button';clear.disabled=busy||!!pending;clear.onclick=()=>{selectedQuestion=null;changedSelection();};question.append(clear);}
     const picked=$('selected-tasks');picked.replaceChildren();
     for(const t of selected){const b=el('button',t.title+' ×','selected-task');b.type='button';b.disabled=busy||!!pending;b.setAttribute('aria-label','移除讨论对象：'+t.title);b.onclick=()=>chooseTask({id:t.id});picked.append(b);}
-    $('chat-status').textContent=error||(readOnly()?'此对话保留只读。可查看原文，点击新对话继续。':'')||(pending?'上次发送结果未确认，重试会核对同一条消息，不会重复创建。':!loaded?'正在读取对话…':!enabled?'此空间尚未启用自主整理。':executor==='offline'?'Codex 执行器未运行；消息可保存，恢复后接续。':waiting?latest.data.status==='failed'?'本轮失败，原话已保留。请在消息下方重试。':'消息已保存，可离开页面；答复完成后会保留在此处。':'');
+    $('chat-status').textContent=error||window.LumosModels?.error||(readOnly()?'此对话保留只读。可查看原文，点击新对话继续。':'')||(pending?'上次发送结果未确认，重试会核对同一条消息，不会重复创建。':!loaded?'正在读取对话…':!enabled?'此空间尚未启用自主整理。':['offline','waiting','stopped'].includes(executor)?'后台处理暂停或未运行；消息可保存，恢复后接续。':waiting?latest.data.status==='failed'?'本轮失败，原话已保留。请在消息下方重试。':'消息已保存，可离开页面；答复完成后会保留在此处。':'');
   }
   function render(){
     const deleted=new Set(sessions.filter(n=>n.data.deleted).map(n=>n.data.chat_id));
@@ -362,15 +362,15 @@ if(typeof document!=='undefined'){
     if(modelSignature===signature)return;
     let selected='';
     try{selected=localStorage.getItem(modelKey());if(selected===null){selected=localStorage.getItem('lumos.chat.model')||'';localStorage.setItem(modelKey(),selected);}}catch{selected='';}
-    selected=pending?.model??selected;
+    selected=pending?.model??window.LumosModels?.get(agentRole)??selected;
     const options=[{id:'',name:'默认模型'},...availableModels];
     if(selected&&!options.some(m=>m.id===selected))options.push({id:selected,name:selected+'（未在当前列表中）'});
     $('chat-model').replaceChildren();
     for(const m of options){const o=el('option',m.name);o.value=m.id;$('chat-model').append(o);}
     $('chat-model').value=selected;modelSignature=signature;
   }
-  $('chat-model').onchange=()=>{try{localStorage.setItem(modelKey(),$('chat-model').value);window.dispatchEvent(new CustomEvent('lumos-model'));}catch{error='模型选择无法保存在此浏览器，刷新后可能需要重新选择。';controls();}};
-  const syncModel=()=>{modelSignature='';restoreModel();};
+  $('chat-model').onchange=async()=>{error='';try{if(window.LumosModels?.save)await window.LumosModels.save(agentRole,$('chat-model').value);else{localStorage.setItem(modelKey(),$('chat-model').value);window.dispatchEvent(new CustomEvent('lumos-model'));}}catch(e){error=e.message||'模型选择未保存，请重试。';}finally{modelSignature='';controls();}};
+  const syncModel=()=>{modelSignature='';controls();};
   window.addEventListener('storage',syncModel);window.addEventListener('lumos-model',syncModel);
   async function models(){try{const r=await fetch('/api/codex-models'),data=await r.json();if(!r.ok)throw new Error();availableModels=data.models;if(!data.models.length)$('model-help').textContent='暂未读取到本机模型列表；保留已选模型，实际可用性以调用结果为准。';}catch{$('model-help').textContent='模型列表读取失败；保留已选模型，实际可用性以调用结果为准。';}finally{modelsReady=true;controls();}}
   $('chat-title').onclick=()=>{$('session-status').textContent='';$('conversation-management').showModal();$('session-title').focus();};

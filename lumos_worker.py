@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import threading
 
-from lumos import ENGINE, Error, require, write_json
+from lumos import ENGINE, Error, now, require, write_json
 from lumos_tasks import FIELDS
 from lumos_intake import claim_intake, intake_context, apply_intake, fail_intake, enqueue_due_reviews
 from lumos_agents import (ROLES, role_for, check_plan, record_step, prepare_execution,
@@ -197,6 +197,8 @@ def collaborate(store, job, context, planner):
         current['intake'] = {**job, 'data': {k: v for k, v in job['data'].items() if k in
             {'title', 'text', 'workspace', 'agent_role', 'model', 'note', 'note_mode', 'review', 'task_review',
              'source', 'related_ids', 'chat_id', 'chat_parent', 'episode_ref', 'question_key', 'question_keys', 'question_text'}}}
+        from lumos_models import execution_model
+        current['intake']['data']['model'] = execution_model(job['data'], actor)
         if proposals:
             current['proposals'] = copy.deepcopy(proposals)
         if actor == 'librarian' and job['data'].get('note_mode') != 'format':
@@ -221,7 +223,7 @@ def collaborate(store, job, context, planner):
         if material_reads and actor in {'lumos', 'aipm'}:
             current['material_reads'] = copy.deepcopy(material_reads)
         if actor == 'maintainer':
-            current = {k: v for k, v in current.items() if k not in {'records', 'open_questions', 'chat_history', 'lumos_reports', 'proposals'}}
+            current = {k: v for k, v in current.items() if k not in {'records', 'open_questions', 'lumos_reports', 'proposals'}}
         else:
             current.pop('diagnostics', None)
             current.pop('ops_reports', None)
@@ -348,16 +350,38 @@ class Worker:
     def __init__(self, store):
         self.store = store
         self.stop = threading.Event()
-        self.state = 'offline'
+        self._state = 'offline'
+        self.error = ''
+        self.last_check = ''
         self.thread = threading.Thread(target=self.loop, daemon=True, name='lumos-intake')
 
+    @property
+    def state(self):
+        if not self.thread.is_alive():
+            return 'stopped' if self.thread.ident is not None else 'offline'
+        return self._state
+
+    def health(self):
+        return {'state': self.state, 'error': self.error, 'last_check': self.last_check}
+
     def loop(self):
-        while not self.stop.is_set():
-            try:
-                self.state = 'available' if executable() else 'offline'
-                run_once(self.store)
-                from lumos_attention import synchronize_attention
-                synchronize_attention(self.store)
-            except (Error, OSError):
-                self.state = 'waiting'
-            self.stop.wait(5)
+        try:
+            while not self.stop.is_set():
+                try:
+                    available = bool(executable())
+                    if not self.error:
+                        self._state = 'available' if available else 'offline'
+                    run_once(self.store)
+                    from lumos_attention import synchronize_attention
+                    synchronize_attention(self.store)
+                    self._state = 'available' if available else 'offline'
+                    self.error = ''
+                except Exception as exc:
+                    import logging
+                    logging.getLogger(__name__).exception('Lumos background iteration failed')
+                    self._state = 'waiting'
+                    self.error = type(exc).__name__+'：后台处理暂停，正在等待恢复；已保存的输入仍保留。'
+                self.last_check = now()
+                self.stop.wait(5)
+        finally:
+            self._state = 'stopped'

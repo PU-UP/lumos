@@ -46,3 +46,5 @@
 .chat-page .conversation[data-writing=expanded] #chat-text{height:auto;max-height:none;min-height:120px}
 #conversation-management{max-width:620px}#conversation-management textarea{min-height:160px}#conversation-management .dialog-heading{display:flex;align-items:center;justify-content:space-between}
 @media(max-width:800px){.chat-page{height:auto;min-height:100dvh;overflow:auto}.chat-page .chat-layout{padding:0;overflow:visible}.chat-page .conversation{padding:18px 16px}.chat-page #messages{min-height:220px;max-height:none;overflow:visible}.chat-page .chat-layout aside{max-height:240px}.chat-page #chat-text{height:150px;min-height:120px}.conversation-heading{align-items:flex-start}.conversation-heading h2{font-size:18px}.writing-heading>div{gap:6px}.model-choice{max-width:150px!important}.composer-actions>span{display:none}.chat-page .view-nav a small{display:none}}
+
+.worker-alert{margin:0;padding:12px 24px;background:#fff2d3;color:#754600;border-bottom:1px solid #e6ce96;line-height:1.6;overflow-wrap:anywhere}.worker-alert[hidden]{display:none}

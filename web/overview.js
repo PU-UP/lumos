@@ -112,7 +112,7 @@ if (typeof document !== 'undefined') {
     $('feedback-submit').disabled=writing || !state.writable || (!!busy && !pending);
     $('close-answer').disabled=writing;
     $('feedback-submit').textContent=pending?'重试提交':job?'提交补充':'提交答复';
-    $('feedback-status').textContent=feedbackError || (pending?'上次提交结果未确认，请重试核对同一份答复。':receiptState==='error'?'暂时无法读取处理状态；正文保留，可刷新重试。':busy?(executor==='offline'?'答复已保存；Lumos执行器未运行，恢复后接续。':answerStates[job.data.status]):'填写已知情况即可，Lumos会接续任务和安排。');
+    $('feedback-status').textContent=feedbackError || (pending?'上次提交结果未确认，请重试核对同一份答复。':receiptState==='error'?'暂时无法读取处理状态；正文保留，可刷新重试。':busy?(['offline','waiting','stopped'].includes(executor)?'答复已保存；Lumos执行器未运行，恢复后接续。':answerStates[job.data.status]):'填写已知情况即可，Lumos会接续任务和安排。');
     const host=$('answer-receipt');host.replaceChildren();
     if(activeQuestion?.answers?.length){
       const history=fold('原问题与答复历史',host,'question-history:'+activeQuestion.key);
@@ -179,6 +179,8 @@ if (typeof document !== 'undefined') {
     event.preventDefault();if(writing || !state?.writable)return;
     const text=$('feedback-text').value.trim();if(!text && !feedbackSender.pending){$('feedback-status').textContent='请先填写答复。';$('feedback-text').focus();return;}
     const target=$('feedback-target').value;
+    await window.LumosModels?.ready;
+    if(!feedbackSender.pending&&window.LumosModels?.error){feedbackError=window.LumosModels.error;updateAnswerStatus();return;}
     const request=feedbackSender.pending||{request_id:crypto.randomUUID().replaceAll('-',''),workspace:feedbackWorkspace,...(window.LumosModels?{model:window.LumosModels.get('lumos')}:{}) ,
       text:activeQuestion?activeQuestion.text+'\n\n王牧楠答复：\n'+text:text,title:activeQuestion?.title.slice(0,300)||'主线页反馈',related_ids:target?[target]:[],...(activeQuestion?{question_key:activeQuestion.key,question_keys:activeQuestion.question_keys||[activeQuestion.key],question_text:activeQuestion.question_keys?.length>1?activeQuestion.title+' · 合并跟进':activeQuestion.text}:{})};
     await sendFeedback(request,request.id?undefined:text);

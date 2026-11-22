@@ -26,12 +26,14 @@ if(typeof document!=='undefined'){
   modelChoice.append(modelSelect);local.prepend(modelChoice);local.append(modelMessage);
   let modelOptions=[];
   const updateModels=()=>{
+    modelSelect.disabled=window.LumosModels.loading||window.LumosModels.busy;
+    modelMessage.textContent=window.LumosModels.error||(window.LumosModels.busy?'正在保存模型…':'');
     const selected=window.LumosModels.get(displayedRole||role),options=[{id:'',name:'Codex 默认'},...modelOptions];
     if(selected&&!options.some(m=>m.id===selected))options.push({id:selected,name:selected});
     modelSelect.replaceChildren();for(const m of options){const o=el('option',m.name);o.value=m.id;modelSelect.append(o);}modelSelect.value=selected;
     for(const a of nav.querySelectorAll('a')){const id=new URL(a.href,location.href).searchParams.get('role'),value=window.LumosModels.get(id);let badge=a.querySelector('.role-model-name');if(!badge){badge=el('span');badge.className='role-model-name';a.append(badge);}badge.textContent=modelOptions.find(m=>m.id===value)?.name||value||'Codex 默认';badge.title=value||'使用本机 Codex 默认配置；历史未记录的具体型号不会推测。';}
   };
-  modelSelect.onchange=()=>{try{localStorage.setItem('lumos.chat.model.'+(displayedRole||role),modelSelect.value);window.dispatchEvent(new CustomEvent('lumos-model'));modelMessage.textContent='';}catch{modelMessage.textContent='模型偏好未能保存，请在对话中选择。';updateModels();}};
+  modelSelect.onchange=async()=>{try{await window.LumosModels.save(displayedRole||role,modelSelect.value);}catch{updateModels();}};
   window.addEventListener('storage',updateModels);window.addEventListener('lumos-model',updateModels);
   document.body.classList.add('simple-workspace');
   if(url.pathname!==info.home||url.searchParams.has('view')){const back=el('a','返回 '+info.name);back.href=target(info.home,role);local.append(back);}
@@ -43,7 +45,19 @@ if(typeof document!=='undefined'){
   for(const n of document.querySelectorAll('.section-links'))n.hidden=true;
   const divider=header.querySelector('.divider');if(divider){divider.nextElementSibling?.remove();divider.remove();}
   const description=el('span');description.className='role-purpose';header.append(description);
-  fetch('/api/health').then(r=>r.json()).then(d=>{if(d.preview){const p=el('p','体验版 · 使用模拟数据，与正式工作记录隔离');p.className='preview-banner';header.before(p);}}).catch(()=>{});
+  const workerAlert=el('p');workerAlert.className='worker-alert';workerAlert.setAttribute('role','status');workerAlert.hidden=true;
+  if(!embedded)header.after(workerAlert);
+  let previewShown=false;
+  async function checkWorker(){
+    try{const r=await fetch('/api/health');if(!r.ok)throw Error();const d=await r.json();
+      if(d.preview&&!previewShown){const p=el('p','体验版 · 使用模拟数据，与正式工作记录隔离');p.className='preview-banner';header.before(p);previewShown=true;}
+      const status=d.worker?.state;
+      workerAlert.textContent=status==='stopped'?'后台处理已停止，需重启本机服务；已保存的输入仍保留。':status==='waiting'?(d.worker.error||'后台处理暂停，正在等待恢复；已保存的输入仍保留。'):status==='offline'?'Codex 执行器未运行；已保存的输入会在恢复后接续。':'';
+    }catch{workerAlert.textContent='暂时无法连接后台，请检查本机服务；未发送内容请保留。';}
+    workerAlert.hidden=!workerAlert.textContent;if(!embedded)setTimeout(checkWorker,5000);
+    if(!embedded&&!window.LumosModels.loading&&!window.LumosModels.busy)window.LumosModels.reload();
+  }
+  checkWorker();
   picker?.addEventListener('change',()=>{for(const a of document.querySelectorAll('.view-nav a,.role-tools a')){const u=new URL(a.href,location.href);u.searchParams.set('workspace',picker.value);a.href=u.pathname+u.search;}});
   let displayedRole=role,displayedSpace=space;
   updateModels();fetch('/api/codex-models').then(r=>{if(!r.ok)throw new Error();return r.json();}).then(d=>{modelOptions=d.models;updateModels();}).catch(()=>{modelMessage.textContent='模型列表暂不可用，保留已选模型。';});

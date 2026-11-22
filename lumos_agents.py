@@ -87,11 +87,12 @@ def missing_followups(plan, records):
 def execution_hashes():
     return {'rules_hash': digest(b''.join((ENGINE/f).read_bytes() for f in
             ('docs/agent-roles.md', 'docs/agent-planner.md', 'docs/chat-planner.md', 'docs/task-review-planner.md', 'docs/note-format-planner.md'))),
-            'code_hash': digest(b''.join((ENGINE/f).read_bytes() for f in ('lumos_agents.py', 'lumos_worker.py', 'lumos_intake.py', 'lumos_followup.py', 'lumos_knowledge.py', 'lumos_ops.py', 'lumos_conversations.py', 'lumos_attention.py')))}
+            'code_hash': digest(b''.join((ENGINE/f).read_bytes() for f in ('lumos_agents.py', 'lumos_worker.py', 'lumos_intake.py', 'lumos_followup.py', 'lumos_knowledge.py', 'lumos_ops.py', 'lumos_conversations.py', 'lumos_attention.py', 'lumos_models.py')))}
 
 
 def record_step(store, ident, claim, role, phase, basis='', *, attempt=None, plan=None, error=None, input_hash='', reused_from=''):
     """Record attempts independently; only the final apply makes proposals authoritative."""
+    from lumos_models import execution_model
     with process_lock(store.root):
         store.writable(); store.idle()
         with store.db() as db:
@@ -104,7 +105,7 @@ def record_step(store, ident, claim, role, phase, basis='', *, attempt=None, pla
             attempt = uuid.uuid4().hex
             steps.append({'id': role+':'+phase, 'attempt_id': attempt, 'claim': claim,
                 'attempt': 1+sum(s['id'] == role+':'+phase for s in steps), 'role': role, 'phase': phase,
-                'status': 'running', 'started_at': now(), 'basis': basis, 'model': 'none' if phase in {'inspect', 'apply'} else data.get('model') or 'executor-default',
+                'status': 'running', 'started_at': now(), 'basis': basis, 'model': 'none' if phase in {'inspect', 'apply'} else execution_model(data, role) or 'executor-default',
                 'input_hash': input_hash, 'reused_from': reused_from, **execution_hashes()})
         else:
             step = next((s for s in steps if s['attempt_id'] == attempt), None)

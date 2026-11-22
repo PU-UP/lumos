@@ -7,6 +7,30 @@ from test_core import BaseStoreCase
 
 
 class AgentWebTest(BaseStoreCase):
+    def test_model_settings_use_guarded_endpoint_and_health_detects_stopped_worker(self):
+        from lumos_worker import Worker
+        server = make_server(self.store, 0)
+        worker = Worker(self.store); worker.stop.set(); worker.thread.start(); worker.thread.join()
+        worker._state = 'available'; server.worker = worker
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        base = 'http://127.0.0.1:'+str(server.server_port)
+        try:
+            with urlopen(base+'/api/health') as response:
+                self.assertEqual(json.load(response)['worker']['state'], 'stopped')
+            with urlopen(base+'/api/role-models') as response:
+                settings = json.load(response)
+            body = json.dumps({'models': {'lumos': 'selected'}, 'expected': {'lumos': None}}).encode()
+            headers = {'Content-Type': 'application/json', 'Origin': base}
+            with self.assertRaises(HTTPError):
+                urlopen(Request(base+'/api/role-models', data=body, headers=headers))
+            headers['X-Lumos-Token'] = settings['token']
+            with urlopen(Request(base+'/api/role-models', data=body, headers=headers)) as response:
+                self.assertEqual(json.load(response)['models'], {'lumos': 'selected'})
+            with urlopen(base+'/api/role-models') as response:
+                self.assertEqual(json.load(response)['models'], {'lumos': 'selected'})
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
+
     def test_new_routes_use_existing_loopback_and_write_guards(self):
         self.seed()
         server = make_server(self.store, 0)

@@ -25,7 +25,7 @@ function renderTaskReview() {
   const running=d && ['pending','running'].includes(d.status);
   $('review-tasks').disabled=reviewSubmitting||!state.writable||!review?.enabled||running;
   $('review-tasks').textContent=running?'Lumos 正在复核…':d?.status==='failed'?'重试任务更新':'Lumos 更新全部任务';
-  $('task-review-status').textContent=reviewSubmitting?'正在提交复核请求…':!review?.enabled?'此空间尚未启用任务统筹。':running?(state.executor==='offline'?'复核已排队，执行器恢复后继续。':'正在逐项核对进展、排期和你的手动修改，可离开页面。'):d?.status==='failed'?'本轮未完成：'+d.error:d?.summary||'由 Lumos 维护安排；需要你的关键判断会集中提问。';
+  $('task-review-status').textContent=reviewSubmitting?'正在提交复核请求…':!review?.enabled?'此空间尚未启用任务统筹。':running?(['offline','waiting','stopped'].includes(state.executor)?'复核已排队，执行器恢复后继续。':'正在逐项核对进展、排期和你的手动修改，可离开页面。'):d?.status==='failed'?'本轮未完成：'+d.error:d?.summary||'由 Lumos 维护安排；需要你的关键判断会集中提问。';
   const completed=review?.completed?.data;
   $('task-review-time').textContent=completed?'最近完成复核：'+reviewTime(completed.completed_at)+' · '+completed.task_reviews.length+' 项任务':'尚无全量复核记录';
   if(window.LumosRoleUI&&!reviewSubmitting&&!running&&d?.status!=='failed')$('task-review-status').textContent='';
@@ -46,6 +46,8 @@ $('review-tasks').onclick=async()=>{
   const key='lumos.task-review.request.'+workspace;
   reviewSubmitting=true;renderTaskReview();
   try{
+    await window.LumosModels?.ready;
+    if(window.LumosModels?.error)throw Error(window.LumosModels.error);
     let request;try{request=JSON.parse(localStorage.getItem(key));}catch{}
     request ||= job?.data.status==='failed'?{request_id:crypto.randomUUID().replaceAll('-',''),id:job.id,expected_revision:job.data.revision}:{request_id:crypto.randomUUID().replaceAll('-',''),workspace,...(window.LumosModels?{model:window.LumosModels.get('lumos')}:{})};
     try{localStorage.setItem(key,JSON.stringify(request));}catch{}
