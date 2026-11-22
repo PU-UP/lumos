@@ -15,6 +15,35 @@ def conversation_node(chat_id, role, workspace, title, created=None, status='act
         'memo': '', 'source_ids': []}}
 
 
+def validate_agent_memo(value):
+    require(isinstance(value, dict) and set(value) == {'title', 'memo', 'state'}, 'Invalid agent conversation memo')
+    require(isinstance(value['title'], str) and 0 < len(value['title'].strip()) <= 80, '对话标题须简短')
+    require(isinstance(value['memo'], str) and len(value['memo']) <= 2000, '对话备忘过长')
+    require(value['state'] in {'ongoing', 'waiting', 'settled'}, 'Invalid topic state')
+
+
+def maintain_conversation(nodes, receipt, plan):
+    """Same transaction as the reply; an agent cannot overwrite a manual title."""
+    d = receipt['data']; old = nodes.get('chat-'+d.get('chat_id', ''))
+    if not old or old['data']['status'] != 'active':
+        return []
+    value = plan.get('conversation')
+    if value is not None:
+        validate_agent_memo(value)
+    data = {**old['data'], 'revision': old['data']['revision']+1, 'updated_at': now(),
+            'memo': value['memo'] if value else old['data']['memo'],
+            'topic_state': value['state'] if value else old['data'].get('topic_state', 'ongoing'),
+            'memo_receipt': receipt['id']}
+    if value and data.get('title_mode') == 'auto':
+        data['title'] = value['title']
+    destinations = [i for i in d.get('destinations', []) if nodes.get(i, {}).get('kind') in {'action', 'mainline'}]
+    data['source_ids'] = list(dict.fromkeys([*data['source_ids'], *d.get('related_ids', []), *destinations]))[-20:]
+    from lumos_attention import notice
+    item = notice('reply:'+receipt['id'], 'reply', d['summary'], receipt['id'], d.get('related_ids', []))
+    data['notices'] = [*data.get('notices', []), item]
+    return [{**old, 'data': data}]
+
+
 def validate_conversation(node, old, nodes):
     d = node['data']
     require(isinstance(d.get('chat_id'), str) and re.fullmatch('[a-f0-9]{32}', d['chat_id'])
@@ -28,6 +57,10 @@ def validate_conversation(node, old, nodes):
     refs = d.get('source_ids')
     require(isinstance(refs, list) and len(refs) <= 20 and all(isinstance(i, str) and i in nodes for i in refs), 'Invalid memo references')
     require(type(d.get('revision')) is int and d['revision'] > 0, 'Invalid conversation revision')
+    require(d.get('title_mode', 'manual') in {'manual', 'auto'}, 'Invalid title mode')
+    require(d.get('topic_state', 'ongoing') in {'ongoing', 'waiting', 'settled'}, 'Invalid topic state')
+    from lumos_attention import validate_notices
+    validate_notices(d.get('notices', []), d['agent_role'], d['workspace'], nodes, old['data'].get('notices', []) if old else [])
     if old:
         require(all(d[k] == old['data'][k] for k in ('chat_id', 'agent_role', 'workspace', 'created_at')), '对话身份与资料范围不能更改')
     if old != node:
@@ -95,6 +128,10 @@ def save_conversation(store, request):
         for k in ('title', 'memo', 'source_ids', 'status', 'agent_role', 'workspace'):
             if k in request:
                 node['data'][k] = request[k]
+        if 'title' in request:
+            node['data']['title_mode'] = 'manual'
+        elif not old:
+            node['data']['title_mode'] = 'auto'
         # References may aid recovery but never grant access to another workspace.
         from lumos_tasks import context_workspace
         require(isinstance(node['data']['source_ids'], list) and all(isinstance(i, str) for i in node['data']['source_ids']), 'Invalid memo references')

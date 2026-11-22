@@ -213,8 +213,9 @@ def save_intake(store, request):
                 upgraded = db.execute('PRAGMA user_version').fetchone()[0] == 2
             if upgraded:
                 from lumos_conversations import conversation_node
-                updates.append(conversation_node(node['data']['chat_id'], node['data']['agent_role'],
-                    node['data']['workspace'], node['data']['title']))
+                chat = conversation_node(node['data']['chat_id'], node['data']['agent_role'], node['data']['workspace'], '新对话')
+                chat['data']['title_mode'] = 'auto'
+                updates.append(chat)
         commit_tasks(store, nodes, {'reason': reason, 'updates': updates}, node['id'])
         return {'intake': node, 'replayed': False}
 
@@ -461,7 +462,10 @@ def apply_intake(store, request):
     require(isinstance(request, dict) and set(request) == {'id', 'claim', 'basis', 'plan'}, 'Invalid reconciliation envelope')
     plan = request['plan']
     require(isinstance(plan, dict) and {'summary', 'questions', 'updates'} <= set(plan)
-            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions', 'reply', 'task_reviews', 'note_format', 'findings', 'question_options', 'material_registrations', 'source_refs'}, 'Invalid reconciliation plan')
+            and set(plan) <= {'summary', 'questions', 'updates', 'resolutions', 'reply', 'task_reviews', 'note_format', 'findings', 'question_options', 'material_registrations', 'source_refs', 'conversation'}, 'Invalid reconciliation plan')
+    if 'conversation' in plan:
+        from lumos_conversations import validate_agent_memo
+        validate_agent_memo(plan['conversation'])
     require(isinstance(plan.get('reply', ''), str) and len(plan.get('reply', '')) <= 20000, 'Invalid chat reply')
     require(isinstance(plan['summary'], str) and 0 < len(plan['summary']) <= 4000, 'Receipt summary required')
     require(isinstance(plan['questions'], list) and all(isinstance(q, str) and 0 < len(q) <= 2000 for q in plan['questions']), 'Invalid questions')
@@ -760,5 +764,8 @@ def apply_intake(store, request):
                          or any(n['kind'] in {'action', 'mainline', 'person'} for n in updates))
         synchronized = {n['id']: n for n in synchronize_followups(merged, numbers)} if task_work else {}
         updates = [synchronized.pop(n['id'], n) for n in updates] + list(synchronized.values())
+        if job.get('chat_id'):
+            from lumos_conversations import maintain_conversation
+            updates.extend(maintain_conversation({**nodes, **{n['id']: n for n in updates}}, receipt, plan))
         commit_tasks(store, nodes, {'reason': 'reconcile:'+old['id']+':'+plan_hash, 'updates': updates}, old['id'])
         return {'intake': receipt, 'replayed': False}

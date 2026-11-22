@@ -106,6 +106,10 @@ def plan_with_codex(context, root):
         if context['intake']['data'].get('chat_id'):
             response_schema = {**SCHEMA, 'required': [*SCHEMA['required'], 'reply'],
                                'properties': {**SCHEMA['properties'], 'reply': {'type': 'string'}}}
+            response_schema['required'].append('conversation')
+            response_schema['properties']['conversation'] = {'type': 'object', 'additionalProperties': False,
+                'required': ['title', 'memo', 'state'], 'properties': {'title': {'type': 'string'},
+                    'memo': {'type': 'string'}, 'state': {'type': 'string', 'enum': ['ongoing', 'waiting', 'settled']}}}
             prompt += '\n\n' + (ENGINE / 'docs/chat-planner.md').read_text(encoding='utf-8')
         if context['intake']['data'].get('task_review'):
             response_schema = {**SCHEMA, 'required': [*SCHEMA['required'], 'task_reviews'],
@@ -301,9 +305,13 @@ def collaborate(store, job, context, planner):
         final['updates'] = evidence+final['updates']
         if job['data'].get('chat_id'):
             final['reply'] = decision['reply']
+            if 'conversation' in decision:
+                final['conversation'] = decision['conversation']
     elif job['data'].get('chat_id') and (role == 'lumos' or len(results) > 1):
         synthesis = run('lumos', 'synthesize', results)
         final['reply'] = synthesis['reply']
+        if 'conversation' in synthesis:
+            final['conversation'] = synthesis['conversation']
     return final
 
 
@@ -348,6 +356,8 @@ class Worker:
             try:
                 self.state = 'available' if executable() else 'offline'
                 run_once(self.store)
+                from lumos_attention import synchronize_attention
+                synchronize_attention(self.store)
             except (Error, OSError):
                 self.state = 'waiting'
             self.stop.wait(5)

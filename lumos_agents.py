@@ -87,7 +87,7 @@ def missing_followups(plan, records):
 def execution_hashes():
     return {'rules_hash': digest(b''.join((ENGINE/f).read_bytes() for f in
             ('docs/agent-roles.md', 'docs/agent-planner.md', 'docs/chat-planner.md', 'docs/task-review-planner.md', 'docs/note-format-planner.md'))),
-            'code_hash': digest(b''.join((ENGINE/f).read_bytes() for f in ('lumos_agents.py', 'lumos_worker.py', 'lumos_intake.py', 'lumos_followup.py', 'lumos_knowledge.py', 'lumos_ops.py')))}
+            'code_hash': digest(b''.join((ENGINE/f).read_bytes() for f in ('lumos_agents.py', 'lumos_worker.py', 'lumos_intake.py', 'lumos_followup.py', 'lumos_knowledge.py', 'lumos_ops.py', 'lumos_conversations.py', 'lumos_attention.py')))}
 
 
 def record_step(store, ident, claim, role, phase, basis='', *, attempt=None, plan=None, error=None, input_hash='', reused_from=''):

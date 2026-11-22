@@ -2,7 +2,7 @@
 .simple-workspace{--page-gutter:clamp(16px,4vw,56px);--control-height:42px;font-variant-numeric:tabular-nums}
 .simple-workspace>header{padding:16px var(--page-gutter);min-height:72px;gap:16px;flex-wrap:wrap}
 .simple-workspace>.view-nav{padding:12px var(--page-gutter);gap:8px}
-.simple-workspace>.view-nav a{padding:12px 16px;min-height:72px;justify-content:center}
+.simple-workspace>.view-nav a{padding:12px 16px;min-height:72px;justify-content:flex-start}
 .simple-workspace>.role-tools{padding:8px var(--page-gutter);min-height:42px;gap:16px}
 .simple-workspace .role-purpose:empty,.simple-workspace p:empty{display:none}
 .simple-workspace main{padding:28px var(--page-gutter) 96px;max-width:1440px}
@@ -111,3 +111,34 @@
 .detail-resize:hover::after,.detail-resize:focus-visible::after{background:var(--accent)}
 .detail-resize:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}.detail-resizing{user-select:none;cursor:col-resize}
 @media(max-width:700px){.role-model-choice{flex-wrap:wrap;gap:4px}.role-model-choice select{width:190px;max-width:62vw}.role-tools{gap:8px}.role-scope-text{font-size:11px}.view-nav .role-model-name{font-size:10px}.simple-workspace #mainline-detail[open]{padding:0 18px 16px}.detail-resize{display:none}.brief-heading{flex-wrap:wrap}}
+/* Conversation controls share one baseline; the title itself is the rename affordance. */
+.conversation-heading {align-items:center;gap:16px;flex-wrap:wrap}
+.conversation-tools,.notice-heading,.notice-actions {display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.conversation-tools {margin-left:auto}
+.chat-title-button {font:inherit;font-weight:inherit;color:inherit;border:0;background:transparent;padding:4px 0;text-align:left;max-width:100%;overflow-wrap:anywhere}
+.chat-title-button:hover {text-decoration:underline;text-underline-offset:5px}
+.icon-close {width:48px;height:48px;padding:0;display:grid;place-items:center;font-size:32px;line-height:1;border:0;background:transparent;flex:none}
+.icon-close:hover {background:var(--surface-soft,#e4f0f0)}
+.rename-conversation {width:min(440px,calc(100vw - 32px))}
+.rename-conversation label {display:grid;gap:8px;margin:20px 0}
+.proactive-message {border-left:3px solid #087d87;padding:16px 20px;margin:20px 0;background:#f1f7f7;border-radius:0 12px 12px 0}
+.notice-heading {justify-content:space-between;font-size:14px}
+.notice-actions {margin-top:16px}
+.unread-label {color:#087780;font-weight:600}
+.notice-read {font-size:14px}
+.attention-bubble {position:fixed;right:28px;bottom:92px;z-index:25;border-radius:28px;box-shadow:0 4px 18px #153c4820;background:white}
+.attention-bubble.has-unread {border-color:#087d87;color:#076f78;font-weight:600}
+.attention-panel {width:min(520px,calc(100vw - 32px));max-height:80vh;padding:24px}
+.attention-thread {display:grid;width:100%;text-align:left;gap:8px;padding:18px 0;border:0;border-bottom:1px solid #d6e4e7;border-radius:0;background:transparent}
+.attention-meta {font-size:14px;color:#087780}
+.attention-preview {font-size:14px;color:#526d76;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal}
+@media(max-width:600px){.conversation-tools{margin-left:0;width:100%}.attention-bubble{right:16px;bottom:86px}.proactive-message{padding:14px}.conversation-heading h2{margin-bottom:4px}}
+
+.simple-workspace.chat-page .chat-layout .conversation aside:not([hidden]){position:static;inset:auto;width:auto;flex:1;min-height:0;overflow:auto;border:0;padding:12px 0;background:transparent}
+.simple-workspace .conversation:has(aside:not([hidden])) #messages,.simple-workspace .conversation:has(aside:not([hidden])) #chat-form,.simple-workspace .conversation aside .chat-heading{display:none}
+.simple-workspace .conversation aside #chat-list{display:block;overflow:visible}
+.simple-workspace .conversation aside .chat-link{width:100%;max-width:none;min-width:0}
+
+@media(min-width:801px){.chat-docked .attention-bubble{right:calc(var(--workspace-chat-width,480px) + 20px)}}
+
+.simple-workspace>.view-nav .role-model-name{margin-top:auto}

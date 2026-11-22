@@ -3,8 +3,9 @@ const {chatTurns,chatReceipt,discussionItems,discussionQuestions}=require('../we
 const tick=()=>new Promise(r=>setImmediate(r));
 const response=(data,status=200)=>({ok:status===200,status,json:async()=>data});
 class Element{
-  constructor(){this.value='';this.children=[];this.scrollHeight=500;this.scrollTop=400;this.clientHeight=100;this.events={};}
+  constructor(){this.value='';this.children=[];this.scrollHeight=500;this.scrollTop=400;this.clientHeight=100;this.events={};this.dataset={};}
   addEventListener(name,fn){this.events[name]=fn;}
+  querySelectorAll(){return descendants(this).filter(n=>n.dataset.noticeId);}
   showModal(){this.open=true;}close(){this.open=false;this.onclose?.();}
   append(...v){this.children.push(...v);}replaceChildren(...v){this.children=v;}setAttribute(k,v){this[k]=v;}focus(){}
 }
@@ -34,8 +35,7 @@ test('model preference persists per agent across new conversations, reload and e
   const storage=new Map([['lumos.chat.model','test-model']]);
   const p=await page(storage,'http://127.0.0.1/chat?role=aipm');assert.equal(p.get('chat-model').value,'test-model');
   p.get('chat-model').value='';p.get('chat-model').onchange();
-  p.get('new-chat').onclick();p.get('new-title').value='另一个项目';p.get('new-workspace').value='lingguang';
-  await p.get('new-conversation-form').onsubmit({preventDefault(){}});assert.equal(p.get('chat-model').value,'');
+  await p.get('new-chat').onclick();assert.equal(p.get('chat-model').value,'');
   const atlas=await page(storage,'http://127.0.0.1/chat?role=librarian');assert.equal(atlas.get('chat-model').value,'test-model');
   const again=await page(storage,p.world.window.location.href);assert.equal(again.get('chat-model').value,'');
   again.get('chat-model').value='test-model';again.get('chat-model').onchange();
@@ -74,7 +74,7 @@ test('plain replies preserve untrusted text without injecting markup or losing l
   const {replyBlocks}=require('../web/role-chat.js');
   assert.deepEqual(replyBlocks('<script>danger()</script>\n\n- 第一条\n2. 第二条\n结果未知'),[
     {kind:'paragraph',text:'<script>danger()</script>'},{kind:'list',items:['第一条','第二条']},{kind:'paragraph',text:'结果未知'}]);
-  const html=fs.readFileSync('web/role-chat.html','utf8');assert.ok(!html.includes('<details'));assert.ok(html.includes('id="manage-conversation"'));
+  const html=fs.readFileSync('web/role-chat.html','utf8');assert.ok(!html.includes('<details'));assert.ok(!html.includes('id="manage-conversation"'));assert.ok(html.includes('aria-label="重命名对话"'));
 });
 
 test('role entry drafts and active conversations do not leak across roles',async()=>{
@@ -84,22 +84,21 @@ test('role entry drafts and active conversations do not leak across roles',async
   const r=await page(storage,'http://127.0.0.1/chat?role=aipm');assert.equal(r.get('chat-text').value,'排期草稿');
   await r.submit();assert.equal(r.posts[0].agent_role,'aipm');assert.equal(r.posts[0].text,'排期草稿');
 });
-test('new conversation persists title and explicit scope before sending',async()=>{
-  const p=await page(new Map(),'http://127.0.0.1/chat?role=maintainer');p.edit('旧草稿');p.get('new-chat').onclick();
-  p.get('new-title').value='排查保存问题';p.get('new-workspace').value='lumos';
-  await p.get('new-conversation-form').onsubmit({preventDefault(){}});
-  assert.equal(p.posts[0].agent_role,'maintainer');assert.equal(p.posts[0].workspace,'lumos');assert.equal(p.posts[0].title,'排查保存问题');
-  p.edit('仅诊断');await p.submit();assert.equal(p.posts[1].chat_id,p.posts[0].chat_id);assert.equal(p.posts[1].workspace,'lumos');
+test('new conversation starts immediately in the same scope and retains the old draft',async()=>{
+  const p=await page(new Map(),'http://127.0.0.1/chat?role=maintainer&workspace=lumos');p.edit('旧草稿');const old=p.world.window.location.href;await p.get('new-chat').onclick();
+  assert.equal(p.posts.length,0);assert.equal(p.get('chat-text').value,'');assert.equal(p.get('chat-title').textContent,'新对话');
+  p.edit('仅诊断');await p.submit();assert.equal(p.posts[0].agent_role,'maintainer');assert.equal(p.posts[0].workspace,'lumos');
+  const q=await page(p.storage,old);assert.equal(q.get('chat-text').value,'旧草稿');
 });
 test('material handoff prepares an explicit read-only draft without sending again on reload',async()=>{
   const p=await page(new Map(),'http://127.0.0.1/chat?agent=librarian&material='+encodeURIComponent('条件.md'));
   assert.match(p.get('chat-text').value,/条件.md/);assert.match(p.get('chat-text').value,/只查阅/);assert.equal(p.posts.length,0);
   assert.equal(new URL(p.world.window.location.href).searchParams.has('material'),false);
 });
-test('a rejected new conversation can be corrected without replaying its rejected title',async()=>{
-  const p=await page(),normal=p.world.fetch;p.get('new-title').value='被拒绝';
-  p.world.fetch=async()=>response({error:'invalid'},400);await p.get('new-conversation-form').onsubmit({preventDefault(){}});
-  p.world.fetch=normal;p.get('new-title').value='修正标题';await p.get('new-conversation-form').onsubmit({preventDefault(){}});
+test('a rejected rename can be corrected without replaying its rejected title',async()=>{
+  const p=await page(),normal=p.world.fetch;p.get('session-title').value='被拒绝';p.get('session-title').oninput();
+  p.world.fetch=async()=>response({error:'invalid'},400);await p.get('rename-form').onsubmit({preventDefault(){}});
+  p.world.fetch=normal;p.get('session-title').value='修正标题';await p.get('rename-form').onsubmit({preventDefault(){}});
   assert.equal(p.posts[0].title,'修正标题');
 });
 test('server binding wins over an incorrect role in a bookmarked link',async()=>{
@@ -107,34 +106,29 @@ test('server binding wins over an incorrect role in a bookmarked link',async()=>
   const p=await page(new Map(),'http://127.0.0.1/chat?role=aipm&id='+id,[job]);
   assert.equal(p.get('role-heading').textContent,'Atlas');p.edit('继续核对');await p.submit();assert.equal(p.posts[0].agent_role,'librarian');
 });
-test('memo changes are saved with revision and original message stays untouched',async()=>{
-  const p=await page();p.edit('未发送原话');p.get('session-title').value='本轮目标';p.get('session-memo').value='目标与待办';
-  await p.get('save-session').onclick();assert.equal(p.posts[0].memo,'目标与待办');assert.equal(p.posts[0].expected_revision,0);assert.equal(p.get('chat-text').value,'未发送原话');
-  await p.get('close-session').onclick();assert.equal(p.get('send-chat').disabled,true);assert.equal(p.get('chat-text').value,'未发送原话');
-  await p.get('close-session').onclick();assert.equal(p.get('send-chat').disabled,false);
+test('rename saves only the title and keeps the original message untouched',async()=>{
+  const p=await page();p.edit('未发送原话');p.get('session-title').value='本轮目标';
+  await p.get('rename-form').onsubmit({preventDefault(){}});assert.equal(p.posts[0].title,'本轮目标');assert.equal(p.posts[0].expected_revision,0);assert.equal(p.get('chat-text').value,'未发送原话');
+  assert.equal('memo' in p.posts[0],false);assert.equal('status' in p.posts[0],false);
 });
-test('an uncertain memo save stays with its own conversation after navigation and reload',async()=>{
-  const p=await page();p.get('session-title').value='原对话';p.get('session-memo').value='不能丢失的备忘';p.get('session-memo').oninput();
-  const normal=p.world.fetch;let attempted;
+test('an uncertain rename stays with its own conversation after navigation and reload',async()=>{
+  const p=await page();p.get('session-title').value='原对话';p.get('session-title').oninput();const normal=p.world.fetch;let attempted;
   p.world.fetch=async(url,opts)=>{if(url==='/api/conversations'){attempted=JSON.parse(opts.body);throw new Error('lost response');}return normal(url,opts);};
-  await p.get('save-session').onclick();
-  const q=await page(p.storage,'http://127.0.0.1/chat?role=librarian&id='+'b'.repeat(32));
-  q.get('session-title').value='另一个对话';q.get('session-memo').value='另一份备忘';await q.get('save-session').onclick();
-  assert.equal(q.posts[0].chat_id,'b'.repeat(32));assert.equal(q.posts[0].memo,'另一份备忘');
-  const r=await page(p.storage,p.world.window.location.href);assert.equal(r.get('session-memo').value,'不能丢失的备忘');
-  await r.get('save-session').onclick();assert.deepEqual(r.posts[0],attempted);
+  await p.get('rename-form').onsubmit({preventDefault(){}});
+  const q=await page(p.storage,'http://127.0.0.1/chat?role=librarian&id='+'b'.repeat(32));q.get('session-title').value='另一个对话';await q.get('rename-form').onsubmit({preventDefault(){}});assert.equal(q.posts[0].chat_id,'b'.repeat(32));
+  const r=await page(p.storage,p.world.window.location.href);assert.equal(r.get('session-title').value,'原对话');await r.get('rename-form').onsubmit({preventDefault(){}});assert.deepEqual(r.posts[0],attempted);
 });
-async function page(storage=new Map(),href='http://127.0.0.1/chat?id='+'a'.repeat(32),initial=[],board={}){
+async function page(storage=new Map(),href='http://127.0.0.1/chat?id='+'a'.repeat(32),initial=[],board={},extra={}){
   const els=new Map(),get=id=>{if(!els.has(id))els.set(id,new Element());return els.get(id);};
-  const listing={conversations:[],intakes:initial,token:'test',enabled:true,executor:'available'},posts=[],notifications=[],events={};let poll;
-  const world={document:{getElementById:get,createElement:()=>new Element()},window:{location:{href,origin:new URL(href).origin},parent:{postMessage(message){notifications.push(message);}},addEventListener(name,fn){events[name]=fn;},dispatchEvent(){}},history:{replaceState(a,b,u){world.window.location.href=String(u);}},URL,crypto,CustomEvent:class{constructor(name,options){this.detail=options?.detail;}},
-    localStorage:{get length(){return storage.size;},key:i=>[...storage.keys()][i],getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v)},setTimeout:fn=>{poll=fn;return 1;},clearTimeout(){},
-    fetch:async(url,opts)=>{if(!opts)return response(url==='/api/codex-models'?{models:[{id:'test-model',name:'Test model'}]}:url==='/api/tasks'?board:listing);const req=JSON.parse(opts.body);posts.push(req);if(url==='/api/conversations'){const conversation={id:'chat-'+req.chat_id,kind:'conversation',data:{...req,revision:(req.expected_revision||0)+1,status:req.status||'active'}};listing.conversations=[conversation,...listing.conversations.filter(n=>n.id!==conversation.id)];return response({conversation});}const intake={id:'intake-'+req.request_id,data:{...req,status:'pending',revision:1,created_at:'2026-11-17T00:00:00Z'}};listing.intakes.unshift(intake);return response({intake});}};
-  world.Event = Event;
+  const listing={conversations:[],intakes:initial,token:'test',enabled:true,executor:'available'},posts=[],notifications=[],events={};let poll,readTimer;
+  const world={document:{getElementById:get,createElement:()=>new Element(),visibilityState:'visible',addEventListener(name,fn){events[name]=fn;}},window:{location:{href,origin:new URL(href).origin},parent:{postMessage(message){notifications.push(message);}},addEventListener(name,fn){events[name]=fn;},dispatchEvent(){}},history:{replaceState(a,b,u){world.window.location.href=String(u);}},URL,crypto,CustomEvent:class{constructor(name,options){this.detail=options?.detail;}},
+    localStorage:{get length(){return storage.size;},key:i=>[...storage.keys()][i],getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v)},setTimeout:(fn,ms)=>{if(ms===1200)readTimer=fn;else poll=fn;return 1;},clearTimeout(){},
+    fetch:async(url,opts)=>{if(!opts)return response(url==='/api/codex-models'?{models:[{id:'test-model',name:'Test model'}]}:url==='/api/tasks'?board:listing);const req=JSON.parse(opts.body);posts.push(req);if(url==='/api/conversation-read'){const conversation=listing.conversations.find(n=>n.data.chat_id===req.chat_id);conversation.data.notices.forEach(n=>{if(req.ids.includes(n.id))n.seen_at='seen';});return response({conversation});}if(url==='/api/conversations'){const conversation={id:'chat-'+req.chat_id,kind:'conversation',data:{...req,revision:(req.expected_revision||0)+1,status:req.status||'active'}};listing.conversations=[conversation,...listing.conversations.filter(n=>n.id!==conversation.id)];return response({conversation});}const intake={id:'intake-'+req.request_id,data:{...req,status:'pending',revision:1,created_at:'2026-11-17T00:00:00Z'}};listing.intakes.unshift(intake);return response({intake});}};
+  Object.assign(world,extra);world.Event = Event;
   vm.createContext(world);vm.runInContext(fs.readFileSync('web/dialog.js','utf8'),world);vm.runInContext(fs.readFileSync('web/work-model.js','utf8'),world);vm.runInContext(fs.readFileSync('web/role-chat.js','utf8'),world);await tick();
   const edit=text=>{get('chat-text').value=text;get('chat-text').oninput();};
   const submit=async()=>{get('chat-form').onsubmit({preventDefault(){}});await tick();};
-  return {world,get,listing,posts,edit,submit,storage,notifications,events,poll:()=>poll()};
+  return {world,get,listing,posts,edit,submit,storage,notifications,events,poll:()=>poll(),read:()=>readTimer?.()};
 }
 
 test('open conversations receive model choices from the role work page without losing drafts',async()=>{
@@ -150,4 +144,32 @@ test('embedded chat notifies the overview only after a newly completed turn, not
   const p=await page(new Map(),href,[{...job,data:{...job.data,status:'pending'}}]);
   p.listing.intakes=[job];await p.poll();assert.equal(p.notifications.length,1);assert.equal(p.notifications[0].lumosChat,'saved');
   await p.poll();assert.equal(p.notifications.length,1);
+});
+
+
+test('proactive messages never mark themselves read in a hidden or polling chat and answer the exact question',async()=>{
+  const p=await page(),id='a'.repeat(32),item={id:'notice-one',kind:'question',text:'实测结果是什么？',at:'2026-11-22T01:00:00Z',active:true,seen_at:'',question_key:'question:original:0',related_ids:['talk']};
+  p.listing.conversations=[{id:'chat-'+id,data:{chat_id:id,title:'同步进展',agent_role:'lumos',workspace:'lingguang',status:'active',notices:[item]}}];
+  await p.poll();await p.poll();assert.equal(p.posts.length,0);
+  const normal=p.world.fetch;p.world.fetch=async(url,opts)=>{if(url==='/api/conversation-read'){const req=JSON.parse(opts.body);assert.deepEqual(req.ids,['notice-one']);p.listing.conversations[0].data.notices[0].seen_at='2026-11-22T02:00:00Z';return response({conversation:p.listing.conversations[0]});}return normal(url,opts);};
+  p.edit('保留我的补充');descendants(p.get('messages')).find(n=>n.textContent==='答复').onclick();await tick();
+  assert.equal(p.get('chat-text').value,'保留我的补充');await p.submit();assert.equal(p.posts[0].question_key,'question:original:0');assert.deepEqual(p.posts[0].related_ids,['talk']);
+});
+
+test('message inbox sorts unread first and retains settled topics without counting stale prompts',()=>{
+  const {attentionThreads}=require('../web/attention.js');
+  const chat=(id,notices)=>({data:{chat_id:id,agent_role:'lumos',workspace:'lingguang',title:id,notices}});
+  const result=attentionThreads([chat('read',[{active:true,seen_at:'seen',at:'2026-11-23'}]),chat('old',[{active:false,seen_at:'',at:'2026-11-24'}]),chat('unread',[{active:true,seen_at:'',at:'2026-11-22'}])]);
+  assert.deepEqual(result.map(n=>[n.id,n.unread]),[['unread',1],['old',0],['read',0]]);
+});
+
+
+test('automatic reading requires visible message endings in a visible tab and leaves unseen messages unread',async()=>{
+  const observers=[];class Observer{constructor(callback){this.callback=callback;this.targets=[];observers.push(this);}observe(n){this.targets.push(n);}disconnect(){}}
+  const p=await page(new Map(),undefined,[],{}, {IntersectionObserver:Observer}),id='a'.repeat(32);
+  const message=(key)=>({id:key,kind:'question',text:key,at:'2026-11-22T01:00:00Z',active:true,seen_at:'',related_ids:[]});
+  p.listing.conversations=[{id:'chat-'+id,data:{chat_id:id,title:'进展',agent_role:'lumos',workspace:'lingguang',status:'active',notices:[message('visible'),message('below-fold')]}}];await p.poll();
+  const observer=observers.at(-1);p.world.document.visibilityState='hidden';observer.callback([{target:observer.targets[0],isIntersecting:true,intersectionRatio:1}]);await p.read();assert.equal(p.posts.length,0);
+  p.world.document.visibilityState='visible';p.events.visibilitychange();await p.read();await tick();assert.deepEqual(p.posts[0].ids,['visible']);
+  assert.equal(p.listing.conversations[0].data.notices[1].seen_at,'');
 });
