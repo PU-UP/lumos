@@ -39,7 +39,7 @@ if(typeof document!=='undefined'){
   if(url.pathname!==info.home||url.searchParams.has('view')){const back=el('a','返回 '+info.name);back.href=target(info.home,role);local.append(back);}
   const picker=document.querySelector('#workspace, #note-workspace, #chat-workspace');
   const scopeCaption=el('span','资料范围：'+(space==='lumos'?'Lumos 仓库维护':'灵光'));scopeCaption.className='role-scope-text';
-  if(picker){picker.value=space;picker.closest('label').hidden=true;if(url.pathname!=='/chat')local.append(scopeCaption);}
+  if(picker){picker.value=space;picker.closest('label').hidden=true;if(url.pathname!=='/chat'&&!window.LumosUnified)local.append(scopeCaption);}
   window.addEventListener('lumos-scope',e=>{if(!['lingguang','lumos'].includes(e.detail))return;picker.value=e.detail;scopeCaption.textContent='资料范围：'+(e.detail==='lumos'?'Lumos 仓库维护':'灵光');const current=new URL(location.href);current.searchParams.set('workspace',e.detail);history.replaceState(null,'',current);for(const a of document.querySelectorAll('.view-nav a,.role-tools a')){const u=new URL(a.href,location.href);u.searchParams.set('workspace',e.detail);a.href=u.pathname+u.search;}});
   const header=document.querySelector('header');
   for(const n of document.querySelectorAll('.section-links'))n.hidden=true;

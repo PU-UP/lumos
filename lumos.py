@@ -641,6 +641,8 @@ def main():
     command.add_argument('request', type=Path)
     command = subs.add_parser('upgrade-roles')
     command.add_argument('--quiet-files', action='store_true')
+    command = subs.add_parser('unify-workspace')
+    command.add_argument('--quiet-files', action='store_true')
     for name in ('material-save', 'agent-inspect'):
         command = subs.add_parser(name)
         command.add_argument('request', type=Path)
@@ -697,6 +699,9 @@ def main():
                 result = getattr(store, args.command)()
             elif args.command == "context":
                 result = store.context(args.question)
+            elif args.command == 'unify-workspace':
+                from lumos_workspaces import unify_workspace
+                result = unify_workspace(store, args.quiet_files)
             elif args.command in {'conversations', 'conversation-save', 'upgrade-roles'}:
                 from lumos_conversations import list_conversations, save_conversation, upgrade_conversations
                 result = (list_conversations(store) if args.command == 'conversations' else

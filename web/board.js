@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const fields = ['text', 'context', 'status', 'condition', 'details', 'next_step', 'progress', 'due', 'completed_on', 'follow_up', 'priority', 'owner', 'group'];
-const workspaces = {lingguang: '灵光', lumos: 'Lumos 仓库维护'};
+const workspaces = {lingguang: typeof window!=='undefined'&&window.LumosUnified?'全部工作':'灵光', lumos: 'Lumos 仓库维护'};
 const labels = {todo: '待处理', doing: '进行中', blocked: '受阻', done: '已完成', cancelled: '已取消'};
 const priorities = {P3: 'P3', low: '低', normal: '中', high: '高'};
 const ownerName = data => data.owner?.trim() || '王牧楠';

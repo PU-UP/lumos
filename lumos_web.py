@@ -5,7 +5,7 @@ import secrets
 import os
 import socket
 import sqlite3
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlsplit, parse_qs, urlencode
 
 from lumos import ENGINE, Error, require
 from lumos_tasks import list_tasks, task_detail, save_task
@@ -32,6 +32,9 @@ def make_server(store, port=8765):
     token = secrets.token_hex(32)
     from lumos_runtime import runtime_info
     runtime = runtime_info()
+    from lumos_workspaces import is_unified
+    with store.db() as db:
+        unified = is_unified(store.nodes(db, ('decision',)))
 
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -66,6 +69,11 @@ def make_server(store, port=8765):
                 require(self.headers.get("Host") == host, "Invalid host")
                 require(self.headers.get("Sec-Fetch-Site") not in {"cross-site"}, "Cross-site request refused")
                 path = urlsplit(self.path)
+                if unified:
+                    query = parse_qs(path.query)
+                    if query.get('workspace') == ['lumos']:
+                        query['workspace'] = ['lingguang']
+                        path = path._replace(query=urlencode(query, doseq=True))
                 if write:
                     require(path.path in {"/api/tasks", "/api/notes", "/api/intakes", "/api/mainline-review", "/api/task-review", "/api/materials", "/api/agent-inspect", "/api/conversations", "/api/conversation-read", "/api/role-models"}, "Unknown route")
                     require(self.headers.get("Origin") == "http://" + host, "Invalid origin")
@@ -73,6 +81,11 @@ def make_server(store, port=8765):
                     require(self.headers.get("Content-Type", "").split(";")[0] == "application/json", "Expected JSON")
                     request = json.loads(raw)
                     require(isinstance(request, dict), "Expected request object")
+                    if unified:
+                        if request.get('workspace') == 'lumos':
+                            request['workspace'] = 'lingguang'
+                        if path.path == '/api/notes' and isinstance(request.get('changes'), dict) and request['changes'].get('workspace') == 'lumos':
+                            request['changes']['workspace'] = 'lingguang'
                     request["source"] = {"type": "user", "ref": "本地看板用户保存，request=" + str(request.get("request_id", ""))}
                     from lumos_agents import inspect_once
                     from lumos_knowledge import register_material
@@ -80,6 +93,10 @@ def make_server(store, port=8765):
                             "/api/materials": register_material, "/api/agent-inspect": inspect_once,
                             "/api/conversations": save_conversation, "/api/conversation-read": read_attention, "/api/role-models": save_role_models}[path.path]
                     self.reply(200, save(store, request))
+                elif path.path == '/workspace-mode.js':
+                    script = 'window.LumosUnified=' + json.dumps(unified) + ';'
+                    script += "if(window.LumosUnified){const u=new URL(location.href);if(u.searchParams.get('workspace')==='lumos'){u.searchParams.set('workspace','lingguang');history.replaceState(null,'',u);}}"
+                    self.reply(200, script.encode(), 'text/javascript; charset=utf-8')
                 elif path.path == "/api/agents":
                     from lumos_agents import episodes
                     self.reply(200, {**episodes(store, parse_qs(path.query).get('workspace', ['lingguang'])[0]), 'token': token,
@@ -151,6 +168,7 @@ def make_server(store, port=8765):
                         name = 'role-knowledge.html'
                     raw = (ENGINE / 'web' / name).read_bytes()
                     if name.endswith('.html'):
+                        raw = raw.replace(b'<head>', b'<head><script src="/workspace-mode.js"></script>')
                         raw = raw.replace(b'/navigation.js', b'/role-navigation.js').replace(b'/navigation.css', b'/role-navigation.css')
                         raw = raw.replace(b'<script src="/role-navigation.js"', b'<script src="/role-models.js" defer></script><script src="/role-navigation.js"')
                         raw = raw.replace(b'</head>', b'<link rel="stylesheet" href="/workspace.css"><script src="/workspace.js" defer></script><script src="/attention.js" defer></script></head>')

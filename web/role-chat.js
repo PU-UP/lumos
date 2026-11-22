@@ -130,7 +130,8 @@ if(typeof document!=='undefined'){
     $('chat-model').disabled=busy||!!pending||!modelsReady||window.LumosModels?.loading||window.LumosModels?.busy;
     $('role-heading').textContent=agentNames[agentRole]||'历史对话';
     $('role-description').textContent=typeof roleSpaces!=='undefined'?roleSpaces[agentRole]?.purpose||'混合历史保留原样':'';
-    $('conversation-scope').textContent='资料范围：'+(workspace==='lumos'?'Lumos 仓库维护':'灵光')+(readOnly()?' · 只读历史':'');
+    $('conversation-scope').textContent=window.LumosUnified?(readOnly()?'只读历史':''):'资料范围：'+(workspace==='lumos'?'Lumos 仓库维护':'灵光')+(readOnly()?' · 只读历史':'');
+    $('conversation-scope').hidden=window.LumosUnified&&!readOnly();
     $('writing-label').textContent='写给 '+agentNames[agentRole];
     $('conversation').setAttribute('aria-label','与 '+agentNames[agentRole]+' 对话');
     $('chat-text').placeholder=roleConversation[agentRole].hint;

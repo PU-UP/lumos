@@ -149,6 +149,12 @@ test('chat uses saved server models and displays background pauses without losin
   assert.equal(p.get('chat-text').value,'保留未发送的正文');await p.submit();assert.equal(p.posts[0].model,'changed');
 });
 
+test('unified workspace hides obsolete scope labels without changing drafts',async()=>{
+  const p=await page();p.edit('统一工作区草稿');p.world.window.LumosUnified=true;
+  await p.poll();assert.equal(p.get('conversation-scope').textContent,'');assert.equal(p.get('conversation-scope').hidden,true);
+  assert.equal(p.get('chat-text').value,'统一工作区草稿');await p.submit();assert.equal(p.posts[0].workspace,'lingguang');
+});
+
 test('embedded chat notifies the overview only after a newly completed turn, not on opening history',async()=>{
   const job=choiceJob(),href='http://127.0.0.1/chat?role=aipm&embedded=1&id='+job.data.chat_id;
   const history=await page(new Map(),href,[job]);assert.equal(history.notifications.length,0);
