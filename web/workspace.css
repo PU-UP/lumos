@@ -161,3 +161,20 @@
   .simple-workspace.chat-page .chat-history-toolbar{min-height:58px;padding:8px 12px}
   .simple-workspace.chat-page .chat-layout{padding-top:0;grid-template-rows:58px minmax(0,1fr)}
 }
+
+/* Keep unread distinct from the teal selection state, with text as well as color. */
+.simple-workspace #chat-history .chat-list-row{display:flex;align-items:center;min-width:0;gap:2px}
+.simple-workspace #chat-history .chat-link{flex:1;min-width:0}
+.simple-workspace #chat-history .chat-link[data-unread=true] small,.attention-thread.is-unread .attention-meta{color:#a34b00;font-weight:700}
+.attention-bubble.has-unread{color:#8b3e00;border-color:#bd6b19;background:#fff4df}
+.chat-delete{flex:none;background:transparent;border:0;color:var(--muted);font-size:12px;padding:8px 6px;min-height:40px}
+.chat-delete:hover,.chat-delete:focus-visible{color:#a62e28;background:#fff0ed}
+#chat-search{width:100%;min-width:0;font-size:13px;padding:9px 10px}
+.chat-history-toolbar{gap:12px;flex-wrap:wrap}
+#chat-delete-result{display:flex;align-items:center;gap:8px;font-size:13px}
+#chat-delete-result button{padding:4px 8px}
+#delete-chat-error{color:#a62e28}
+#delete-conversation .danger{background:#a62e28;color:white;border-color:#a62e28}
+#delete-conversation p{line-height:1.7;margin:16px 0;overflow-wrap:anywhere}
+.simple-workspace.chat-page:not(.embedded-chat) .chat-layout{min-height:580px}
+@media(hover:hover){.chat-list-row .chat-delete{opacity:0}.chat-list-row:hover .chat-delete,.chat-list-row:focus-within .chat-delete{opacity:1}}

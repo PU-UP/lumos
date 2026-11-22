@@ -25,7 +25,7 @@ def validate_agent_memo(value):
 def maintain_conversation(nodes, receipt, plan):
     """Same transaction as the reply; an agent cannot overwrite a manual title."""
     d = receipt['data']; old = nodes.get('chat-'+d.get('chat_id', ''))
-    if not old or old['data']['status'] != 'active':
+    if not old or old['data']['status'] != 'active' or old['data'].get('deleted', False):
         return []
     value = plan.get('conversation')
     if value is not None:
@@ -50,6 +50,7 @@ def validate_conversation(node, old, nodes):
             and node['id'] == 'chat-'+d['chat_id'], 'Invalid conversation ID')
     require(d.get('agent_role') in {*ROLES, 'legacy'} and d.get('workspace') in {'lingguang', 'lumos'}, 'Invalid conversation scope')
     require(d.get('status') in {'active', 'closed', 'legacy'}, 'Invalid conversation status')
+    require(type(d.get('deleted', False)) is bool, 'Invalid conversation deletion state')
     require((d['agent_role'] == 'legacy') == (d['status'] == 'legacy'), 'Mixed history must remain read-only')
     for key, limit in [('title', 300), ('memo', 10000)]:
         require(isinstance(d.get(key), str) and len(d[key]) <= limit, 'Invalid conversation '+key)
@@ -100,7 +101,7 @@ def list_conversations(store, workspace='lingguang'):
 
 def save_conversation(store, request):
     require(isinstance(request, dict) and set(request) <= {'request_id', 'chat_id', 'agent_role', 'workspace',
-        'title', 'memo', 'source_ids', 'status', 'expected_revision', 'source'}, 'Invalid conversation request')
+        'title', 'memo', 'source_ids', 'status', 'expected_revision', 'source', 'operation', 'confirmed'}, 'Invalid conversation request')
     key = request.get('request_id', '')
     require(isinstance(key, str) and re.fullmatch('[a-f0-9]{32}', key), 'Invalid request ID')
     chat_id = request.get('chat_id', '')
@@ -118,6 +119,18 @@ def save_conversation(store, request):
         old = nodes.get('chat-'+chat_id)
         require(not old or old['kind'] == 'conversation', 'Conversation ID conflicts with an existing record')
         require(request.get('expected_revision', 0) == (old['data']['revision'] if old else 0), '对话信息已变化，请刷新后重试')
+        if 'operation' in request:
+            require(set(request) <= {'request_id', 'chat_id', 'agent_role', 'workspace', 'expected_revision', 'source', 'operation', 'confirmed'}, '删除或恢复不能同时修改对话内容')
+            require(request['operation'] in {'delete', 'restore'}, 'Invalid conversation operation')
+            require(old and old['data']['workspace'] == request.get('workspace') and old['data']['agent_role'] == request.get('agent_role'), '对话不属于当前角色或资料范围')
+            require(request['operation'] != 'delete' or request.get('confirmed') is True, '删除对话需要确认')
+            require(not any(n['kind'] == 'intake' and n['data'].get('chat_id') == chat_id and n['data']['status'] in {'pending', 'running'} for n in nodes.values()), '对话仍在处理中，请完成后再删除或恢复')
+            node = {**old, 'data': {**old['data'], 'deleted': request['operation'] == 'delete',
+                    'revision': old['data']['revision']+1, 'updated_at': now()}}
+            commit_tasks(store, nodes, {'reason': reason, 'updates': [node]}, node['id'])
+            return {'conversation': node, 'replayed': False}
+        require('confirmed' not in request, '确认标记仅用于删除对话')
+        require(not old or not old['data'].get('deleted'), '此对话已删除，请先恢复')
         if old:
             require(old['data']['status'] != 'legacy', '混合角色历史保留只读，请新建对话')
             node = {**old, 'data': {**old['data'], 'revision': old['data']['revision']+1, 'updated_at': now()}}

@@ -71,6 +71,7 @@ if(typeof document!=='undefined'){
   let agentRole=requestedRole,episodeRef='';
   let modelsReady=false,modelSignature='',availableModels=[];
   let readObserver,readTimer,reading=false;
+  let deleteTarget=null,deleteRequest=null,deleteBusy=false,undoDelete=null;
   const visibleNotices=new Set();
   const currentSession=()=>sessions.find(n=>n.data.chat_id===chatId);
   const readOnly=()=>['closed','legacy'].includes(currentSession()?.data.status);
@@ -144,20 +145,23 @@ if(typeof document!=='undefined'){
     $('chat-status').textContent=error||(readOnly()?'此对话保留只读。可查看原文，点击新对话继续。':'')||(pending?'上次发送结果未确认，重试会核对同一条消息，不会重复创建。':!loaded?'正在读取对话…':!enabled?'此空间尚未启用自主整理。':executor==='offline'?'Codex 执行器未运行；消息可保存，恢复后接续。':waiting?latest.data.status==='failed'?'本轮失败，原话已保留。请在消息下方重试。':'消息已保存，可离开页面；答复完成后会保留在此处。':'');
   }
   function render(){
-    const groups=new Map(sessions.map(n=>[n.data.chat_id,n]));
-    for(const n of jobs)if(n.data.chat_id && !n.data.chat_parent && !groups.has(n.data.chat_id))groups.set(n.data.chat_id,n);
+    const deleted=new Set(sessions.filter(n=>n.data.deleted).map(n=>n.data.chat_id));
+    const groups=new Map(sessions.filter(n=>!n.data.deleted).map(n=>[n.data.chat_id,n]));
+    for(const n of jobs)if(!deleted.has(n.data.chat_id) && n.data.chat_id && !n.data.chat_parent && !groups.has(n.data.chat_id))groups.set(n.data.chat_id,n);
     // Retain browser-only drafts from before the upgrade and new unsent conversations.
     for(let i=0;i<localStorage.length;i++){const key=localStorage.key(i),prefix='lumos.chat.'+workspace+'.';if(!key?.startsWith(prefix))continue;
-      const id=key.slice(prefix.length);if(!/^[a-f0-9]{32}$/.test(id)||groups.has(id))continue;
+      const id=key.slice(prefix.length);if(!/^[a-f0-9]{32}$/.test(id)||groups.has(id)||deleted.has(id))continue;
       try{const d=JSON.parse(localStorage.getItem(key));if(d?.text||d?.pending)groups.set(id,{data:{chat_id:id,title:'未发送草稿',agent_role:d.agentRole||'lumos',status:'draft'}});}catch{}}
-    const entries=[...groups].filter(([id,n])=>(n.data.agent_role||'lumos')===agentRole||n.data.agent_role==='legacy');
-    const nextListSignature=JSON.stringify(entries)+chatId+busy;
+    const query=$('chat-search').value.trim().toLocaleLowerCase();
+    const entries=[...groups].filter(([id,n])=>((n.data.agent_role||'lumos')===agentRole||n.data.agent_role==='legacy')&&conversationLabel(n.data.title,n.data.created_at).toLocaleLowerCase().includes(query));
+    const nextListSignature=JSON.stringify(entries)+chatId+busy+deleteBusy+query;
     if(nextListSignature!==listSignature){
       const list=$('chat-list');list.replaceChildren();
-      for(const [id,first] of entries){const label=conversationLabel(first.data.title,first.data.created_at),b=el('button',undefined,'chat-link');b.title=label;b.append(el('span',label,'chat-link-title'));b.setAttribute('aria-current',String(id===chatId));b.disabled=busy;
-        const latest=chatTurns(jobs,id).at(-1);const status=first.data.status==='legacy'?'混合角色历史 · 只读':first.data.status==='closed'?'已结束':latest?.data.status==='running'?'正在处理':latest?.data.status==='failed'?'待重试':first.data.notices?.some(n=>n.active&&!n.seen_at)?'● 未读消息':first.data.status==='draft'?'未发送草稿':'';if(status)b.append(el('small',status));
-        b.onclick=()=>selectChat(id);list.append(b);}
-      if(!entries.length)list.append(el('p','还没有对话。直接写下第一件事即可。','muted'));
+      for(const [id,first] of entries){const row=el('div',undefined,'chat-list-row'),unread=first.data.notices?.some(n=>n.active&&!n.seen_at);const label=conversationLabel(first.data.title,first.data.created_at),b=el('button',undefined,'chat-link');b.title=label;b.append(el('span',label,'chat-link-title'));b.setAttribute('aria-current',String(id===chatId));b.disabled=busy||deleteBusy;b.dataset.unread=String(!!unread);
+        const latest=chatTurns(jobs,id).at(-1);const status=first.data.status==='legacy'?'混合角色历史 · 只读':first.data.status==='closed'?'已结束':latest?.data.status==='pending'?'等待处理':latest?.data.status==='running'?'正在处理':latest?.data.status==='failed'?'待重试':unread?'● 未读消息':first.data.status==='draft'?'未发送草稿':'';if(status)b.append(el('small',status));
+        b.onclick=()=>selectChat(id);row.append(b);
+        const remove=el('button','删除','chat-delete');remove.type='button';remove.setAttribute('aria-label','删除对话：'+label);remove.disabled=busy||deleteBusy||['pending','running'].includes(latest?.data.status);remove.title=remove.disabled?'等待本轮处理完成':'删除对话';remove.onclick=()=>{deleteTarget=first;deleteRequest=null;$('delete-chat-name').textContent=label;$('delete-chat-error').textContent='';$('delete-conversation').showModal();};row.append(remove);list.append(row);}
+      if(!entries.length)list.append(el('p',query?'没有找到匹配的对话。':'还没有对话。点击新建对话即可开始。','muted'));
       listSignature=nextListSignature;
     }
     const turns=chatTurns(jobs,chatId),latest=turns.at(-1);
@@ -270,15 +274,16 @@ if(typeof document!=='undefined'){
       const finished=data.intakes.some(n=>n.data.chat_id===chatId && ['done','needs_review'].includes(n.data.status) && jobs.find(j=>j.id===n.id)?.data.status!==n.data.status);
       const notifyParent=finished&&jobs.length>0;
       sessions=data.conversations||[];
+      if(currentSession()?.data.deleted){chatId=uuid();pending=null;metadataRequest=null;metadataDirty=false;signature='';restoreDraft();address();}
       const bound=currentSession()?.data.agent_role||data.intakes.find(n=>n.data.chat_id===chatId)?.data.agent_role;
       if(bound&&bound!=='legacy'){agentRole=bound;requestedRole=bound;address();window.dispatchEvent(new CustomEvent('lumos-role',{detail:agentRole}));}
       jobs=data.intakes;token=data.token;enabled=data.enabled;executor=data.executor;loaded=true;if(error.startsWith('对话读取失败：'))error='';render();if(finished)loadTasks();if(notifyParent&&url.searchParams.get('embedded')==='1')window.parent.postMessage({lumosChat:'saved'},window.location.origin);
     }catch(e){if(current!==generation)return;loaded=false;error='对话读取失败：'+e.message;controls();}
     if(current===generation)timer=setTimeout(refresh,4000);
   }
-  async function selectChat(id,newWorkspace=workspace){
+  async function selectChat(id,newWorkspace=workspace,keepDraft=true){
     if(busy)return;
-    try{saveDraft();}catch(e){error='草稿无法保存在此浏览器，请先复制正文。';controls();return;}
+    try{if(keepDraft)saveDraft();}catch(e){error='草稿无法保存在此浏览器，请先复制正文。';controls();return;}
     workspace=newWorkspace;chatId=id;generation++;clearTimeout(timer);signature='';metaSignature='';metadataDirty=false;error='';restoreDraft();address();
     $('chat-workspace').value=workspace;loaded=false;jobs=[];sessions=[];render();loadTasks();await refresh();$('chat-text').focus();
   }
@@ -300,6 +305,39 @@ if(typeof document!=='undefined'){
     if(url.searchParams.get('material')&&!$('chat-text').value)$('chat-text').value='请查阅项目文件“'+url.searchParams.get('material')+'”，说明主要内容和未解析的部分。只查阅，不登记或修改任务。';
   }
   try{saveDraft();address();}catch{error='浏览器无法保留草稿，请勿关闭页面。';}
+  $('chat-search').oninput=()=>render();
+  $('cancel-chat-delete').onclick=()=>{if(!deleteBusy)$('delete-conversation').close();};
+  $('delete-conversation').addEventListener('cancel',event=>{if(deleteBusy)event.preventDefault();});
+  dismissOnBackdrop($('delete-conversation'));
+  function deleteControls(){ $('confirm-chat-delete').disabled=deleteBusy;$('cancel-chat-delete').disabled=deleteBusy;$('undo-chat-delete').disabled=deleteBusy; }
+  $('confirm-chat-delete').onclick=async()=>{
+    if(deleteBusy||!deleteTarget)return;deleteBusy=true;deleteControls();
+    const target=deleteTarget,id=target.data.chat_id,key=`lumos.chat.${workspace}.${id}`;
+    try{
+      if(id===chatId)saveDraft();
+      const draft=localStorage.getItem(key),meta=sessions.find(n=>n.data.chat_id===id);
+      if(meta){
+        deleteRequest ||= {request_id:uuid(),chat_id:id,agent_role:meta.data.agent_role,workspace,expected_revision:meta.data.revision,operation:'delete',confirmed:true};
+        await postSession(deleteRequest);
+      }
+      if(meta){try{localStorage.removeItem(key);}catch{}}else localStorage.removeItem(key);undoDelete={id,draft,role:target.data.agent_role||agentRole,persisted:!!meta,workspace};
+      $('delete-conversation').close();$('chat-delete-result').hidden=false;$('chat-delete-result-text').textContent='对话已删除';$('undo-chat-delete').hidden=false;
+      if(id===chatId)await selectChat(uuid(),workspace,false);else await refresh();
+      window.parent.postMessage({lumosChat:'read'},window.location.origin);
+    }catch(e){$('delete-chat-error').textContent=e.message;if(e.status>=400&&e.status<500)deleteRequest=null;await refresh();}
+    finally{deleteBusy=false;deleteControls();render();}
+  };
+  $('undo-chat-delete').onclick=async()=>{
+    if(deleteBusy||!undoDelete)return;deleteBusy=true;deleteControls();
+    const undo=undoDelete;
+    try{
+      if(undo.persisted){await refresh();const meta=sessions.find(n=>n.data.chat_id===undo.id);if(meta?.data.deleted)await postSession({request_id:uuid(),chat_id:undo.id,agent_role:undo.role,workspace:undo.workspace,expected_revision:meta.data.revision,operation:'restore'});}
+      if(undo.draft!==null)localStorage.setItem(`lumos.chat.${undo.workspace}.${undo.id}`,undo.draft);
+      undoDelete=null;$('chat-delete-result-text').textContent='对话已恢复';$('undo-chat-delete').hidden=true;await selectChat(undo.id,undo.workspace);
+      window.parent.postMessage({lumosChat:'read'},window.location.origin);
+    }catch(e){$('chat-delete-result-text').textContent='恢复失败：'+e.message+'，可重试。';}
+    finally{deleteBusy=false;deleteControls();render();}
+  };
   $('new-chat').onclick=async()=>{if(busy||sessionBusy)return;await selectChat(uuid());$('chat-text').focus();};
   async function postSession(request){const r=await fetch('/api/conversations',{method:'POST',headers:{'Content-Type':'application/json','X-Lumos-Token':token},body:JSON.stringify(request)}),data=await r.json();if(!r.ok){const error=new Error(data.error||'保存失败');error.status=r.status;throw error;}return data.conversation;}
   $('session-title').oninput=()=>{metadataDirty=true;try{saveDraft();}catch{$('session-status').textContent='名称暂时无法保存在浏览器中。';}};

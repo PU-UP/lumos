@@ -128,7 +128,7 @@ def synchronize_attention(store):
                 if existing:
                     continue
                 source_chat = nodes[item['source_id']]['data'].get('chat_id')
-                candidates = [n for n in chats.values() if n['data']['agent_role'] == role and n['data']['status'] == 'active'
+                candidates = [n for n in chats.values() if n['data']['agent_role'] == role and n['data']['status'] == 'active' and not n['data'].get('deleted')
                               and (any(x['key'] == item['key'] for x in n['data'].get('notices', [])) or
                                    n['data']['chat_id'] == source_chat or
                                    set(n['data']['source_ids']) & set(item['related_ids']))]

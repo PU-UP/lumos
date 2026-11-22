@@ -97,3 +97,32 @@ class ConversationTest(BaseStoreCase):
         self.assertEqual((meta['agent_role'], meta['status']), ('legacy', 'legacy'))
         with self.store.db() as db:
             self.assertEqual(self.store.nodes(db)[job['id']], job)
+
+    def test_delete_confirm_version_scope_busy_restore_and_history_preservation(self):
+        r = self.request(); saved = save_conversation(self.store, r)['conversation']
+        delete = {'request_id': uuid.uuid4().hex, 'chat_id': r['chat_id'], 'agent_role': r['agent_role'],
+                  'workspace': 'lingguang', 'expected_revision': 1, 'operation': 'delete', 'confirmed': True}
+        for bad in ({**delete, 'confirmed': False}, {**delete, 'workspace': 'lumos'}, {**delete, 'expected_revision': 0}):
+            with self.assertRaises(lumos.Error):
+                save_conversation(self.store, bad)
+        with self.store.db() as db:
+            before = self.store.nodes(db)
+        gone = save_conversation(self.store, delete)['conversation']
+        self.assertTrue(gone['data']['deleted'])
+        self.assertTrue(save_conversation(self.store, delete)['replayed'])
+        with self.store.db() as db:
+            after = self.store.nodes(db)
+        self.assertEqual({k:v for k,v in before.items() if k != saved['id']}, {k:v for k,v in after.items() if k != saved['id']})
+        self.assertEqual(gone['data']['title'], saved['data']['title'])
+        message = {'request_id': uuid.uuid4().hex, 'chat_id': r['chat_id'], 'text': '继续', 'source': self.source}
+        with self.assertRaisesRegex(lumos.Error, '已删除'):
+            save_intake(self.store, message)
+        with self.assertRaisesRegex(lumos.Error, '已删除'):
+            save_conversation(self.store, {**r, 'request_id': uuid.uuid4().hex, 'expected_revision': 2})
+        restored = save_conversation(self.store, {**delete, 'request_id': uuid.uuid4().hex, 'expected_revision': 2, 'operation': 'restore'})['conversation']
+        self.assertFalse(restored['data']['deleted'])
+        job = save_intake(self.store, message)['intake']
+        with self.assertRaisesRegex(lumos.Error, '处理中'):
+            save_conversation(self.store, {**delete, 'request_id': uuid.uuid4().hex, 'expected_revision': 3})
+        with self.store.db() as db:
+            self.assertEqual(self.store.nodes(db)[job['id']], job)

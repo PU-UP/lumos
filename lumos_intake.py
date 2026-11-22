@@ -140,6 +140,7 @@ def save_intake(store, request):
         if request.get('id'):
             old = nodes.get(request['id'])
             require(old and old['kind'] == 'intake', 'Intake not found')
+            require(not nodes.get('chat-'+old['data'].get('chat_id', ''), {}).get('data', {}).get('deleted'), '此对话已删除，请先恢复再重试')
             require(old['data']['revision'] == request.get('expected_revision'), '整理记录已变化，请刷新后重试。')
             require(old['data']['status'] in {'failed', 'pending'}
                     or (old['data']['status'] == 'running' and old['data'].get('lease_until', '') < now()), '当前整理不能重试')
@@ -163,6 +164,7 @@ def save_intake(store, request):
                 conversation = nodes.get('chat-'+request['chat_id'])
                 if conversation:
                     meta = conversation['data']
+                    require(not meta.get('deleted'), '此对话已删除，请先恢复或新建对话')
                     require(meta['status'] == 'active', '此对话已结束或为混合历史，请新建对话')
                     require(meta['workspace'] == request.get('workspace', 'lingguang'), '对话不属于当前空间')
                     chat_role = meta['agent_role']

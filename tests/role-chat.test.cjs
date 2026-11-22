@@ -122,8 +122,8 @@ async function page(storage=new Map(),href='http://127.0.0.1/chat?id='+'a'.repea
   const els=new Map(),get=id=>{if(!els.has(id))els.set(id,new Element());return els.get(id);};
   const listing={conversations:[],intakes:initial,token:'test',enabled:true,executor:'available'},posts=[],notifications=[],events={};let poll,readTimer;
   const world={document:{getElementById:get,createElement:()=>new Element(),visibilityState:'visible',addEventListener(name,fn){events[name]=fn;}},window:{location:{href,origin:new URL(href).origin},parent:{postMessage(message){notifications.push(message);}},addEventListener(name,fn){events[name]=fn;},dispatchEvent(){}},history:{replaceState(a,b,u){world.window.location.href=String(u);}},URL,crypto,CustomEvent:class{constructor(name,options){this.detail=options?.detail;}},
-    localStorage:{get length(){return storage.size;},key:i=>[...storage.keys()][i],getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v)},setTimeout:(fn,ms)=>{if(ms===1200)readTimer=fn;else poll=fn;return 1;},clearTimeout(){},
-    fetch:async(url,opts)=>{if(!opts)return response(url==='/api/codex-models'?{models:[{id:'test-model',name:'Test model'}]}:url==='/api/tasks'?board:listing);const req=JSON.parse(opts.body);posts.push(req);if(url==='/api/conversation-read'){const conversation=listing.conversations.find(n=>n.data.chat_id===req.chat_id);conversation.data.notices.forEach(n=>{if(req.ids.includes(n.id))n.seen_at='seen';});return response({conversation});}if(url==='/api/conversations'){const conversation={id:'chat-'+req.chat_id,kind:'conversation',data:{...req,revision:(req.expected_revision||0)+1,status:req.status||'active'}};listing.conversations=[conversation,...listing.conversations.filter(n=>n.id!==conversation.id)];return response({conversation});}const intake={id:'intake-'+req.request_id,data:{...req,status:'pending',revision:1,created_at:'2026-11-17T00:00:00Z'}};listing.intakes.unshift(intake);return response({intake});}};
+    localStorage:{get length(){return storage.size;},key:i=>[...storage.keys()][i],getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},setTimeout:(fn,ms)=>{if(ms===1200)readTimer=fn;else poll=fn;return 1;},clearTimeout(){},
+    fetch:async(url,opts)=>{if(!opts)return response(url==='/api/codex-models'?{models:[{id:'test-model',name:'Test model'}]}:url==='/api/tasks'?board:listing);const req=JSON.parse(opts.body);posts.push(req);if(url==='/api/conversation-read'){const conversation=listing.conversations.find(n=>n.data.chat_id===req.chat_id);conversation.data.notices.forEach(n=>{if(req.ids.includes(n.id))n.seen_at='seen';});return response({conversation});}if(url==='/api/conversations'&&req.operation){const conversation=listing.conversations.find(n=>n.data.chat_id===req.chat_id);conversation.data.deleted=req.operation==='delete';conversation.data.revision++;return response({conversation});}if(url==='/api/conversations'){const conversation={id:'chat-'+req.chat_id,kind:'conversation',data:{...req,revision:(req.expected_revision||0)+1,status:req.status||'active'}};listing.conversations=[conversation,...listing.conversations.filter(n=>n.id!==conversation.id)];return response({conversation});}const intake={id:'intake-'+req.request_id,data:{...req,status:'pending',revision:1,created_at:'2026-11-17T00:00:00Z'}};listing.intakes.unshift(intake);return response({intake});}};
   Object.assign(world,extra);world.Event = Event;
   vm.createContext(world);vm.runInContext(fs.readFileSync('web/dialog.js','utf8'),world);vm.runInContext(fs.readFileSync('web/work-model.js','utf8'),world);vm.runInContext(fs.readFileSync('web/role-chat.js','utf8'),world);await tick();
   const edit=text=>{get('chat-text').value=text;get('chat-text').oninput();};
@@ -181,4 +181,25 @@ test('conversation labels use Shanghai creation dates without changing explicit 
   assert.equal(conversationLabel('2026-11-20 | 自定主题','2026-11-21T17:00:00Z'),'2026-11-20 | 自定主题');
   assert.equal(conversationLabel('旧话题',undefined),'旧话题');
   assert.equal(conversationLabel('新对话','invalid'),'新对话');
+});
+
+test('delete confirmation preserves task history, removes old chat from list and restores its draft on undo',async()=>{
+  const p=await page(),id='a'.repeat(32);
+  p.listing.conversations=[{id:'chat-'+id,data:{chat_id:id,title:'同步资料',created_at:'2026-11-22T00:00:00Z',agent_role:'lumos',workspace:'lingguang',revision:1,status:'active'}}];
+  await p.poll();p.edit('未发送补充');
+  const remove=()=>descendants(p.get('chat-list')).find(n=>n.className==='chat-delete');
+  remove().onclick();assert.equal(p.posts.length,0);p.get('cancel-chat-delete').onclick();assert.equal(p.get('delete-conversation').open,false);
+  remove().onclick();await p.get('confirm-chat-delete').onclick();
+  assert.equal(p.posts[0].operation,'delete');assert.equal(p.posts[0].confirmed,true);
+  assert.equal(descendants(p.get('chat-list')).some(n=>n.textContent==='2026-11-22 | 同步资料'),false);
+  assert.equal(p.get('chat-text').value,'');
+  await p.get('undo-chat-delete').onclick();assert.equal(p.posts[1].operation,'restore');assert.equal(p.get('chat-text').value,'未发送补充');
+});
+
+test('sidebar search keeps the active draft and deleted chats stay out of the message inbox',async()=>{
+  const p=await page(),id='a'.repeat(32),chat={id:'chat-'+id,data:{chat_id:id,title:'同步资料',created_at:'2026-11-22T00:00:00Z',agent_role:'lumos',workspace:'lingguang',revision:1,status:'active',notices:[{id:'n',kind:'reply',text:'已整理',active:true,seen_at:'',at:'2026-11-22'}]}};
+  p.listing.conversations=[chat];await p.poll();p.edit('别丢掉草稿');
+  p.get('chat-search').value='no match';p.get('chat-search').oninput();assert.equal(descendants(p.get('chat-list')).some(n=>n.textContent==='没有找到匹配的对话。'),true);assert.equal(p.get('chat-text').value,'别丢掉草稿');
+  p.get('chat-search').value='2026-11-22';p.get('chat-search').oninput();assert.equal(descendants(p.get('chat-list')).find(n=>n.className==='chat-link').dataset.unread,'true');
+  const {attentionThreads}=require('../web/attention.js');assert.equal(attentionThreads([{...chat,data:{...chat.data,deleted:true}}]).length,0);
 });

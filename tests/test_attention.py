@@ -128,3 +128,20 @@ class AttentionTest(BaseStoreCase):
         with patch('lumos_intake.today', return_value='2026-11-21'), patch('lumos_ops.issue_groups', return_value=[]):
             synchronize_attention(self.store)
         self.assertFalse(any(i['active'] for c in self.chats() for i in c['data'].get('notices', []) if i['kind'] != 'reply'))
+
+    def test_deleted_threads_do_not_return_but_new_followup_can_start_another_thread(self):
+        save_task(self.store, {'request_id': uuid.uuid4().hex, 'expected_seq': self.store.status()['seq'],
+            'id': 'talk', 'changes': {'follow_up': '2026-11-21'}, 'source': self.source})
+        with patch('lumos_intake.today', return_value='2026-11-22'):
+            synchronize_attention(self.store)
+            old = self.chats()[0]; d = old['data']
+            save_conversation(self.store, {'request_id': uuid.uuid4().hex, 'chat_id': d['chat_id'], 'agent_role': d['agent_role'],
+                'workspace': d['workspace'], 'expected_revision': d['revision'], 'operation': 'delete', 'confirmed': True})
+            self.assertEqual(synchronize_attention(self.store), 0)
+            save_task(self.store, {'request_id': uuid.uuid4().hex, 'expected_seq': self.store.status()['seq'],
+                'id': 'talk', 'changes': {'follow_up': '2026-11-22'}, 'source': self.source})
+            synchronize_attention(self.store)
+        chats = self.chats()
+        self.assertEqual(len([c for c in chats if not c['data'].get('deleted')]), 1)
+        self.assertTrue(next(c for c in chats if c['id'] == old['id'])['data']['deleted'])
+        self.assertNotEqual(next(c for c in chats if not c['data'].get('deleted'))['id'], old['id'])
