@@ -15,6 +15,7 @@ window.LumosRoleUI=(()=>{
   function replaceDetails(id,asPanel=false){
     const old=document.getElementById(id);if(!old)return;
     const summary=old.querySelector('summary'),box=el('section');
+    if(id==='intake-panel')summary.textContent='答复记录';
     for(const attr of old.attributes)if(attr.name!=='open')box.setAttribute(attr.name,attr.value);
     const children=[...old.children].filter(n=>n!==summary);old.replaceWith(box);
     if(asPanel){const body=panel(summary.textContent,box);body.append(...children);const dialog=box.querySelector('dialog');
@@ -27,6 +28,16 @@ window.LumosRoleUI=(()=>{
   const help=document.querySelector('.processing-help');if(help)help.remove();
   const dateHelp=document.querySelector('.date-help');if(dateHelp)dateHelp.textContent='下次关心是复核进展的时间；当前交付优先采用 Lumos 计划，原约定保留在详情中。';
   const attentionHelp=document.querySelector('.attention-description');if(attentionHelp)attentionHelp.textContent='当前需要你判断的问题在这里回答；未来安排可在“后续再跟进”中查看。';
+  const toolbar=document.querySelector('.task-toolbar');
+  if(toolbar){
+    const host=el('div');host.className='workspace-filters-button';toolbar.before(host);
+    const filters=panel('筛选与视图',host);
+    host.querySelector('button').id='workspace-filters-toggle';
+    for(const selector of ['.workspace-filters','.task-toolbar','#follow-up-window']){const item=document.querySelector(selector);if(item)filters.append(item);}
+    document.querySelector('.intro').append(host);
+    const links=el('div');links.className='workspace-view-links';
+    for(const [label,path] of [['人员','/people'],['阶段交付','/?view=delivery']]){const a=el('a',label);a.href=path+(path.includes('?')?'&':'?')+'role=aipm&workspace='+document.getElementById('workspace').value;links.append(a);}filters.append(links);
+  }
   const scope=value=>window.dispatchEvent(new CustomEvent('lumos-scope',{detail:value}));
   return {section,panel,scope};
 })();

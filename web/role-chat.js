@@ -96,7 +96,7 @@ if(typeof document!=='undefined'){
     const profile=roleConversation[agentRole];welcome.append(el('h2',profile.title),el('p',profile.hint));
     const starters=el('div',undefined,'conversation-starters');
     for(const prompt of profile.prompts){const b=el('button',prompt);b.type='button';b.disabled=busy||!!pending;b.onclick=()=>{$('chat-text').value+=($('chat-text').value?'\n\n':'')+prompt;changedSelection();};starters.append(b);}welcome.append(starters);
-    if(!['lumos','aipm'].includes(agentRole)){host.append(welcome);return;}
+    if(!['lumos','aipm'].includes(agentRole)||new URL(window.location.href).searchParams.get('embedded')==='1'){host.append(welcome);return;}
     if(!taskState||!loaded)welcome.append(el('p',taskError||'正在核对当前问题与已提交的答复…','muted'));
     else{
       const inbox=discussionQuestions(taskState,jobs,workspace);
@@ -219,10 +219,11 @@ if(typeof document!=='undefined'){
     clearTimeout(timer);const current=generation;
     try{const response=await fetch('/api/intakes?workspace='+workspace),data=await response.json();if(current!==generation)return;if(!response.ok)throw new Error(data.error||'读取失败');
       const finished=data.intakes.some(n=>n.data.chat_id===chatId && ['done','needs_review'].includes(n.data.status) && jobs.find(j=>j.id===n.id)?.data.status!==n.data.status);
+      const notifyParent=finished&&jobs.length>0;
       sessions=data.conversations||[];
       const bound=currentSession()?.data.agent_role||data.intakes.find(n=>n.data.chat_id===chatId)?.data.agent_role;
       if(bound&&bound!=='legacy'){agentRole=bound;requestedRole=bound;address();window.dispatchEvent(new CustomEvent('lumos-role',{detail:agentRole}));}
-      jobs=data.intakes;token=data.token;enabled=data.enabled;executor=data.executor;loaded=true;if(error.startsWith('对话读取失败：'))error='';render();if(finished)loadTasks();
+      jobs=data.intakes;token=data.token;enabled=data.enabled;executor=data.executor;loaded=true;if(error.startsWith('对话读取失败：'))error='';render();if(finished)loadTasks();if(notifyParent&&url.searchParams.get('embedded')==='1')window.parent.postMessage({lumosChat:'saved'},window.location.origin);
     }catch(e){if(current!==generation)return;loaded=false;error='对话读取失败：'+e.message;controls();}
     if(current===generation)timer=setTimeout(refresh,4000);
   }

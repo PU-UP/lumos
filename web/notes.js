@@ -366,6 +366,6 @@ $('note-history').addEventListener('toggle',async()=> {
 });
 window.addEventListener('beforeunload',e=> {if(dirty || saving){stash(); e.preventDefault(); e.returnValue='';}});
 (async()=> {
-  try {await refreshList(); const params=new URLSearchParams(location.search); const id=params.get('id')||params.get('note'); if(id) await openNote(id,params.get('revision'));}
+  try {await refreshList(); const params=new URLSearchParams(location.search); const id=params.get('id')||params.get('note'); if(id) await openNote(id,params.get('revision'));else if(window.LumosRoleUI&&params.get('new')==='1')$('new-note').click();}
   catch(e){message(e.message);}
 })();

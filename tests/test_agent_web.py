@@ -21,7 +21,12 @@ class AgentWebTest(BaseStoreCase):
                 with urlopen(base+'/'+page) as response:
                     html=response.read().decode()
                     self.assertIn('src="/role-ui.js"', html)
+                    self.assertIn('src="/workspace.js"', html)
                     self.assertLess(html.index('src="/role-ui.js"'), html.index('src="/'+('overview' if not page else 'board' if page=='tasks' else page)+'.js"'))
+            with urlopen(base+'/chat?embedded=1') as response:
+                self.assertIn("frame-ancestors 'self'", response.headers['Content-Security-Policy'])
+            with urlopen(base+'/chat') as response:
+                self.assertIn("frame-ancestors 'none'", response.headers['Content-Security-Policy'])
             with urlopen(base+'/api/knowledge?query=%E6%A0%87%E5%AE%9A') as response:
                 result = json.load(response)
                 self.assertEqual(result['total'], 2)

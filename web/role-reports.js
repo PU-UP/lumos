@@ -15,38 +15,37 @@ if(typeof document!=='undefined'){
   const names={lumos:'Lumos',aipm:'AIPM',librarian:'Atlas',maintainer:'Ops'};
   let data=null,token='',history=false,limit=20,generation=0,pending=null,busy=false;
   $('workspace').value=url.searchParams.get('workspace')==='lumos'?'lumos':'lingguang';
-  $('reports-title').textContent=role==='lumos'?'Lumos 工作回报':'Ops 运行报告';
+  $('reports-title').textContent=role==='lumos'?'处理记录':'运行状态';
   document.title=$('reports-title').textContent;
-  $('reports-description').textContent=role==='lumos'?'AIPM 与 Atlas 的工作在这里接续；安排以 Lumos 的实际决定为准。':'直接向王牧楠汇报运行异常。诊断、接续与修复分别记录。';
-  $('current-reports').textContent=role==='lumos'?'工作回报':'故障报告';$('inspect').hidden=role!=='maintainer';
+  $('reports-description').textContent='';
+  $('current-reports').textContent=role==='lumos'?'处理结果':'当前异常';$('inspect').hidden=role!=='maintainer';
   const link=(label,path,params)=>{const a=el('a',label,'report-link'),u=new URL(path,location.href);u.searchParams.set('workspace',$('workspace').value);for(const [k,v] of Object.entries(params))u.searchParams.set(k,v);a.href=u.pathname+u.search;return a;};
   function render(){
     if(!data)return;
     let items=reportItems(data,role,history);
     const focus=url.searchParams.get('episode');if(focus)items=items.filter(n=>(n.episode_id||n.id)===focus||n.episode_ids?.includes(focus));
+    if(role==='maintainer'&&!history&&!focus)items=items.filter(n=>!['recovered','rechecked'].includes(n.status));
     const schedule=data.inspection;
     $('inspection-status').hidden=role!=='maintainer';
-    if(role==='maintainer'&&schedule)$('inspection-status').textContent=(schedule.last_at?'上次检查：'+new Date(schedule.last_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})+(schedule.last_status==='failed'?'，未完成。':'。'):'尚未完成检查。')+(schedule.enabled?(schedule.active_id?' 当前检查等待接续。':schedule.due?' 本周检查尚未执行，空闲时补查一次。':' 下次检查：'+new Date(schedule.next_at).toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai'})+'。'):' 每周检查未启用，可手动检查。')+' 只检查已保存执行记录与固定来源，不修改业务。';
+    if(role==='maintainer'&&schedule)$('inspection-status').textContent=(schedule.last_at?'上次检查：'+new Date(schedule.last_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})+(schedule.last_status==='failed'?'，未完成。':'。'):'尚未完成检查。')+(schedule.enabled?(schedule.active_id?' 当前检查等待接续。':schedule.due?' 本周检查尚未执行，空闲时补查一次。':' 下次检查：'+new Date(schedule.next_at).toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai'})+'。'):' 每周检查未启用，可手动检查。');
     $('report-count').textContent=items.length+' 项'+(data.executor==='offline'?' · 执行器离线，输入仍保留':'');
     $('current-reports').setAttribute('aria-pressed',String(!history));$('report-history').setAttribute('aria-pressed',String(history));
     const host=$('report-list');host.replaceChildren();
-    if(!items.length)host.append(el('p',history?'暂无处理历史。':role==='lumos'?'尚无工作回报。向 AIPM 或 Atlas 发送消息后，处理结果会自动出现在这里。':'当前没有故障报告。发生处理异常时会自动交给 Ops，无需重复转述。','report-empty'));
+    if(!items.length)host.append(el('p',history?'暂无处理历史。':role==='lumos'?'暂无处理记录。':data.executor==='offline'?'执行器离线，已保存的输入会在恢复后继续处理。':'当前未发现待处理异常。','report-empty'));
     for(const item of items.slice(0,limit)){
       const id=item.episode_id||item.id,card=el('article',undefined,'report-card');
       const head=el('div',undefined,'report-card-heading');head.append(el('h2',item.title),el('span',reportLabel(item,role,history),'report-state'));card.append(head);
       card.append(el('p',(names[item.from_role||item.agent_role]||'系统')+' · '+new Date(item.at||item.updated_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}),'report-meta'));
-      if(item.count)card.append(el('p','已记录 '+item.count+' 次'+(item.subject_id?' · 来源 '+item.subject_id:''),'report-meta'));
+      if(item.count>1)card.append(el('p','发生 '+item.count+' 次','report-meta'));
       card.append(el('p',(role==='lumos'&&item.result)||item.summary||item.error||'本轮尚未返回结果。','report-summary'));
       if(role==='lumos'&&item.result_truncated)card.append(el('p','这里显示结果节选，完整答复可回到原对话查看。','report-meta'));
       if(item.impact)card.append(el('p',item.impact));
-      if(item.diagnosis){card.append(el('h3','Ops 诊断'),el('p',item.diagnosis));}
       const actions=el('div',undefined,'reports-actions');
+      if(item.diagnosis){const detail=el('button','诊断与建议');detail.type='button';detail.setAttribute('aria-haspopup','dialog');detail.onclick=()=>{$('diagnosis-title').textContent=item.title;$('diagnosis-body').textContent=item.diagnosis;$('diagnosis-dialog').showModal();};actions.append(detail);}
       if(item.chat_id)actions.append(link('回到原对话','/chat',{id:item.chat_id,role:item.agent_role||item.from_role||'lumos'}));
       if(item.note)actions.append(link('打开笔记','/notes',{id:item.note.id,role:'librarian'}));
       if(role==='maintainer')actions.append(link('与 Ops 讨论','/chat',{agent:'maintainer',episode:id,role:'maintainer'}));
       else actions.append(link('与 Lumos 讨论','/chat',{agent:'lumos',episode:id,role:'lumos'}));
-      const episode=(data.episodes||[]).find(n=>n.id===id);
-      if(episode?.lumos_report?.decision)card.append(el('p','决定与保存结果已关联到本次工作。','report-meta'));
       card.append(actions);host.append(card);
     }
     $('more-reports').hidden=items.length<=limit;
@@ -57,5 +56,6 @@ if(typeof document!=='undefined'){
   $('more-reports').onclick=()=>{limit+=20;render();};$('refresh-reports').onclick=load;
   $('workspace').onchange=()=>{limit=20;data=null;token='';url.searchParams.delete('episode');url.searchParams.set('workspace',$('workspace').value);window.history.replaceState(null,'',url);$('report-list').replaceChildren();load();};
   $('inspect').onclick=async()=>{if(busy||!token)return;busy=true;$('inspect').disabled=true;$('workspace').disabled=true;pending||={request_id:crypto.randomUUID().replaceAll('-',''),workspace:$('workspace').value};try{const r=await fetch('/api/agent-inspect',{method:'POST',headers:{'Content-Type':'application/json','X-Lumos-Token':token},body:JSON.stringify(pending)}),value=await r.json();if(!r.ok){if(r.status>=400&&r.status<500)pending=null;throw new Error(value.error||'检查失败');}pending=null;await load();}catch(e){$('reports-error').textContent=e.message;}finally{busy=false;$('inspect').disabled=false;$('workspace').disabled=!!pending;$('inspect').textContent=pending?'重试检查':'检查一次';}};
+  $('close-diagnosis').onclick=()=>$('diagnosis-dialog').close();
   load();
 }

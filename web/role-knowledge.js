@@ -3,12 +3,14 @@ function materialState(file){return !file.registrations.length?'已发现 · 尚
 if(typeof module!=='undefined')module.exports={materialState};
 if(typeof document!=='undefined'){
   const $=id=>document.getElementById(id),el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
-  const url=new URL(location.href),materials=url.searchParams.get('materials')==='1';
+  const url=new URL(location.href);
   let token='',contexts=[],hits=[],limit=12,generation=0,sourceGeneration=0,currentMaterial='',pending=null,busy=false;
   const space=()=>$('workspace').value;
   $('workspace').value=url.searchParams.get('workspace')==='lumos'?'lumos':'lingguang';$('query').value=url.searchParams.get('query')||'';
-  $('search-panel').hidden=materials;$('material-panel').hidden=!materials;
-  if(materials){$('page-title').textContent='项目资料';$('page-description').textContent='查看项目文件、登记状态和已保存的版本。';}
+  $('search-panel').hidden=false;$('material-panel').hidden=false;
+  $('page-title').textContent='笔记与资料';$('page-description').textContent='';
+  const noteList=$('library-notes');
+  $('write-note').href='/notes?role=librarian&workspace='+space()+'&new=1';
   const action=(label,path,params)=>{const a=el('a',label),u=new URL(path,location.href);u.searchParams.set('workspace',space());for(const [k,v] of Object.entries(params))u.searchParams.set(k,v);a.href=u.pathname+u.search;return a;};
   const button=(label,fn)=>{const b=el('button',label);b.type='button';b.onclick=fn;return b;};
   async function request(path){const r=await fetch(path),d=await r.json();if(!r.ok)throw new Error(d.error||'读取失败');return d;}
@@ -26,11 +28,18 @@ if(typeof document!=='undefined'){
     }$('more-results').hidden=hits.length<=limit;
   }
   async function load(){
-    const current=++generation,query=$('query').value.trim();hits=[];renderHits();$('status').textContent=query?'正在查找…':'输入关键词，或进入项目资料查看文件目录。';
+    const current=++generation,query=$('query').value.trim();hits=[];renderHits();$('status').textContent=query?'正在查找…':'';
+    $('material-panel').hidden=!!query;
     const address=new URL(location.href);address.searchParams.set('workspace',space());if(query)address.searchParams.set('query',query);else address.searchParams.delete('query');history.replaceState(null,'',address);
     try{const data=await request('/api/knowledge?workspace='+space()+(query?'&query='+encodeURIComponent(query)+'&archived='+$('archived').checked:'&catalog=true'));if(current!==generation)return;token=data.token;contexts=data.contexts;
       if(query){hits=data.results;renderHits();$('status').textContent=data.total?'找到 '+data.total+' 项'+(data.total>100?'，显示前 100 项。请增加关键词缩小范围。':'。'):'未找到匹配内容，可换关键词或包含已归档内容。';}
-      if(materials)await files(current);
+      if(!query){
+        await files(current);
+        const groups=await Promise.all(($('archived').checked?[false,true]:[false]).map(archived=>request('/api/notes?workspace='+space()+'&archived='+archived)));
+        if(current!==generation)return;
+        noteList.replaceChildren();
+        for(const note of groups.flatMap(group=>group.notes)){const row=el('article',undefined,'material-row'),info=el('div');info.append(el('h2',note.data.title||'未命名笔记'),el('p','笔记 · '+note.data.date+(note.data.status==='archived'?' · 已归档':''),'material-state'));row.append(info,action('打开笔记','/notes',{id:note.id,role:'librarian'}));noteList.append(row);}
+      }
     }catch(e){if(current===generation){$('status').textContent=e.message+'；请重试。';$('material-status').textContent=e.message+'；请刷新重试。';}}
   }
   async function files(current=generation){
@@ -40,7 +49,7 @@ if(typeof document!=='undefined'){
         const actions=el('div',undefined,'material-actions');actions.append(action('交给 Atlas 查阅','/chat',{agent:'librarian',role:'librarian',material:file.path}));
         for(const r of file.registrations)actions.append(button('已存版本 · '+(contexts.find(c=>c.id===r.context)?.title||r.context),()=>showMaterial(r.id)));
         actions.append(button(file.registrations.length?'登记当前文件':'登记资料',()=>openRegister(file)));row.append(actions);host.append(row);
-      }$('material-status').textContent=data.files.length?'发现 '+data.files.length+' 份文件；登记状态针对当前资料范围，源文件变化需重新核对。':'项目资料目录中还没有文件。';
+      }$('material-status').textContent=data.files.length?'':'尚无项目文件；可以先写笔记。';
     }catch(e){if(current===generation)$('material-status').textContent=e.message+'；请刷新重试。';}
   }
   function openRegister(file){
@@ -67,5 +76,5 @@ if(typeof document!=='undefined'){
   }
   $('source-version').onchange=()=>showMaterial(currentMaterial,$('source-version').value);
   $('close-source').onclick=()=>{sourceGeneration++;$('source-dialog').close();};$('close-register').onclick=()=>$('register-dialog').close();dismissOnBackdrop($('source-dialog'));dismissOnBackdrop($('register-dialog'));
-  $('search').onsubmit=e=>{e.preventDefault();limit=12;load();};$('workspace').onchange=()=>{sourceGeneration++;$('source-dialog').close();limit=12;load();};$('refresh-materials').onclick=()=>files();$('more-results').onclick=()=>{limit+=12;renderHits();};load().then(()=>{if(url.searchParams.get('material'))showMaterial(url.searchParams.get('material'));});
+  $('search').onsubmit=e=>{e.preventDefault();limit=12;load();};$('archived').onchange=()=>load();$('workspace').onchange=()=>{sourceGeneration++;$('source-dialog').close();limit=12;load();};$('refresh-materials').onclick=()=>load();$('more-results').onclick=()=>{limit+=12;renderHits();};load().then(()=>{if(url.searchParams.get('material'))showMaterial(url.searchParams.get('material'));});
 }

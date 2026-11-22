@@ -28,6 +28,7 @@ function renderTaskReview() {
   $('task-review-status').textContent=reviewSubmitting?'正在提交复核请求…':!review?.enabled?'此空间尚未启用任务统筹。':running?(state.executor==='offline'?'复核已排队，执行器恢复后继续。':'正在逐项核对进展、排期和你的手动修改，可离开页面。'):d?.status==='failed'?'本轮未完成：'+d.error:d?.summary||'由 Lumos 维护安排；需要你的关键判断会集中提问。';
   const completed=review?.completed?.data;
   $('task-review-time').textContent=completed?'最近完成复核：'+reviewTime(completed.completed_at)+' · '+completed.task_reviews.length+' 项任务':'尚无全量复核记录';
+  if(window.LumosRoleUI&&!reviewSubmitting&&!running&&d?.status!=='failed')$('task-review-status').textContent='';
   const host=$('task-review-content');host.replaceChildren();
   $('task-review-result').hidden=!completed;
   if(completed){host.append(element('p',completed.summary));
@@ -329,6 +330,7 @@ function render() {
   if (!state) return;
   renderTaskReview();
   const tasks = filtered();
+  if(window.LumosRoleUI){const changed=$('group-filter').value||windowDays!==null||selectedStatuses.size!==2||!selectedStatuses.has('todo')||!selectedStatuses.has('doing');$('workspace-filters-toggle').textContent='筛选与视图'+(changed?' · 已筛选':'');}
   for (const status of Object.keys(labels)) {
     const selected = selectedStatuses.has(status);
     $('status-' + status).setAttribute('aria-pressed', String(selected));
@@ -507,7 +509,7 @@ function renderList(tasks) {
     title.type = 'button';
     title.title = [t.data.next_step, ...t.attention, t.data.due ? '交付 ' + dueLabel(t.data.due) : ''].filter(Boolean).join('\n');
     title.onclick = () => openTask(t.id);
-    if(!isClosed(t.data) && t.management_question){const q=t.management_question,note=element('small',questionLabel(q)+'：'+q.question,'task-stewardship');title.append(note);title.onclick=()=>{window.location.href='/?workspace='+workspaceOf(t.data.context)+'&question='+encodeURIComponent('question:'+q.intake_id+':'+q.index);};}
+    if(!isClosed(t.data) && t.management_question){const q=t.management_question,note=element('small',window.LumosRoleUI?'需要你答复 · 打开问题':questionLabel(q)+'：'+q.question,'task-stewardship');title.append(note);title.onclick=()=>{window.location.href='/?workspace='+workspaceOf(t.data.context)+'&question='+encodeURIComponent('question:'+q.intake_id+':'+q.index);};}
     else if(t.management_issues?.length){const note=element('small','待接续 · '+t.management_issues[0],'task-stewardship');note.title=t.management_issues.join('；');title.append(note);}
     const changed=manualBadge(t,['text','status','priority','group','context','progress','next_step','details','condition']);if(changed)title.append(changed);
     const priority = element('select', undefined, 'row-priority priority-' + (t.data.priority || 'normal'));

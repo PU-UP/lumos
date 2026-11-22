@@ -126,13 +126,21 @@ test('an uncertain memo save stays with its own conversation after navigation an
 });
 async function page(storage=new Map(),href='http://127.0.0.1/chat?id='+'a'.repeat(32),initial=[],board={}){
   const els=new Map(),get=id=>{if(!els.has(id))els.set(id,new Element());return els.get(id);};
-  const listing={conversations:[],intakes:initial,token:'test',enabled:true,executor:'available'},posts=[];
-  const world={document:{getElementById:get,createElement:()=>new Element()},window:{location:{href},dispatchEvent(){}},history:{replaceState(a,b,u){world.window.location.href=String(u);}},URL,crypto,CustomEvent:class{constructor(name,options){this.detail=options.detail;}},
-    localStorage:{get length(){return storage.size;},key:i=>[...storage.keys()][i],getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v)},setTimeout:()=>1,clearTimeout(){},
+  const listing={conversations:[],intakes:initial,token:'test',enabled:true,executor:'available'},posts=[],notifications=[];let poll;
+  const world={document:{getElementById:get,createElement:()=>new Element()},window:{location:{href,origin:new URL(href).origin},parent:{postMessage(message){notifications.push(message);}},dispatchEvent(){}},history:{replaceState(a,b,u){world.window.location.href=String(u);}},URL,crypto,CustomEvent:class{constructor(name,options){this.detail=options.detail;}},
+    localStorage:{get length(){return storage.size;},key:i=>[...storage.keys()][i],getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v)},setTimeout:fn=>{poll=fn;return 1;},clearTimeout(){},
     fetch:async(url,opts)=>{if(!opts)return response(url==='/api/codex-models'?{models:[{id:'test-model',name:'Test model'}]}:url==='/api/tasks'?board:listing);const req=JSON.parse(opts.body);posts.push(req);if(url==='/api/conversations'){const conversation={id:'chat-'+req.chat_id,kind:'conversation',data:{...req,revision:(req.expected_revision||0)+1,status:req.status||'active'}};listing.conversations=[conversation,...listing.conversations.filter(n=>n.id!==conversation.id)];return response({conversation});}const intake={id:'intake-'+req.request_id,data:{...req,status:'pending',revision:1,created_at:'2026-11-17T00:00:00Z'}};listing.intakes.unshift(intake);return response({intake});}};
   world.Event = Event;
   vm.createContext(world);vm.runInContext(fs.readFileSync('web/dialog.js','utf8'),world);vm.runInContext(fs.readFileSync('web/work-model.js','utf8'),world);vm.runInContext(fs.readFileSync('web/role-chat.js','utf8'),world);await tick();
   const edit=text=>{get('chat-text').value=text;get('chat-text').oninput();};
   const submit=async()=>{get('chat-form').onsubmit({preventDefault(){}});await tick();};
-  return {world,get,listing,posts,edit,submit,storage};
+  return {world,get,listing,posts,edit,submit,storage,notifications,poll:()=>poll()};
 }
+
+test('embedded chat notifies the overview only after a newly completed turn, not on opening history',async()=>{
+  const job=choiceJob(),href='http://127.0.0.1/chat?role=aipm&embedded=1&id='+job.data.chat_id;
+  const history=await page(new Map(),href,[job]);assert.equal(history.notifications.length,0);
+  const p=await page(new Map(),href,[{...job,data:{...job.data,status:'pending'}}]);
+  p.listing.intakes=[job];await p.poll();assert.equal(p.notifications.length,1);assert.equal(p.notifications[0].lumosChat,'saved');
+  await p.poll();assert.equal(p.notifications.length,1);
+});

@@ -1,6 +1,14 @@
 'use strict';
 const {mainlineLabels,isOpenTask,deliveryDate,targetDate,deliverySort,mainlineSort,taskQuestionTiming,managementModel,milestoneTasks,matchesTask,questionInbox}=typeof module!=='undefined'?require('./work-model.js'):window.LumosWorkModel;
 const answerStates={pending:'已保存 · 等待自动整理',running:'Codex自动整理中',done:'整理结果已入库',needs_review:'已入库 · 有待确认项',failed:'自动整理失败 · 可重试',obsolete:'原记录已更新 · 需重新核对'};
+function briefItems(model,inbox){
+  const seen=new Set(),questions=[...inbox.primary,...inbox.rest];
+  const items=[...model.entries.map(e=>({id:e.line.id,title:e.line.data.title,line:e.line,tasks:e.tasks.filter(isOpenTask)})),
+    ...model.independent.filter(isOpenTask).map(t=>({id:t.id,title:t.data.text,tasks:[t]}))];
+  for(const item of items)item.questions=questions.filter(q=>{if(seen.has(q.key))return false;const match=q.line?.id===item.id||q.tasks?.some(t=>item.tasks.some(v=>v.id===t.id));if(match)seen.add(q.key);return match;});
+  for(const q of questions)if(!seen.has(q.key)){items.push({id:q.key,title:q.title===q.text?'需要你确认':q.title,tasks:[],questions:[q]});seen.add(q.key);}
+  return items.sort((a,b)=>Number(!!b.questions.length)-Number(!!a.questions.length));
+}
 function submission(post, initial=null) {
   let pending=initial, busy=false;
   return {get pending(){return pending;}, async send(request,onPending=()=>{}) {
@@ -11,7 +19,7 @@ function submission(post, initial=null) {
     finally{busy=false;}
   }};
 }
-if (typeof module !== 'undefined') module.exports = {managementModel, milestoneTasks, deliveryDate, targetDate, matchesTask, submission, questionInbox, taskQuestionTiming};
+if (typeof module !== 'undefined') module.exports = {managementModel, milestoneTasks, deliveryDate, targetDate, matchesTask, submission, questionInbox, taskQuestionTiming,briefItems};
 
 if (typeof document !== 'undefined') {
   const $ = id => document.getElementById(id);
@@ -32,7 +40,7 @@ if (typeof document !== 'undefined') {
   } catch {$('preference-message').textContent='未能读取查看偏好，使用默认设置。';}
   const linkedWorkspace=new URLSearchParams(window.location.search).get('workspace');
   if(['lingguang','lumos'].includes(linkedWorkspace))$('workspace').value=linkedWorkspace;
-  $('attention').open=attentionOpen;
+  $('attention').open=window.LumosRoleUI&&!deliveryView?true:attentionOpen;
   document.querySelector('.attention-toggle').textContent=attentionOpen?'收起':'展开';
   $('attention').ontoggle=()=>{document.querySelector('.attention-toggle').textContent=$('attention').open?'收起':'展开';remember();};
   async function post(url,request){
@@ -164,6 +172,30 @@ if (typeof document !== 'undefined') {
   function renderQuestions(){
     if(!model)return;
     const inbox=questionInbox(model.questions,receipts,$('workspace').value),host=$('attention-items');host.replaceChildren();
+    if(window.LumosRoleUI&&!deliveryView){
+      const query=$('search').value.trim().toLowerCase();
+      const items=briefItems(model,inbox).filter(item=>!query||[item.title,...item.tasks.map(t=>[t.short_id,t.data.text,t.data.progress].join(' ')),...item.questions.map(q=>q.text)].join(' ').toLowerCase().includes(query));
+      $('attention-count').textContent='';
+      for(const item of items){
+        const row=el('article',undefined,'brief-item'),head=el('div',undefined,'brief-heading');
+        const title=item.line?lineButton(item.line,item.title,'brief-title'):item.tasks.length?taskLink(item.tasks[0]):el('h3',item.title);
+        if(item.tasks.length&&!item.line)title.replaceChildren(el('strong',item.title));
+        head.append(title);if(item.questions.length)head.append(el('span','需要你答复','brief-state'));row.append(head);
+        const next=[...item.tasks].sort(deliverySort).find(targetDate),follow=item.tasks.map(t=>t.data.follow_up).filter(Boolean).sort()[0];
+        const facts=[item.line?item.tasks.length+' 项任务':item.tasks[0]?.data.owner||'负责人待确定',next?'交付 '+targetDate(next):'',follow?'跟进 '+follow:''].filter(Boolean);
+        if(facts.length)row.append(el('p',facts.join(' · '),'brief-meta'));
+        if(!item.questions.length){const d=item.line?.data||item.tasks[0]?.data;const text=d?.risk||d?.next_step||d?.progress||d?.summary;if(text)row.append(el('p',text,'brief-description'));}
+        for(const q of item.questions){const group=el('div',undefined,'brief-question'),answer=el('button','答复');group.append(el('p',q.text));answer.onclick=()=>openFeedback(q,answer);group.append(answer);row.append(group);}
+        host.append(row);
+      }
+      if(!items.length)host.append(el('p',query?'没有匹配事项。':'目前没有待推进的事项，可以直接和 Lumos 聊。','attention-empty'));
+      const progress=$('answer-progress');progress.replaceChildren();
+      if(receiptState==='error')progress.append(el('p','答复状态读取失败，正在重试；已写内容保留。','muted'));
+      for(const job of new Map([...inbox.latest.values()].filter(j=>['pending','running','failed'].includes(j.data.status)).map(j=>[j.id,j])).values()){
+        const row=el('div',undefined,'brief-pending'),button=el('button',job.data.status==='failed'?'查看并重试':'查看答复');row.append(el('span',job.data.title+' · '+answerStatus(job)));button.onclick=()=>openFeedback(model.questions.find(q=>q.key===job.data.question_key)||{key:job.data.question_key,title:job.data.title,text:job.data.question_text||job.data.title,tasks:[]},button);row.append(button);progress.append(row);
+      }
+      return;
+    }
     $('attention-count').textContent=inbox.primary.length?'本次 '+inbox.primary.length+' 件':'';
     if(!inbox.primary.length)host.append(el('p','当前没有需要立即回答的问题。后续事项按跟进日再出现。','attention-empty'));
     const add=(question,parent)=>{
@@ -234,6 +266,11 @@ if (typeof document !== 'undefined') {
     const query=$('search').value.trim();$('clear-search').hidden=!query;
     $('attention').hidden=deliveryView || !!query;
     renderQuestions();
+    if(window.LumosRoleUI&&!deliveryView){
+      $('attention').hidden=false;for(const id of ['near-term','mainlines','independent','search-results'])$(id).hidden=true;
+      $('page-title').textContent='当前重点';$('page-description').textContent='';$('overview-date').textContent=state.today;
+      $('sync').textContent='已读取最新记录';updateAnswerStatus();return;
+    }
     const near=$('near-term');near.replaceChildren();near.hidden=deliveryView || !!query;
     near.append(el('h2','未来两周的阶段节点'),el('p',state.today+' 起 · 明确约定与Lumos目标分别标注','muted'));
     if(model.upcoming.length)dateGroups(model.upcoming,near,'upcoming');else near.append(el('p','暂无已排定的阶段节点；需要明确的关键时间会在问题中提出。','muted'));
