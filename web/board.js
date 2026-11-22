@@ -47,7 +47,7 @@ $('review-tasks').onclick=async()=>{
   reviewSubmitting=true;renderTaskReview();
   try{
     let request;try{request=JSON.parse(localStorage.getItem(key));}catch{}
-    request ||= job?.data.status==='failed'?{request_id:crypto.randomUUID().replaceAll('-',''),id:job.id,expected_revision:job.data.revision}:{request_id:crypto.randomUUID().replaceAll('-',''),workspace};
+    request ||= job?.data.status==='failed'?{request_id:crypto.randomUUID().replaceAll('-',''),id:job.id,expected_revision:job.data.revision}:{request_id:crypto.randomUUID().replaceAll('-',''),workspace,...(window.LumosModels?{model:window.LumosModels.get('lumos')}:{})};
     try{localStorage.setItem(key,JSON.stringify(request));}catch{}
     await api(request.id?'/api/intakes':'/api/task-review',{method:'POST',headers:{'Content-Type':'application/json','X-Lumos-Token':state.token},body:JSON.stringify(request)});
     try{localStorage.setItem(key,'null');}catch{}
@@ -727,6 +727,7 @@ function sourceText(source) {
 }
 
 function renderDocument(content, parent) {
+  if(window.LumosRoleUI)return window.LumosRoleUI.renderDocument(content,parent);
   // Only headings and lists are formatted; source text never becomes executable HTML.
   let paragraph = [], list = null;
   const flush = () => {

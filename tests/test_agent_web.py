@@ -13,7 +13,7 @@ class AgentWebTest(BaseStoreCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
         base = 'http://127.0.0.1:'+str(server.server_port)
         try:
-            for page in ('agents', 'knowledge', 'agents.js', 'knowledge.js', 'navigation.js', 'navigation.css', 'role-ui.js', 'role-ui.css'):
+            for page in ('agents', 'knowledge', 'agents.js', 'knowledge.js', 'navigation.js', 'navigation.css', 'role-ui.js', 'role-ui.css', 'role-models.js'):
                 with urlopen(base+'/'+page) as response:
                     self.assertEqual(response.status, 200)
                     self.assertIn("frame-ancestors 'none'", response.headers['Content-Security-Policy'])
@@ -22,6 +22,7 @@ class AgentWebTest(BaseStoreCase):
                     html=response.read().decode()
                     self.assertIn('src="/role-ui.js"', html)
                     self.assertIn('src="/workspace.js"', html)
+                    self.assertLess(html.index('src="/role-models.js"'), html.index('src="/role-navigation.js"'))
                     self.assertLess(html.index('src="/role-ui.js"'), html.index('src="/'+('overview' if not page else 'board' if page=='tasks' else page)+'.js"'))
             with urlopen(base+'/chat?embedded=1') as response:
                 self.assertIn("frame-ancestors 'self'", response.headers['Content-Security-Policy'])

@@ -122,11 +122,20 @@ function reviewPage(post,navigation={}){
     Option:function(text,value){this.textContent=text;this.value=value;},crypto:{randomUUID:()=> 'a'.repeat(32)},
     fetch:async(url,options)=>{if(options)return post(JSON.parse(options.body),snapshot);return {ok:true,json:async()=>snapshot};}};
   world.Event = Event;
+  if(navigation.model)world.window.LumosModels={get:()=>navigation.model,receipt:()=>navigation.model};
   vm.createContext(world);vm.runInContext(fs.readFileSync('web/disclosure.js','utf8'),world);vm.runInContext(fs.readFileSync('web/dialog.js','utf8'),world);vm.runInContext(fs.readFileSync('web/work-model.js','utf8'),world);vm.runInContext(fs.readFileSync('web/overview.js','utf8'),world);
   const controls=()=>{const walk=n=>[n,...n.children.flatMap(walk)];const form=walk(get('mainlines')).find(n=>n.tag==='form');return {form,date:form.children[0].children[0],save:form.children[1],message:form.children[2]};};
   return {get,controls,snapshot,location,events,receipts:data=>onUpdate(data)};
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('overview replies use the Lumos conversation model and freeze it for an uncertain retry',async()=>{
+  const sent=[],navigation={model:'gpt-6.2-astra'};
+  const p=reviewPage(async request=>{sent.push(request);if(sent.length===1)throw Error('connection lost');return {ok:true,json:async()=>({intake:{id:'x',data:{...request,status:'pending'}}})};},navigation);
+  await settle();p.get('open-feedback').onclick({});p.get('feedback-text').value='新的进展';await p.get('feedback-form').onsubmit({preventDefault(){}});
+  navigation.model='gpt-6.2-sol';await p.get('feedback-form').onsubmit({preventDefault(){}});
+  assert.equal(sent[0].model,'gpt-6.2-astra');assert.deepEqual(sent[1],sent[0]);
+});
 
 test('reopening overview restores disclosure choices including closed defaults and workspace isolation',async()=>{
   const storage=new Map();
@@ -263,12 +272,12 @@ test('submitted replies leave the waiting list and show real processing states',
   assert.equal(p.get('attention-items').children.some(n=>n.tag==='article'),false);
   assert.equal(p.get('answer-dialog').open,false);assert.equal(p.get('feedback-text').value,'');assert.match(p.get('answer-notice').textContent,/答复已保存/);
   p.get('answer-progress').children[0].children[1].children.find(n=>n.tag==='button').onclick();
-  assert.equal(p.get('feedback-submit').disabled,true);assert.match(p.get('answer-receipt').children[0].textContent,/等待自动整理/);
-  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'running'}}]});assert.match(p.get('answer-receipt').children[0].textContent,/Codex自动整理中/);
-  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'done',summary:'任务已接续'}}]});assert.equal(p.get('answer-receipt').children[0].textContent,'整理结果已入库');assert.equal(p.get('feedback-submit').disabled,false);
+  assert.equal(p.get('feedback-submit').disabled,true);assert.match(p.get('answer-receipt').children[0].textContent,/等待整理/);
+  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'running'}}]});assert.match(p.get('answer-receipt').children[0].textContent,/正在整理/);
+  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'done',summary:'任务已接续'}}]});assert.equal(p.get('answer-receipt').children[0].textContent,'已整理 · 结果已保存');assert.equal(p.get('feedback-submit').disabled,false);
   assert.ok(p.get('answer-receipt').children.some(n=>n.textContent.includes('不要求立即补答')));
   p.snapshot.open_questions=[];p.get('search').oninput();
-  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'done',summary:'任务已接续'}}]});assert.equal(p.get('answer-receipt').children[0].textContent,'整理结果已入库');
+  p.receipts({executor:'available',intakes:[{id:'reply',data:{...posted,status:'done',summary:'任务已接续'}}]});assert.equal(p.get('answer-receipt').children[0].textContent,'已整理 · 结果已保存');
   p.receipts(null);assert.match(p.get('feedback-status').textContent,/无法读取/);
 });
 

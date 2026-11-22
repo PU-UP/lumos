@@ -15,6 +15,18 @@ test('unlinked questions stay visible and future-only questions do not become cu
   const items=briefItems({entries:[],independent:[]},{primary:[q],rest:[],later:[{...q,key:'future'}]});
   assert.equal(items.length,1);assert.equal(items[0].title,'需要你确认');
 });
+
+test('answers remain with exact work items through processing and settlement, including newly created tasks',()=>{
+  const task={id:'t',data:{text:'整理资料',status:'todo'}},model={entries:[],independent:[task]};
+  for(const status of ['pending','running','done','needs_review','failed']){
+    const job={id:'reply',data:{question_key:'q',status,title:'答复',related_ids:['t'],created_at:'2026-11-22'}};
+    const items=briefItems(model,{primary:[],rest:[],latest:new Map([['q',job]])});
+    assert.equal(items.length,1);assert.equal(items[0].id,'t');assert.equal(items[0].receipts[0].data.status,status);
+  }
+  const created={id:'reply',data:{question_key:'q',status:'done',related_ids:[]},targets:[{id:'t',kind:'action'}]};
+  assert.equal(briefItems(model,{primary:[],rest:[]},[created])[0].receipts[0],created);
+  task.data.status='done';const retained=briefItems(model,{primary:[],rest:[]},[created]);assert.equal(retained.length,1);assert.equal(retained[0].receipts.length,1);
+});
 test('chat notifications require both the expected frame and exact origin',()=>{
   const child={},frame={contentWindow:child},valid={origin:'http://localhost:8775',source:child,data:{lumosChat:'saved'}};
   assert.equal(trustedChatMessage(valid,frame,valid.origin),true);

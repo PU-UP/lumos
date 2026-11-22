@@ -14,12 +14,12 @@ test('work receipts and Ops diagnoses retain different meanings and recipients',
   assert.ok(!fs.readFileSync('web/role-reports.html','utf8').includes('<details'));
 });
 test('report page safely links exact original conversation and ignores a stale workspace response',async()=>{
-  class Element{constructor(){this.children=[];this.value='';}append(...v){this.children.push(...v);}replaceChildren(...v){this.children=v;}setAttribute(k,v){this[k]=v;}}
+  class Element{constructor(){this.children=[];this.value='';}append(...v){this.children.push(...v);}replaceChildren(...v){this.children=v;}setAttribute(k,v){this[k]=v;}addEventListener(){}}
   const elements=new Map(),get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
   const requests=[],location=new URL('http://127.0.0.1/agents?role=lumos'),world={URL,location,
     window:{history:{replaceState(_a,_b,u){location.href=String(u);}}},document:{getElementById:get,createElement:()=>new Element()},
     fetch:()=>new Promise((resolve,reject)=>requests.push({resolve,reject}))};
-  vm.runInNewContext(fs.readFileSync('web/role-reports.js','utf8'),world);
+  vm.runInNewContext(fs.readFileSync('web/dialog.js','utf8'),world);vm.runInNewContext(fs.readFileSync('web/role-reports.js','utf8'),world);
   get('workspace').value='lumos';get('workspace').onchange();
   requests[1].resolve({ok:true,json:async()=>({token:'ok',lumos_reports:[{episode_id:'exact',title:'<script>literal</script>',chat_id:'chat-one',agent_role:'aipm',status:'received',at:'2026-11-21T00:00:00Z',summary:'原结果'}],episodes:[]})});
   await new Promise(r=>setImmediate(r));const card=get('report-list').children[0],links=card.children.at(-1).children;

@@ -21,6 +21,18 @@ if(typeof document!=='undefined'){
   const local=el('nav');local.className='role-tools';local.setAttribute('aria-label',info.name+'工作区');
   for(const [name,path] of info.links){const a=el('a',name);a.href=target(path,role);const u=new URL(a.href,location.href);if(u.pathname===url.pathname&&u.searchParams.get('materials')===url.searchParams.get('materials')&&u.searchParams.get('view')===url.searchParams.get('view'))a.setAttribute('aria-current','page');local.append(a);}
   nav.after(local);
+  const modelChoice=el('label','对话与答复模型'),modelSelect=el('select'),modelMessage=el('span');
+  modelChoice.className='role-model-choice';modelSelect.setAttribute('aria-label',info.name+' 当前模型');modelMessage.setAttribute('role','status');modelMessage.className='model-message';
+  modelChoice.append(modelSelect);local.prepend(modelChoice);local.append(modelMessage);
+  let modelOptions=[];
+  const updateModels=()=>{
+    const selected=window.LumosModels.get(displayedRole||role),options=[{id:'',name:'Codex 默认'},...modelOptions];
+    if(selected&&!options.some(m=>m.id===selected))options.push({id:selected,name:selected});
+    modelSelect.replaceChildren();for(const m of options){const o=el('option',m.name);o.value=m.id;modelSelect.append(o);}modelSelect.value=selected;
+    for(const a of nav.querySelectorAll('a')){const id=new URL(a.href,location.href).searchParams.get('role'),value=window.LumosModels.get(id);let badge=a.querySelector('.role-model-name');if(!badge){badge=el('span');badge.className='role-model-name';a.append(badge);}badge.textContent=modelOptions.find(m=>m.id===value)?.name||value||'Codex 默认';badge.title=value||'使用本机 Codex 默认配置；历史未记录的具体型号不会推测。';}
+  };
+  modelSelect.onchange=()=>{try{localStorage.setItem('lumos.chat.model.'+(displayedRole||role),modelSelect.value);window.dispatchEvent(new CustomEvent('lumos-model'));modelMessage.textContent='';}catch{modelMessage.textContent='模型偏好未能保存，请在对话中选择。';updateModels();}};
+  window.addEventListener('storage',updateModels);window.addEventListener('lumos-model',updateModels);
   document.body.classList.add('simple-workspace');
   if(url.pathname!==info.home||url.searchParams.has('view')){const back=el('a','返回 '+info.name);back.href=target(info.home,role);local.append(back);}
   const picker=document.querySelector('#workspace, #note-workspace, #chat-workspace');
@@ -34,6 +46,7 @@ if(typeof document!=='undefined'){
   fetch('/api/health').then(r=>r.json()).then(d=>{if(d.preview){const p=el('p','体验版 · 使用模拟数据，与正式工作记录隔离');p.className='preview-banner';header.before(p);}}).catch(()=>{});
   picker?.addEventListener('change',()=>{for(const a of document.querySelectorAll('.view-nav a,.role-tools a')){const u=new URL(a.href,location.href);u.searchParams.set('workspace',picker.value);a.href=u.pathname+u.search;}});
   let displayedRole=role,displayedSpace=space;
+  updateModels();fetch('/api/codex-models').then(r=>{if(!r.ok)throw new Error();return r.json();}).then(d=>{modelOptions=d.models;updateModels();}).catch(()=>{modelMessage.textContent='模型列表暂不可用，保留已选模型。';});
   window.addEventListener('lumos-role',e=>{
     const bound=roleSpaces[e.detail];if(!bound)return;
     const currentSpace=new URL(location.href).searchParams.get('workspace')||'lingguang';
@@ -41,6 +54,7 @@ if(typeof document!=='undefined'){
     displayedRole=e.detail;displayedSpace=currentSpace;
     for(const a of nav.querySelectorAll('a')){const u=new URL(a.href,location.href);a.setAttribute('aria-current',u.searchParams.get('role')===e.detail?'page':'false');u.searchParams.set('workspace',currentSpace);a.href=u.pathname+u.search;}
     description.textContent=bound.purpose;local.setAttribute('aria-label',bound.name+'工作区');local.replaceChildren();
+    modelSelect.setAttribute('aria-label',bound.name+' 当前模型');local.append(modelChoice,modelMessage);updateModels();
     for(const [name,path] of bound.links){const a=el('a',name);const u=new URL(target(path,e.detail),location.href);u.searchParams.set('workspace',new URL(location.href).searchParams.get('workspace')||'lingguang');a.href=u.pathname+u.search;if(u.pathname===url.pathname)a.setAttribute('aria-current','page');local.append(a);}
   });
 }

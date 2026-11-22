@@ -167,7 +167,7 @@ if(typeof document!=='undefined'){
         user.append(el('p','王牧楠 · '+new Date(d.created_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}),'chat-author'),el('p',d.text,'chat-text'));turn.append(user);
         if(d.question_text)user.append(el('p','回答问题：'+d.question_text,'chat-author'));
         if(job.subjects?.length)user.append(el('p','讨论对象：'+job.subjects.map(t=>t.title).join('、'),'chat-author'));
-        const answer=el('div',undefined,'assistant-message');answer.append(el('p',agentNames[d.agent_role]||'Lumos','chat-author'));
+        const answer=el('div',undefined,'assistant-message');answer.append(el('p',(agentNames[d.agent_role]||'Lumos')+(window.LumosModels?' · '+window.LumosModels.receipt(d):''),'chat-author'));
         if(d.reply){const body=el('div',undefined,'reply-body');for(const block of replyBlocks(d.reply)){if(block.kind==='list'){const list=el('ul');for(const item of block.items)list.append(el('li',item));body.append(list);}else body.append(el('p',block.text));}answer.append(body);}
         const receipt=el('div',undefined,'chat-receipt');
         if(['pending','running','failed'].includes(d.status))receipt.append(el('p',chatReceipt(job),'response-state'));
@@ -288,7 +288,9 @@ if(typeof document!=='undefined'){
     for(const m of options){const o=el('option',m.name);o.value=m.id;$('chat-model').append(o);}
     $('chat-model').value=selected;modelSignature=signature;
   }
-  $('chat-model').onchange=()=>{try{localStorage.setItem(modelKey(),$('chat-model').value);}catch{error='模型选择无法保存在此浏览器，刷新后可能需要重新选择。';controls();}};
+  $('chat-model').onchange=()=>{try{localStorage.setItem(modelKey(),$('chat-model').value);window.dispatchEvent(new CustomEvent('lumos-model'));}catch{error='模型选择无法保存在此浏览器，刷新后可能需要重新选择。';controls();}};
+  const syncModel=()=>{modelSignature='';restoreModel();};
+  window.addEventListener('storage',syncModel);window.addEventListener('lumos-model',syncModel);
   async function models(){try{const r=await fetch('/api/codex-models'),data=await r.json();if(!r.ok)throw new Error();availableModels=data.models;if(!data.models.length)$('model-help').textContent='暂未读取到本机模型列表；保留已选模型，实际可用性以调用结果为准。';}catch{$('model-help').textContent='模型列表读取失败；保留已选模型，实际可用性以调用结果为准。';}finally{modelsReady=true;controls();}}
   $('manage-conversation').onclick=()=>$('conversation-management').showModal();
   $('close-management').onclick=()=>$('conversation-management').close();

@@ -1,8 +1,11 @@
 'use strict';
+const dismissibleDialogs=new WeakSet();
 function dismissOnBackdrop(dialog, dismiss = () => {
   // Follow Escape's cancellation path so pending writes and completion choices stay safe.
   if (dialog.dispatchEvent(new Event('cancel', {cancelable:true}))) dialog.close();
 }) {
+  if(dismissibleDialogs.has(dialog))return;
+  dismissibleDialogs.add(dialog);
   let startedOutside = false;
   const outside = event => {
     if (event.target !== dialog) return false;

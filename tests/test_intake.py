@@ -164,13 +164,15 @@ class IntakeTest(BaseStoreCase):
 
     def test_full_review_requires_grant_coverage_and_real_questions_then_stamps_atomically(self):
         from lumos_task_review import request_task_review
-        request = {'request_id': uuid.uuid4().hex, 'workspace': 'lingguang', 'source': self.source}
+        request = {'request_id': uuid.uuid4().hex, 'workspace': 'lingguang', 'source': self.source, 'model': 'gpt-6.2-astra'}
         with self.assertRaisesRegex(lumos.Error, '统筹授权'):
             request_task_review(self.store, request)
         self.enable_management()
         first = request_task_review(self.store, request)['intake']
-        again = request_task_review(self.store, {**request, 'request_id': uuid.uuid4().hex})['intake']
+        self.assertEqual(first['data']['model'], 'gpt-6.2-astra')
+        again = request_task_review(self.store, {**request, 'request_id': uuid.uuid4().hex, 'model': 'gpt-6.2-sol'})['intake']
         self.assertEqual(first['id'], again['id'])
+        self.assertEqual(again['data']['model'], 'gpt-6.2-astra')
         ctx, env = self.full_review()
         before = task_detail(self.store, 'talk')['task']['data']
         for reviews in ([], [{'id': 'talk', 'question': '', 'reason': '未处理异常'}],

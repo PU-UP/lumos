@@ -57,5 +57,6 @@ if(typeof document!=='undefined'){
   $('workspace').onchange=()=>{limit=20;data=null;token='';url.searchParams.delete('episode');url.searchParams.set('workspace',$('workspace').value);window.history.replaceState(null,'',url);$('report-list').replaceChildren();load();};
   $('inspect').onclick=async()=>{if(busy||!token)return;busy=true;$('inspect').disabled=true;$('workspace').disabled=true;pending||={request_id:crypto.randomUUID().replaceAll('-',''),workspace:$('workspace').value};try{const r=await fetch('/api/agent-inspect',{method:'POST',headers:{'Content-Type':'application/json','X-Lumos-Token':token},body:JSON.stringify(pending)}),value=await r.json();if(!r.ok){if(r.status>=400&&r.status<500)pending=null;throw new Error(value.error||'检查失败');}pending=null;await load();}catch(e){$('reports-error').textContent=e.message;}finally{busy=false;$('inspect').disabled=false;$('workspace').disabled=!!pending;$('inspect').textContent=pending?'重试检查':'检查一次';}};
   $('close-diagnosis').onclick=()=>$('diagnosis-dialog').close();
+  dismissOnBackdrop($('diagnosis-dialog'));
   load();
 }

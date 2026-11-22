@@ -105,7 +105,7 @@ def make_server(store, port=8765):
                     self.reply(200, note_detail(store, query.get("id", [""])[0], int(revision) if revision else None))
                 elif path.path == "/api/health":
                     self.reply(200, {"app": "lumos", "root": str(store.root), 'preview': (store.root/'PREVIEW').is_file(), 'role_spaces': True})
-                elif path.path in {'/role-navigation.js', '/role-navigation.css', '/role-chat.js', '/role-reports.js', '/role-reports.css', '/role-knowledge.js', '/role-knowledge.css', '/role-ui.js', '/role-ui.css', '/workspace.js', '/workspace.css'}:
+                elif path.path in {'/role-models.js', '/role-navigation.js', '/role-navigation.css', '/role-chat.js', '/role-reports.js', '/role-reports.css', '/role-knowledge.js', '/role-knowledge.css', '/role-ui.js', '/role-ui.css', '/workspace.js', '/workspace.css'}:
                     name = path.path[1:]
                     self.reply(200, (ENGINE/'web'/name).read_bytes(),
                                ('text/javascript' if name.endswith('.js') else 'text/css')+'; charset=utf-8')
@@ -129,6 +129,7 @@ def make_server(store, port=8765):
                     raw = (ENGINE / 'web' / name).read_bytes()
                     if name.endswith('.html'):
                         raw = raw.replace(b'/navigation.js', b'/role-navigation.js').replace(b'/navigation.css', b'/role-navigation.css')
+                        raw = raw.replace(b'<script src="/role-navigation.js"', b'<script src="/role-models.js" defer></script><script src="/role-navigation.js"')
                         raw = raw.replace(b'</head>', b'<link rel="stylesheet" href="/workspace.css"><script src="/workspace.js" defer></script></head>')
                         if name in {'overview.html', 'index.html', 'notes.html', 'people.html'}:
                             raw = raw.replace(b'<script src="/role-navigation.js" defer></script>', b'<script src="/role-navigation.js" defer></script><script src="/role-ui.js" defer></script>')

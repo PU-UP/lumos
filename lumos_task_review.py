@@ -74,6 +74,6 @@ def complete_task_review(nodes, updates, job, reviews, questions, open_questions
 
 def request_task_review(store, request):
     from lumos_intake import save_intake
-    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'source'}, 'Invalid review request')
+    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'source', 'model'}, 'Invalid review request')
     return save_intake(store, {**request, 'task_review': True, 'title': 'Lumos 全部任务复核',
         'text': '从主线阶段成果拆解当前空间全部未结束任务的合理排期，核对前置依赖、执行顺序、负责人协作和下游节点影响。接续王牧楠的手动修改，主动维护排期、跟进、负责人和下一步；没有新结果不得编造进展。可自行处理的异常直接协调交付和跟进计划，不能只为消除颜色而顺延；仍需确认的异常在主页关联具体主线问题。逐项返回复核结果。'})
