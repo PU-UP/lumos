@@ -14,7 +14,21 @@ internal static class LumosLauncher
 {
     const string Url = "http://127.0.0.1:8765/";
 
-    static bool Ready(string data)
+    static Dictionary<string, object> ExpectedRuntime(string root, string python)
+    {
+        var start = new ProcessStartInfo(python, "-B \"" + Path.Combine(root, "lumos.py") + "\" runtime-info");
+        start.UseShellExecute = false;
+        start.CreateNoWindow = true;
+        start.RedirectStandardOutput = true;
+        using (var process = Process.Start(start))
+        {
+            if (!process.WaitForExit(10000)) { process.Kill(); throw new InvalidOperationException("程序版本核对超时。"); }
+            if (process.ExitCode != 0) throw new InvalidOperationException("无法核对当前程序版本。");
+            return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(process.StandardOutput.ReadToEnd());
+        }
+    }
+
+    static bool Ready(string data, Dictionary<string, object> expected)
     {
         try
         {
@@ -26,13 +40,27 @@ internal static class LumosLauncher
             using (var reader = new StreamReader(response.GetResponseStream()))
             {
                 var result = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(reader.ReadToEnd());
-                return result.ContainsKey("app") && (string)result["app"] == "lumos"
-                    && result.ContainsKey("root") && String.Equals((string)result["root"], data, StringComparison.OrdinalIgnoreCase);
+                return Matches(result, data, expected);
             }
         }
         catch (WebException) { return false; }
         catch (ArgumentException) { return false; }
         catch (InvalidOperationException) { return false; }
+    }
+
+    static bool Matches(Dictionary<string, object> result, string data, Dictionary<string, object> expected)
+    {
+        object value;
+        var runtime = result.TryGetValue("runtime", out value) ? value as Dictionary<string, object> : null;
+        var worker = result.TryGetValue("worker", out value) ? value as Dictionary<string, object> : null;
+        return result.ContainsKey("app") && (string)result["app"] == "lumos"
+            && result.ContainsKey("root") && String.Equals((string)result["root"], data, StringComparison.OrdinalIgnoreCase)
+            && runtime != null && runtime.ContainsKey("code") && Object.Equals(runtime["code"], expected["code"])
+            && runtime.ContainsKey("schema") && Object.Equals(runtime["schema"], expected["schema"])
+            && result.ContainsKey("data_schema") && Object.Equals(result["data_schema"], expected["schema"])
+            && result.ContainsKey("mode") && Object.Equals(result["mode"], "active")
+            && result.ContainsKey("preview") && Object.Equals(result["preview"], false)
+            && worker != null && worker.ContainsKey("state") && Object.Equals(worker["state"], "available");
     }
 
     static bool PortUsed()
@@ -76,6 +104,8 @@ internal static class LumosLauncher
         {
             string root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
             string data = Path.Combine(root, "lumos-data");
+            string python = Python();
+            var expected = ExpectedRuntime(root, python);
             if (!File.Exists(Path.Combine(root, "lumos.py")) || !File.Exists(Path.Combine(data, "lumos.sqlite3")))
                 throw new InvalidOperationException("请将 Lumos.exe 放在原 Lumos 仓库根目录中，保留 lumos.py 和 lumos-data 文件夹。");
             string key;
@@ -89,17 +119,17 @@ internal static class LumosLauncher
                 if (!acquired) return 0;
                 try
                 {
-                    if (!Ready(data))
+                    if (!Ready(data, expected))
                     {
-                        if (PortUsed()) throw new InvalidOperationException("8765 端口已被其他服务或旧版看板占用。请先关闭该服务，再打开 Lumos.exe；不会自动结束未知程序。");
-                        var start = new ProcessStartInfo(Python(), "\"" + Path.Combine(root, "lumos.py") + "\" --data \"" + data + "\" serve --port 8765");
+                        if (PortUsed()) throw new InvalidOperationException("当前服务的程序版本、数据版本或后台状态未通过核对。请在项目对话中检查；不会自动升级记录或结束已有服务。");
+                        var start = new ProcessStartInfo(python, "-B \"" + Path.Combine(root, "lumos.py") + "\" --data \"" + data + "\" serve --port 8765");
                         start.WorkingDirectory = root;
                         start.UseShellExecute = false;
                         start.CreateNoWindow = true;
                         using (var server = Process.Start(start))
                         {
                             var timer = Stopwatch.StartNew();
-                            while (!Ready(data))
+                            while (!Ready(data, expected))
                             {
                                 if (server.HasExited) throw new InvalidOperationException("看板启动失败。请在项目对话中检查数据状态和 Python 环境。");
                                 if (timer.ElapsedMilliseconds > 15000) throw new InvalidOperationException("看板启动等待超时。请稍后重试，或在项目对话中检查服务状态。");

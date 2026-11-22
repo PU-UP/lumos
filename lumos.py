@@ -602,7 +602,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, default=Path(os.environ.get("LUMOS_DATA", ENGINE / "lumos-data")))
     subs = parser.add_subparsers(dest="command", required=True)
-    for name in ["init", "status", "verify"]:
+    for name in ["init", "status", "verify", "runtime-info"]:
         subs.add_parser(name)
     command = subs.add_parser("context")
     command.add_argument("question", nargs="?", default="")
@@ -683,7 +683,10 @@ def main():
     command.add_argument("--quiet-files", action="store_true")
     args = parser.parse_args()
     try:
-        if args.command == "init":
+        if args.command == 'runtime-info':
+            from lumos_runtime import runtime_info
+            result = runtime_info()
+        elif args.command == "init":
             result = initialize(args.data)
         elif args.command == "restore":
             from lumos_transfer import restore

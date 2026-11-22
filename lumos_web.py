@@ -18,6 +18,8 @@ from lumos_models import role_models, save_role_models
 
 def make_server(store, port=8765):
     token = secrets.token_hex(32)
+    from lumos_runtime import runtime_info
+    runtime = runtime_info()
 
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -109,7 +111,10 @@ def make_server(store, port=8765):
                     self.reply(200, note_detail(store, query.get("id", [""])[0], int(revision) if revision else None))
                 elif path.path == "/api/health":
                     worker = getattr(self.server, 'worker', None)
+                    with store.db() as db:
+                        schema = db.execute('PRAGMA user_version').fetchone()[0]
                     self.reply(200, {"app": "lumos", "root": str(store.root), 'preview': (store.root/'PREVIEW').is_file(), 'role_spaces': True,
+                                     'runtime': runtime, 'data_schema': schema, 'mode': store.control()['mode'],
                                      'worker': worker.health() if worker else {'state': 'offline', 'error': '', 'last_check': ''}})
                 elif path.path in {'/attention.js', '/role-models.js', '/role-navigation.js', '/role-navigation.css', '/role-chat.js', '/role-reports.js', '/role-reports.css', '/role-knowledge.js', '/role-knowledge.css', '/role-ui.js', '/role-ui.css', '/workspace.js', '/workspace.css'}:
                     name = path.path[1:]
@@ -158,6 +163,10 @@ def make_server(store, port=8765):
 
 
 def serve(store, port=8765):
+    from lumos import SCHEMA
+    with store.db() as db:
+        require(db.execute('PRAGMA user_version').fetchone()[0] == SCHEMA,
+                '数据版本尚未升级；请先备份并显式执行 upgrade-roles，不会自动迁移正式记录。')
     with make_server(store, port) as server:
         from lumos_worker import Worker
         server.worker = Worker(store)

@@ -367,7 +367,9 @@ class TaskTest(BaseStoreCase):
         board = json.loads(raw)
         status, raw = call("GET", "/api/health")
         self.assertEqual(status, 200)
+        from lumos_runtime import runtime_info
         self.assertEqual(json.loads(raw), {"app": "lumos", "root": str(self.root), "preview": False, "role_spaces": True,
+                                          "runtime": runtime_info(), "data_schema": lumos.SCHEMA, "mode": "active",
                                           "worker": {"state": "offline", "error": "", "last_check": ""}})
         headers = {"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{port}", "X-Lumos-Token": board["token"]}
         request = self.request(text="模拟 <script>alert(1)</script>", group="HTTP 分组")
