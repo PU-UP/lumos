@@ -2,6 +2,8 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import secrets
+import os
+import socket
 import sqlite3
 from urllib.parse import urlsplit, parse_qs
 
@@ -14,6 +16,16 @@ from lumos_intake import list_intakes, save_intake
 from lumos_conversations import list_conversations, save_conversation
 from lumos_attention import read_attention
 from lumos_models import role_models, save_role_models
+
+
+class LocalServer(ThreadingHTTPServer):
+    # Windows SO_REUSEADDR permits two live listeners; never start a second worker.
+    allow_reuse_address = os.name != 'nt'
+
+    def server_bind(self):
+        if os.name == 'nt':
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 def make_server(store, port=8765):
@@ -157,7 +169,7 @@ def make_server(store, port=8765):
         def do_POST(self):
             self.handle_request(True)
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server = LocalServer(("127.0.0.1", port), Handler)
     server.daemon_threads = True
     return server
 

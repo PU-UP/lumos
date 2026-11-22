@@ -7,11 +7,18 @@ from unittest.mock import patch
 
 import lumos
 from lumos_runtime import runtime_info
-from lumos_web import serve
+from lumos_web import serve, make_server
 from test_core import BaseStoreCase
 
 
 class RuntimeTest(BaseStoreCase):
+    def test_port_is_exclusive_and_second_service_cannot_start_a_worker(self):
+        with make_server(self.store, 0) as first:
+            with patch('lumos_worker.Worker') as worker:
+                with self.assertRaises(OSError):
+                    serve(self.store, first.server_port)
+                worker.assert_not_called()
+
     def test_fingerprint_changes_with_code_and_web_without_touching_data(self):
         root = self.area/'engine'; root.mkdir(); (root/'web').mkdir()
         (root/'lumos.py').write_text('first')
