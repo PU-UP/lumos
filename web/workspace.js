@@ -8,15 +8,25 @@ if(typeof document!=='undefined'){
   const url=new URL(location.href),role=pageRole(url),info=roleSpaces[role];
   const el=(tag,text)=>{const n=document.createElement(tag);if(text)n.textContent=text;return n;};
   if(url.pathname==='/chat'){
-    const aside=document.querySelector('.chat-layout aside'),toggle=document.getElementById('switch-chat');toggle.type='button';toggle.setAttribute('aria-expanded','false');
-    document.getElementById('messages').before(aside);aside.hidden=true;
-    toggle.onclick=()=>{aside.hidden=!aside.hidden;toggle.setAttribute('aria-expanded',String(!aside.hidden));};
-    document.getElementById('new-chat').addEventListener('click',()=>{aside.hidden=true;toggle.setAttribute('aria-expanded','false');});
-    aside.addEventListener('click',event=>{if(event.target.closest('.chat-link, #new-chat')){aside.hidden=true;toggle.setAttribute('aria-expanded','false');}});
-    if(url.searchParams.get('embedded')==='1'){
-      document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!document.querySelector('dialog[open]')){if(!aside.hidden){aside.hidden=true;toggle.setAttribute('aria-expanded','false');toggle.focus();}else parent.postMessage({lumosChat:'close'},location.origin);}});
-      document.addEventListener('click',event=>{const a=event.target.closest('a');if(a&&new URL(a.href).pathname!=='/chat')a.target='_top';});
+    const aside=document.getElementById('chat-history'),toggle=document.getElementById('switch-chat'),layout=document.querySelector('.chat-layout'),conversation=document.getElementById('conversation'),backdrop=document.getElementById('chat-history-backdrop');
+    const preferenceKey='lumos.chat.sidebar.v1.'+role+'.'+(url.searchParams.get('workspace')||'lingguang');
+    let expanded=false;
+    try{expanded=localStorage.getItem(preferenceKey)==='true';}catch{}
+    const narrow=()=>window.innerWidth<700;
+    function renderHistory(){
+      aside.hidden=!expanded;layout.classList.toggle('history-open',expanded);toggle.setAttribute('aria-expanded',String(expanded));
+      document.getElementById('history-toggle-label').textContent=expanded?'收起列表':'展开列表';
+      toggle.setAttribute('aria-label',expanded?'收起对话列表':'展开对话列表');
+      backdrop.hidden=!(expanded&&narrow());conversation.inert=expanded&&narrow();
+      window.dispatchEvent(new Event('lumos-chat-visibility'));
     }
+    function setHistory(value,focus=false){expanded=value;renderHistory();try{localStorage.setItem(preferenceKey,String(expanded));}catch{}if(focus)toggle.focus();}
+    toggle.onclick=()=>setHistory(!expanded);backdrop.onclick=()=>setHistory(false,true);
+    aside.addEventListener('click',event=>{if(narrow()&&event.target.closest('.chat-link, #new-chat'))setHistory(false);});
+    window.addEventListener('resize',()=>{renderHistory();if(expanded&&narrow()&&conversation.contains(document.activeElement))toggle.focus();});
+    document.addEventListener('keydown',event=>{if(event.key!=='Escape'||document.querySelector('dialog[open]'))return;if(expanded){event.preventDefault();setHistory(false,true);}else if(url.searchParams.get('embedded')==='1')parent.postMessage({lumosChat:'close'},location.origin);});
+    if(url.searchParams.get('embedded')==='1')document.addEventListener('click',event=>{const a=event.target.closest('a');if(a&&new URL(a.href).pathname!=='/chat')a.target='_top';});
+    renderHistory();
   }else{
     const dock=el('aside'),bar=el('div'),heading=el('h2','与 '+info.name+' 对话'),close=el('button','×'),frame=el('iframe'),open=el('button','和 '+info.name+' 聊'),updated=el('button','内容已更新 · 刷新'),resize=el('div');
     const preferenceKey='lumos.chat.dock.v1.'+role+'.'+(url.searchParams.get('workspace')||'lingguang');

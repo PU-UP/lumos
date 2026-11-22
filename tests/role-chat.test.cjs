@@ -170,6 +170,15 @@ test('automatic reading requires visible message endings in a visible tab and le
   const message=(key)=>({id:key,kind:'question',text:key,at:'2026-11-22T01:00:00Z',active:true,seen_at:'',related_ids:[]});
   p.listing.conversations=[{id:'chat-'+id,data:{chat_id:id,title:'进展',agent_role:'lumos',workspace:'lingguang',status:'active',notices:[message('visible'),message('below-fold')]}}];await p.poll();
   const observer=observers.at(-1);p.world.document.visibilityState='hidden';observer.callback([{target:observer.targets[0],isIntersecting:true,intersectionRatio:1}]);await p.read();assert.equal(p.posts.length,0);
-  p.world.document.visibilityState='visible';p.events.visibilitychange();await p.read();await tick();assert.deepEqual(p.posts[0].ids,['visible']);
+  p.world.document.visibilityState='visible';p.get('conversation').inert=true;p.events.visibilitychange();await p.read();assert.equal(p.posts.length,0);
+  p.get('conversation').inert=false;p.events['lumos-chat-visibility']();await p.read();await tick();assert.deepEqual(p.posts[0].ids,['visible']);
   assert.equal(p.listing.conversations[0].data.notices[1].seen_at,'');
+});
+
+test('conversation labels use Shanghai creation dates without changing explicit names or inventing legacy dates',()=>{
+  const {conversationLabel}=require('../web/role-chat.js');
+  assert.equal(conversationLabel('联调准备','2026-11-21T17:00:00Z'),'2026-11-22 | 联调准备');
+  assert.equal(conversationLabel('2026-11-20 | 自定主题','2026-11-21T17:00:00Z'),'2026-11-20 | 自定主题');
+  assert.equal(conversationLabel('旧话题',undefined),'旧话题');
+  assert.equal(conversationLabel('新对话','invalid'),'新对话');
 });

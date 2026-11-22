@@ -16,6 +16,14 @@ function replyBlocks(text){
   }
   return blocks;
 }
+function conversationLabel(title,created){
+  if(/^\d{4}-\d{2}-\d{2}\s*\|\s*\S/.test(title))return title;
+  const date=new Date(created);
+  if(!created||!Number.isFinite(date.getTime()))return title;
+  const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date);
+  const value=key=>parts.find(p=>p.type===key).value;
+  return `${value('year')}-${value('month')}-${value('day')} | ${title}`;
+}
 function answerText(text,question){return [typeof question?.answer==='string'?question.answer:'',text.trim()].filter(Boolean).join('\n\n');}
 function chatTurns(jobs, id) {
   const turns=jobs.filter(n=>n.data.chat_id===id), children=new Map(turns.map(n=>[n.data.chat_parent||'',n])), ordered=[];
@@ -48,7 +56,7 @@ function discussionQuestions(state,jobs,workspace){
   return chatWorkModel.questionInbox(current.questions.filter(q=>q.line),jobs,workspace);
 }
 const subjectTitle=n=>(n.kind==='mainline'?'主线 · ':n.short_id?n.short_id+' · ':'')+(n.data.title||n.data.text);
-if(typeof module!=='undefined')module.exports={chatTurns,chatReceipt,discussionItems,discussionQuestions,replyBlocks,roleConversation,answerText};
+if(typeof module!=='undefined')module.exports={chatTurns,chatReceipt,discussionItems,discussionQuestions,replyBlocks,roleConversation,answerText,conversationLabel};
 if(typeof document!=='undefined'){
   const $=id=>document.getElementById(id),el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
   const uuid=()=>crypto.randomUUID().replaceAll('-','');
@@ -146,15 +154,15 @@ if(typeof document!=='undefined'){
     const nextListSignature=JSON.stringify(entries)+chatId+busy;
     if(nextListSignature!==listSignature){
       const list=$('chat-list');list.replaceChildren();
-      for(const [id,first] of entries){const b=el('button',first.data.title,'chat-link');b.setAttribute('aria-current',String(id===chatId));b.disabled=busy;
-        const latest=chatTurns(jobs,id).at(-1);b.append(el('small',first.data.status==='legacy'?'混合角色历史 · 只读':first.data.status==='closed'?'已结束':latest?.data.status==='running'?'正在处理':latest?.data.status==='failed'?'待重试':first.data.notices?.some(n=>n.active&&!n.seen_at)?'● 未读消息':first.data.topic_state==='settled'?'已告一段落 · 可继续聊':first.data.notices?.length?'已读 · 可继续聊':latest?'已保存对话':'尚未发送'));
+      for(const [id,first] of entries){const label=conversationLabel(first.data.title,first.data.created_at),b=el('button',undefined,'chat-link');b.title=label;b.append(el('span',label,'chat-link-title'));b.setAttribute('aria-current',String(id===chatId));b.disabled=busy;
+        const latest=chatTurns(jobs,id).at(-1);const status=first.data.status==='legacy'?'混合角色历史 · 只读':first.data.status==='closed'?'已结束':latest?.data.status==='running'?'正在处理':latest?.data.status==='failed'?'待重试':first.data.notices?.some(n=>n.active&&!n.seen_at)?'● 未读消息':first.data.status==='draft'?'未发送草稿':'';if(status)b.append(el('small',status));
         b.onclick=()=>selectChat(id);list.append(b);}
       if(!entries.length)list.append(el('p','还没有对话。直接写下第一件事即可。','muted'));
       listSignature=nextListSignature;
     }
     const turns=chatTurns(jobs,chatId),latest=turns.at(-1);
     const meta=currentSession();
-    $('chat-title').textContent=meta?.data.title||turns[0]?.data.title||'新对话';
+    $('chat-title').textContent=conversationLabel(meta?.data.title||turns[0]?.data.title||'新对话',meta?.data.created_at||turns[0]?.data.created_at);
     $('chat-title').setAttribute('aria-label','重命名对话：'+$('chat-title').textContent);
     const stamp=JSON.stringify(meta);if(stamp!==metaSignature&&!metadataDirty){$('session-title').value=meta?.data.title||turns[0]?.data.title||'';metaSignature=stamp;}
     $('save-session').disabled=!loaded||sessionBusy||readOnly();$('chat-title').disabled=!loaded||readOnly();
@@ -244,10 +252,11 @@ if(typeof document!=='undefined'){
   }
   function queueRead(){
     clearTimeout(readTimer);
-    if(document.visibilityState!=='visible'||!visibleNotices.size||reading)return;
-    readTimer=setTimeout(()=>{if(document.visibilityState==='visible'&&visibleNotices.size)markRead([...visibleNotices].slice(0,200));},1200);
+    if(document.visibilityState!=='visible'||$('conversation').inert||!visibleNotices.size||reading)return;
+    readTimer=setTimeout(()=>{if(document.visibilityState==='visible'&&!$('conversation').inert&&visibleNotices.size)markRead([...visibleNotices].slice(0,200));},1200);
   }
   document.addEventListener?.('visibilitychange',queueRead);
+  window.addEventListener('lumos-chat-visibility',queueRead);
   async function markRead(ids){
     if(reading)return;reading=true;
     const target=chatId;let saved=false;

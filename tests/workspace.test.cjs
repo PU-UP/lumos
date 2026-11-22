@@ -80,3 +80,29 @@ test('responsive clamps never overwrite the preferred desktop width and canceled
   p.handle.onpointerdown({button:0,pointerId:2,clientX:320,preventDefault(){}});p.handle.onpointermove({pointerId:2,clientX:420});p.handle.onpointercancel();
   assert.equal(p.body.classes.has('chat-resizing'),false);assert.equal(dockPage(p.storage).body.attrs['--workspace-chat-width'],'685px');
 });
+
+function sidebarPage(storage=new Map(),width=1000,role='lumos'){
+  const nodes=new Map(),events={},messages=[];
+  const get=id=>{if(!nodes.has(id))nodes.set(id,{hidden:false,attrs:{},events:{},classList:{toggle(){}},setAttribute(k,v){this.attrs[k]=v;},addEventListener(k,fn){this.events[k]=fn;},focus(){},contains(){return false;}});return nodes.get(id);};
+  const document={getElementById:get,querySelector:s=>s==='.chat-layout'?get('layout'):null,addEventListener:(k,fn)=>events[k]=fn};
+  const window={innerWidth:width,addEventListener:(k,fn)=>events[k]=fn,dispatchEvent(){}};
+  const world={document,window,location:new URL('http://localhost/chat?embedded=1&role='+role),URL,Event,roleSpaces,pageRole:()=>role,parent:{postMessage:m=>messages.push(m)},localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)}};
+  require('node:vm').runInNewContext(require('node:fs').readFileSync('web/workspace.js','utf8'),world);
+  return {get,storage,messages,toggle:()=>get('switch-chat').onclick(),select:()=>get('chat-history').events.click({target:{closest:()=>true}}),resize(w){window.innerWidth=w;events.resize();},escape(){events.keydown({key:'Escape',preventDefault(){}});}};
+}
+
+test('sidebar stays beside selected chats on desktop and remembers expansion per role',()=>{
+  const p=sidebarPage();assert.equal(p.get('chat-history').hidden,true);p.toggle();p.select();
+  assert.equal(p.get('chat-history').hidden,false);assert.equal(p.get('conversation').inert,false);
+  assert.equal(sidebarPage(p.storage).get('chat-history').hidden,false);
+  assert.equal(sidebarPage(p.storage,1000,'aipm').get('chat-history').hidden,true);
+  p.escape();assert.equal(p.get('chat-history').hidden,true);assert.equal(p.messages.length,0);
+  p.escape();assert.equal(p.messages[0].lumosChat,'close');
+});
+
+test('narrow sidebar hides messages from interaction and closes after choosing a chat',()=>{
+  const p=sidebarPage();p.toggle();p.resize(600);
+  assert.equal(p.get('conversation').inert,true);assert.equal(p.get('chat-history-backdrop').hidden,false);
+  p.select();assert.equal(p.get('chat-history').hidden,true);assert.equal(p.get('conversation').inert,false);
+  p.toggle();p.resize(1000);assert.equal(p.get('conversation').inert,false);assert.equal(p.get('chat-history-backdrop').hidden,true);
+});
