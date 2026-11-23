@@ -15,14 +15,27 @@ function noticeText(item){
     .replaceAll('下一步仅按当前主线及已有未答问题补齐复核；不重放旧候选，不重复已保存的安排，不推定任务完成或关闭未答问题。','当时的接续安排：结合最新项目记录补齐复核，保留待确认问题，避免重复处理。')
     .replaceAll('运行情况已更新：该次处理已成功接续；不代表底层故障已永久修复。','这次中断的整理已接续成功，你无需为此重新提交内容。\n这表示本次工作已恢复，不代表同类故障已永久排除。');
 }
+function conversationState(data,latest){
+  if(latest && ['pending','running'].includes(latest.status))return {key:'processing',label:'处理中'};
+  if(latest?.status==='failed')return {key:'failed',label:'需要重试'};
+  const active=(data.notices||[]).filter(n=>n.active);
+  const unread=active.some(n=>!n.seen_at);
+  const asks=active.some(n=>['question','followup'].includes(n.kind))||data.awaiting_reply===true;
+  if(unread)return {key:'unread',label:asks?'未读 · 待回复':'未读'};
+  if(asks)return {key:'awaiting',label:'已读待回'};
+  if(data.topic_state==='settled')return {key:'settled',label:'本轮已收尾'};
+  if(data.status==='closed')return {key:'settled',label:'已结束'};
+  if(data.status==='legacy')return {key:'history',label:'历史 · 只读'};
+  return {key:'ongoing',label:data.topic_state==='waiting'?'等待后续':'进行中'};
+}
 function attentionThreads(conversations,role){
   return conversations.filter(n=>(!role||n.data.agent_role===role)&&!n.data.deleted&&n.data.notices?.length).map(n=>({
     id:n.data.chat_id,role:n.data.agent_role,title:n.data.title,workspace:n.data.workspace,
-    unread:n.data.notices.filter(i=>i.active&&!i.seen_at).length,
+    state:conversationState(n.data),unread:n.data.notices.filter(i=>i.active&&!i.seen_at).length,
     latest:n.data.notices.filter(i=>i.active).at(-1)||n.data.notices.at(-1)
   })).sort((a,b)=>Number(b.unread>0)-Number(a.unread>0)||b.latest.at.localeCompare(a.latest.at));
 }
-if(typeof module!=='undefined')module.exports={attentionThreads,noticeText};
+if(typeof module!=='undefined')module.exports={attentionThreads,noticeText,conversationState};
 if(typeof document!=='undefined'&&new URL(location.href).searchParams.get('embedded')!=='1'){
   const make=(tag,text,cls)=>{const n=document.createElement(tag);if(text)n.textContent=text;if(cls)n.className=cls;return n;};
   const trigger=make('button','消息','attention-bubble'),panel=make('dialog',undefined,'attention-panel'),bar=make('div',undefined,'dialog-heading'),title=make('h2','消息'),close=make('button','×','icon-close'),list=make('div');
@@ -35,7 +48,7 @@ if(typeof document!=='undefined'&&new URL(location.href).searchParams.get('embed
     const items=attentionThreads(data.conversations||[],role),count=items.reduce((sum,n)=>sum+n.unread,0);trigger.textContent=count?'消息 · '+count+' 未读':'消息';trigger.classList.toggle('has-unread',count>0);trigger.setAttribute('aria-label',count?'消息，'+count+' 条未读':'消息，无未读');
     title.textContent=roleSpaces[role].name+' 的消息';
     const next=JSON.stringify([role,workspace,items]);if(signature!==next){signature=next;list.replaceChildren();if(!items.length)list.append(make('p',roleSpaces[role].name+' 暂时没有新消息。','muted'));
-      for(const n of items){const b=make('button',undefined,'attention-thread'+(n.unread?' is-unread':''));b.type='button';b.append(make('span',(roleSpaces[n.role]?.name||n.role)+' · '+(n.unread?n.unread+' 条未读':n.latest.active?'已读':'已接续'),'attention-meta'),make('strong',n.title),make('span',noticeText(n.latest),'attention-preview'));b.onclick=()=>{const address='/chat?role='+n.role+'&workspace='+n.workspace+'&id='+n.id;panel.close();if(location.pathname==='/chat')location.href=address;else window.dispatchEvent(new CustomEvent('lumos-open-chat',{detail:address}));};list.append(b);}
+      for(const n of items){const b=make('button',undefined,'attention-thread'+(n.unread?' is-unread':''));b.type='button';b.append(make('span',(roleSpaces[n.role]?.name||n.role)+' · '+(n.unread?n.unread+' 条未读':n.state.label),'attention-meta chat-state state-'+n.state.key),make('strong',n.title),make('span',noticeText(n.latest),'attention-preview'));b.onclick=()=>{const address='/chat?role='+n.role+'&workspace='+n.workspace+'&id='+n.id;panel.close();if(location.pathname==='/chat')location.href=address;else window.dispatchEvent(new CustomEvent('lumos-open-chat',{detail:address}));};list.append(b);}
     }
   }catch{if(current===generation)trigger.textContent='消息 · 暂未连接';}finally{if(current===generation)timer=setTimeout(refresh,5000);}}
   for(const event of ['lumos-attention','lumos-role','lumos-scope'])window.addEventListener(event,refresh);refresh();

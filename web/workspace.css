@@ -197,3 +197,13 @@
 #chat-bulk-status{padding:0 8px;font-size:13px}
 #delete-chat-name{white-space:pre-line;max-height:35dvh;overflow:auto}
 @media(hover:hover){.chat-list-row .chat-delete{opacity:0}.chat-list-row:hover .chat-delete,.chat-list-row:focus-within .chat-delete{opacity:1}}
+
+.chat-state{display:inline-block;font-size:12px;line-height:1.6;padding:2px 7px;border-radius:4px;background:#e9eff0;color:#405b63}
+.chat-state:empty{display:none}
+.chat-state.state-unread{background:#fff0ce;color:#8a4200}
+.chat-state.state-awaiting{background:#e9edff;color:#354a9b}
+.chat-state.state-processing{background:#e1f1f6;color:#14607b}
+.chat-state.state-settled{background:#e4f2e9;color:#286447}
+.chat-state.state-failed{background:#fbe7e4;color:#9b3327}
+.simple-workspace #chat-history .chat-link .chat-state{display:table;margin-top:5px;font-size:12px}
+.notice-actions .quick-reply{background:var(--soft);color:var(--accent)}

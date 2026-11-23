@@ -38,6 +38,20 @@ def maintain_conversation(nodes, receipt, plan):
         data['title'] = value['title']
     destinations = [i for i in d.get('destinations', []) if nodes.get(i, {}).get('kind') in {'action', 'mainline'}]
     data['source_ids'] = list(dict.fromkeys([*data['source_ids'], *d.get('related_ids', []), *destinations]))[-20:]
+    from lumos_attention import conversation_topic
+    if not data.get('topic_id'):
+        data['topic_id'] = conversation_topic(nodes, old['data']['source_ids'] or data['source_ids'])
+    from lumos_intake import open_questions
+    related = set(data['source_ids'])
+    unresolved = [q for q in open_questions(nodes, d['workspace'])
+                  if q.get('answer_state') != 'waiting' and
+                  (nodes[q['intake_id']]['data'].get('chat_id') == d.get('chat_id') or related.intersection(q['related_ids']))]
+    data['awaiting_reply'] = bool(plan.get('questions') or unresolved or (value and value['state'] == 'waiting'))
+    if plan.get('questions') or unresolved:
+        data['topic_state'] = 'waiting'
+    answered = set([d.get('question_key', ''), *d.get('question_keys', [])])
+    data['notices'] = [{**n, 'active': False} if n['kind'] != 'reply' and (n.get('question_key') or n['key']) in answered else n
+                       for n in data.get('notices', [])]
     from lumos_attention import notice
     item = notice('reply:'+receipt['id'], 'reply', d['summary'], receipt['id'], d.get('related_ids', []))
     data['notices'] = [*data.get('notices', []), item]
@@ -51,6 +65,8 @@ def validate_conversation(node, old, nodes):
     require(d.get('agent_role') in {*ROLES, 'legacy'} and d.get('workspace') in {'lingguang', 'lumos'}, 'Invalid conversation scope')
     require(d.get('status') in {'active', 'closed', 'legacy'}, 'Invalid conversation status')
     require(type(d.get('deleted', False)) is bool, 'Invalid conversation deletion state')
+    require(type(d.get('awaiting_reply', False)) is bool, 'Invalid awaiting reply state')
+    require(not d.get('topic_id') or nodes.get(d['topic_id'], {}).get('kind') in {'action', 'mainline'}, 'Invalid conversation topic')
     require((d['agent_role'] == 'legacy') == (d['status'] == 'legacy'), 'Mixed history must remain read-only')
     for key, limit in [('title', 300), ('memo', 10000)]:
         require(isinstance(d.get(key), str) and len(d[key]) <= limit, 'Invalid conversation '+key)

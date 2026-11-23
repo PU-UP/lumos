@@ -145,3 +145,116 @@ class AttentionTest(BaseStoreCase):
         self.assertEqual(len([c for c in chats if not c['data'].get('deleted')]), 1)
         self.assertTrue(next(c for c in chats if c['id'] == old['id'])['data']['deleted'])
         self.assertNotEqual(next(c for c in chats if not c['data'].get('deleted'))['id'], old['id'])
+
+
+    def seed_topic(self):
+        with self.store.db() as db:
+            task = copy.deepcopy(self.store.nodes(db)['talk'])
+        task['id'] = 'calibration'; task['data']['text'] = '模拟标定'
+        line = {'id': 'topic-line', 'kind': 'mainline', 'data': {'title': '模拟联调主线', 'context': 'mapping',
+            'goal': '核对条件', 'summary': '尚待验证', 'phase': '准备', 'as_of': '2026-11-20',
+            'task_ids': ['talk', 'calibration'], 'source_ids': ['assumption'], 'source': self.source}}
+        batch = self.store.begin({'reason': 'isolated topic fixture', 'updates': [task, line]}, True)
+        self.store.commit(batch['batch'], True)
+
+    def test_mainline_followups_share_one_topic_and_only_unanswered_tasks_return(self):
+        self.seed_topic()
+        for ident in ('talk', 'calibration'):
+            save_task(self.store, {'request_id': uuid.uuid4().hex, 'expected_seq': self.store.status()['seq'],
+                'id': ident, 'changes': {'follow_up': '2026-11-23'}, 'source': self.source})
+        with patch('lumos_intake.today', return_value='2026-11-23'):
+            synchronize_attention(self.store)
+            chats = self.chats(); self.assertEqual(len(chats), 1)
+            item = chats[0]['data']['notices'][0]
+            self.assertEqual(chats[0]['data']['title'], '模拟联调主线')
+            self.assertEqual(set(item['related_ids']), {'talk', 'calibration', 'topic-line'})
+            self.assertEqual(len(item['followup_keys']), 2)
+            request = self.job(chat_id=chats[0]['data']['chat_id'], question_key=item['key'], question_keys=item['followup_keys'],
+                               related_ids=item['related_ids'], text='暂无变化')
+            apply_intake(self.store, request)
+            synchronize_attention(self.store)
+            self.assertFalse(any(n['active'] for n in self.chats()[0]['data']['notices'] if n['kind'] == 'followup'))
+            save_task(self.store, {'request_id': uuid.uuid4().hex, 'expected_seq': self.store.status()['seq'],
+                'id': 'calibration', 'changes': {'follow_up': '2026-11-24'}, 'source': self.source})
+        with patch('lumos_intake.today', return_value='2026-11-24'):
+            synchronize_attention(self.store)
+        self.assertEqual(len(self.chats()), 1)
+        active = [n for n in self.chats()[0]['data']['notices'] if n['kind'] == 'followup' and n['active']]
+        self.assertEqual(len(active), 1); self.assertNotIn('talk', active[0]['related_ids'])
+        self.assertEqual(self.store.verify()['integrity'], 'ok')
+
+    def test_chat_answer_updates_task_mainline_question_and_state_atomically(self):
+        self.seed_topic()
+        first = self.job(related_ids=['talk', 'topic-line'])
+        first['plan']['questions'] = ['同步结果是否确认？']; apply_intake(self.store, first)
+        chat = self.chats()[0]['data']; self.assertTrue(chat['awaiting_reply'])
+        self.assertEqual(chat['topic_state'], 'waiting')
+        text = '同步结果已确认，可继续准备联调。'
+        second = self.job(chat_id=chat['chat_id'], chat_parent=first['id'], related_ids=[],
+                          question_key='question:'+first['id']+':0', text=text)
+        context = intake_context(self.store, second['id'])
+        self.assertEqual(set(context['intake']['data']['related_ids']), {'talk', 'topic-line'})
+        self.assertEqual(context['conversation_questions'][0]['intake_id'], first['id'])
+        def update(ident, kind, changes):
+            return {'id': ident, 'kind': kind, 'changes': changes, 'mode': 'reported', 'reason': '模拟明确进展', 'excerpt': text}
+        second['plan']['updates'] = [update('talk', 'action', {'progress': '同步结果已确认', 'next_step': '准备联调'}),
+                                    update('topic-line', 'mainline', {'summary': '同步已核对，继续准备联调', 'next_step': '准备联调'})]
+        second['plan']['resolutions'] = [{'intake_id': first['id'], 'index': 0, 'answer': '已确认', 'excerpt': text,
+                                        'state': 'resolved', 'remaining': '', 'review_on': '', 'waiting_for': ''}]
+        bad = copy.deepcopy(second); bad['plan']['updates'][1]['excerpt'] = '未出现的原话'
+        before = self.store.status()['seq']
+        with self.assertRaises(lumos.Error): apply_intake(self.store, bad)
+        self.assertEqual(self.store.status()['seq'], before)
+        apply_intake(self.store, second)
+        with self.store.db() as db: nodes = self.store.nodes(db)
+        self.assertEqual(nodes['talk']['data']['progress'], '同步结果已确认')
+        self.assertEqual(nodes['talk']['data']['status'], 'todo')
+        self.assertEqual(nodes['topic-line']['data']['summary'], '同步已核对，继续准备联调')
+        self.assertEqual(nodes[first['id']]['data']['resolutions'][0]['source_intake'], second['id'])
+        self.assertEqual(nodes['chat-'+chat['chat_id']]['data']['topic_state'], 'settled')
+        self.assertFalse(nodes['chat-'+chat['chat_id']]['data']['awaiting_reply'])
+        self.assertTrue(apply_intake(self.store, second)['replayed'])
+
+    def test_unanswered_questions_prevent_false_settlement_and_topic_catalog_keeps_roles_separate(self):
+        first = self.job(); first['plan']['questions'] = ['同步结果？']; apply_intake(self.store, first)
+        chat = self.chats()[0]['data']
+        other = self.job('maintainer'); apply_intake(self.store, other)
+        second = self.job(chat_id=chat['chat_id'], chat_parent=first['id'])
+        self.assertFalse(intake_context(self.store, second['id'])['topic_conversations'])
+        apply_intake(self.store, second)
+        latest = next(c['data'] for c in self.chats() if c['data']['chat_id'] == chat['chat_id'])
+        self.assertTrue(latest['awaiting_reply']); self.assertEqual(latest['topic_state'], 'waiting')
+
+
+    def test_topic_matching_requires_exact_membership_not_context_or_similar_titles(self):
+        from lumos_attention import conversation_topic
+        self.seed_topic()
+        with self.store.db() as db: nodes = self.store.nodes(db)
+        self.assertEqual(conversation_topic(nodes, ['talk']), 'topic-line')
+        self.assertEqual(conversation_topic(nodes, ['calibration']), 'topic-line')
+        self.assertEqual(conversation_topic(nodes, ['mapping']), '')
+        duplicate = copy.deepcopy(nodes['topic-line']); duplicate['id'] = 'other-line'
+        nodes[duplicate['id']] = duplicate
+        self.assertEqual(conversation_topic(nodes, ['talk']), 'talk')
+        self.assertEqual(conversation_topic(nodes, ['talk', 'calibration']), '')
+
+    def test_no_change_answer_schedules_followup_without_inventing_progress_or_completion(self):
+        from datetime import date, timedelta
+        from lumos_intake import today
+        with self.store.db() as db: nodes = self.store.nodes(db)
+        policy = nodes[POLICY]; policy['data']['task_management_workspaces'] = ['lingguang']
+        batch = self.store.begin({'reason': 'isolated management grant', 'updates': [policy]}, True); self.store.commit(batch['batch'], True)
+        first = self.job(); first['plan']['questions'] = ['同步结果？']; apply_intake(self.store, first)
+        chat = self.chats()[0]['data']; future = (date.fromisoformat(today())+timedelta(days=3)).isoformat()
+        second = self.job(chat_id=chat['chat_id'], chat_parent=first['id'], text='暂无变化', question_key='question:'+first['id']+':0')
+        second['plan']['resolutions'] = [{'intake_id': first['id'], 'index': 0, 'answer': '暂无变化', 'excerpt': '暂无变化',
+            'state': 'waiting', 'remaining': '同步结果？', 'review_on': future, 'waiting_for': '同步验证结果'}]
+        with self.store.db() as db: before = self.store.nodes(db)['talk']['data']
+        apply_intake(self.store, second)
+        with self.store.db() as db: after = self.store.nodes(db)['talk']['data']
+        for field in ('status', 'progress', 'due', 'planned_due', 'completed_on'):
+            self.assertEqual(after.get(field), before.get(field))
+        self.assertEqual(after['follow_up'], future)
+        self.assertEqual(self.chats()[0]['data']['topic_state'], 'settled')
+        synchronize_attention(self.store)
+        self.assertFalse(any(n['active'] for n in self.chats()[0]['data']['notices'] if n['kind'] == 'question'))

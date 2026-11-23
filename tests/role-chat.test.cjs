@@ -120,7 +120,7 @@ test('an uncertain rename stays with its own conversation after navigation and r
 async function page(storage=new Map(),href='http://127.0.0.1/chat?id='+'a'.repeat(32),initial=[],board={},extra={}){
   const els=new Map(),get=id=>{if(!els.has(id))els.set(id,new Element());return els.get(id);};
   const listing={conversations:[],intakes:initial,token:'test',enabled:true,executor:'available'},posts=[],notifications=[],events={};let poll,readTimer;
-  const world={noticeText:require('../web/attention.js').noticeText,document:{getElementById:get,createElement:()=>new Element(),visibilityState:'visible',addEventListener(name,fn){events[name]=fn;}},window:{location:{href,origin:new URL(href).origin},parent:{postMessage(message){notifications.push(message);}},addEventListener(name,fn){events[name]=fn;},dispatchEvent(){}},history:{replaceState(a,b,u){world.window.location.href=String(u);}},URL,crypto,CustomEvent:class{constructor(name,options){this.detail=options?.detail;}},
+  const world={noticeText:require('../web/attention.js').noticeText,conversationState:require('../web/attention.js').conversationState,document:{getElementById:get,createElement:()=>new Element(),visibilityState:'visible',addEventListener(name,fn){events[name]=fn;}},window:{location:{href,origin:new URL(href).origin},parent:{postMessage(message){notifications.push(message);}},addEventListener(name,fn){events[name]=fn;},dispatchEvent(){}},history:{replaceState(a,b,u){world.window.location.href=String(u);}},URL,crypto,CustomEvent:class{constructor(name,options){this.detail=options?.detail;}},
     localStorage:{get length(){return storage.size;},key:i=>[...storage.keys()][i],getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},setTimeout:(fn,ms)=>{if(ms===1200)readTimer=fn;else poll=fn;return 1;},clearTimeout(){},
     fetch:async(url,opts)=>{if(!opts)return response(url==='/api/codex-models'?{models:[{id:'test-model',name:'Test model'}]}:url==='/api/tasks'?board:listing);const req=JSON.parse(opts.body);posts.push(req);if(url==='/api/conversation-read'){const conversation=listing.conversations.find(n=>n.data.chat_id===req.chat_id);conversation.data.notices.forEach(n=>{if(req.ids.includes(n.id))n.seen_at='seen';});return response({conversation});}if(url==='/api/conversations'&&req.operation){const conversation=listing.conversations.find(n=>n.data.chat_id===req.chat_id);conversation.data.deleted=req.operation==='delete';conversation.data.revision++;return response({conversation});}if(url==='/api/conversations'){const conversation={id:'chat-'+req.chat_id,kind:'conversation',data:{...req,revision:(req.expected_revision||0)+1,status:req.status||'active'}};listing.conversations=[conversation,...listing.conversations.filter(n=>n.id!==conversation.id)];return response({conversation});}const intake={id:'intake-'+req.request_id,data:{...req,status:'pending',revision:1,created_at:'2026-11-17T00:00:00Z'}};listing.intakes.unshift(intake);return response({intake});}};
   world.window.LumosModels={get:role=>require('../web/role-models.js').selectedRoleModel(role,world.localStorage),receipt:require('../web/role-models.js').receiptModel,loading:false,busy:false,error:''};
@@ -266,4 +266,25 @@ test('batch deletion refuses running conversations and list reply opens without 
   const p=await page(),a='a'.repeat(32),b='b'.repeat(32);p.listing.conversations=[managedChat(a,'甲'),managedChat(b,'乙')];p.listing.intakes=[{id:'running',data:{chat_id:a,agent_role:'lumos',status:'running',created_at:'2026-11-23'}}];await p.poll();
   p.get('select-chats').onclick();p.get('delete-selected-chats').onclick();await p.get('confirm-chat-delete').onclick();assert.equal(p.posts.length,0);assert.match(p.get('delete-chat-error').textContent,/仍在处理/);
   await descendants(p.get('chat-list')).find(n=>n['aria-label']==='回复：2026-11-23 | 乙').onclick();assert.ok(p.world.window.location.href.includes(b));assert.equal(p.posts.length,0);
+});
+
+test('followup shortcuts prepare an editable draft and keep all exact question keys',async()=>{
+  const p=await page(),id='a'.repeat(32),item={id:'notice',key:'followup:line:today',followup_keys:['followup:task:today'],kind:'followup',active:true,seen_at:'',text:'有没有进展？',related_ids:['task','line'],at:'2026-11-23'};
+  p.listing.conversations=[managedChat(id,'联调','lumos',[item])];await p.poll();p.edit('保留原草稿');
+  descendants(p.get('messages')).find(n=>n.className==='quick-reply'&&n.textContent==='暂无变化').onclick();await tick();
+  assert.equal(p.get('chat-text').value,'保留原草稿\n\n暂无新进展，现有结果和阻碍没有变化。');assert.equal(p.listing.intakes.length,0);
+  await p.submit();const sent=p.posts.find(n=>n.text);assert.equal(sent.question_key,item.key);assert.ok(sent.question_keys.includes(item.followup_keys[0]));assert.deepEqual(sent.related_ids,['task','line']);
+});
+test('typing directly into a single proactive question retains its business link',async()=>{
+  const p=await page(),id='a'.repeat(32),item={id:'n',key:'key',question_key:'question:old:0',kind:'question',active:true,seen_at:'read',text:'结果？',related_ids:['task'],at:'2026-11-23'};
+  p.listing.conversations=[managedChat(id,'联调','lumos',[item])];await p.poll();assert.equal(p.get('conversation-state').textContent,'已读待回');
+  p.edit('已验证同步结果');await p.submit();assert.equal(p.posts[0].question_key,'question:old:0');assert.deepEqual(p.posts[0].related_ids,['task']);
+});
+
+test('list state follows background processing even when conversation metadata stays unchanged',async()=>{
+  const p=await page(),id='a'.repeat(32);p.listing.conversations=[managedChat(id,'联调')];await p.poll();
+  p.listing.intakes=[{id:'job',data:{chat_id:id,agent_role:'lumos',status:'running',created_at:'2026-11-23'}}];await p.poll();
+  assert.ok(descendants(p.get('chat-list')).some(n=>n.textContent==='处理中'));
+  p.listing.intakes[0].data.status='failed';await p.poll();
+  assert.ok(descendants(p.get('chat-list')).some(n=>n.textContent==='需要重试'));
 });

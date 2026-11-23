@@ -63,3 +63,11 @@ test('Ops message preview uses the same readable text as the chat',async()=>{
   await finish(p.requests[0],[chat('maintainer','ops',[item])]);
   assert.equal(p.panel.children[1].children[0].children[2].textContent,noticeText(item));
 });
+
+test('read unanswered, processing, retry and settled states remain distinct',()=>{
+  const {conversationState}=require('../web/attention.js');
+  const data={topic_state:'settled',notices:[{active:true,kind:'followup',seen_at:''}]};
+  assert.equal(conversationState(data).key,'unread');data.notices[0].seen_at='read';assert.equal(conversationState(data).key,'awaiting');
+  assert.equal(conversationState(data,{status:'running'}).key,'processing');assert.equal(conversationState(data,{status:'failed'}).key,'failed');
+  data.notices[0].active=false;assert.equal(conversationState(data).key,'settled');data.awaiting_reply=true;assert.equal(conversationState(data).key,'awaiting');
+});

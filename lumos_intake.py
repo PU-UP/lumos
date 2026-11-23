@@ -198,6 +198,9 @@ def save_intake(store, request):
             refs = request.get('related_ids', [])
             require(isinstance(refs, list) and len(refs) <= 20 and all(isinstance(i, str) for i in refs), 'Invalid feedback references')
             scoped = scoped_nodes(nodes, request.get('workspace', 'lingguang'))
+            if not refs and request.get('chat_id') and chat_role != 'maintainer':
+                refs = [i for i in nodes.get('chat-'+request['chat_id'], {}).get('data', {}).get('source_ids', [])
+                        if i in scoped and scoped[i]['kind'] in {'action', 'mainline'}]
             require(all(i in scoped and scoped[i]['kind'] in {'mainline', 'action'} for i in refs), '反馈事项不属于当前空间或已归档，请刷新核对。')
             node = {'id': 'intake-'+key, 'kind': 'intake', 'data': {
                 'title': request.get('title') or '对话进展整理', 'text': request['text'], 'workspace': request.get('workspace', 'lingguang'),
@@ -392,6 +395,19 @@ def intake_context(store, ident):
             conversation = nodes.get('chat-'+job['data']['chat_id'])
             if conversation:
                 result['conversation'] = conversation
+                result['topic_conversations'] = [{'chat_id': n['data']['chat_id'], 'title': n['data']['title'],
+                    'memo': n['data']['memo'], 'source_ids': n['data']['source_ids'], 'topic_id': n['data'].get('topic_id', ''),
+                    'topic_state': n['data'].get('topic_state', 'ongoing')}
+                    for n in nodes.values() if n['kind'] == 'conversation' and n['id'] != conversation['id']
+                    and n['data']['workspace'] == job['data']['workspace']
+                    and n['data']['agent_role'] == role_for(job['data'])
+                    and n['data']['status'] == 'active' and not n['data'].get('deleted')]
+                bound = set(conversation['data']['source_ids'])
+                own_turns = {t['id'] for t in nodes.values() if t['kind'] == 'intake'
+                             and t['data'].get('chat_id') == job['data']['chat_id']}
+                result['conversation_questions'] = [q for q in result['open_questions']
+                    if q['intake_id'] in own_turns
+                    or bound.intersection([*q['related_ids'], *q['task_ids']])]
             history, parent = [], job['data'].get('chat_parent')
             visited = {job['id']}
             while parent:
