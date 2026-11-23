@@ -69,9 +69,11 @@ if(typeof document!=='undefined'){
   let jobs=[],token='',enabled=false,executor='',loaded=false,busy=false,pending=null,timer,generation=0,signature='',listSignature='',error='';
   let selected=[],taskState=null,taskError='',taskRead=0,expanded=false,selectedQuestion=null;
   let agentRole=requestedRole,episodeRef='';
-  let modelsReady=false,modelSignature='',availableModels=[];
+  const modelHost=url.searchParams.get('embedded')==='1'&&window.parent?.LumosModels?window.parent:window;
+  const roleModels=()=>modelHost.LumosModels;
   let readObserver,readTimer,reading=false;
-  let deleteTarget=null,deleteRequest=null,deleteBusy=false,undoDelete=null;
+  let deleteTargets=[],deleteRequests=new Map(),deleteStarted=false,deleteBusy=false,undoDelete=[],batchBusy=false;
+  const selectedChats=new Set();let visibleChats=[];
   const visibleNotices=new Set();
   const currentSession=()=>sessions.find(n=>n.data.chat_id===chatId);
   const readOnly=()=>['closed','legacy'].includes(currentSession()?.data.status);
@@ -121,13 +123,12 @@ if(typeof document!=='undefined'){
   async function loadTasks(){const current=++taskRead;try{const r=await fetch('/api/tasks'),data=await r.json();if(current!==taskRead)return;if(!r.ok)throw new Error();taskState=data;taskError='';}catch{if(current!==taskRead)return;taskState=null;taskError='任务与主线暂时读取失败，可直接写下名称和进展。';}signature='';render();if($('subject-picker').open)renderPicker();}
   function address(){const u=new URL(window.location.href);u.searchParams.set('workspace',workspace);u.searchParams.set('id',chatId);u.searchParams.set('role',agentRole);u.searchParams.delete('agent');u.searchParams.delete('episode');u.searchParams.delete('material');history.replaceState(null,'',u);try{localStorage.setItem('lumos.chat.active.'+agentRole+'.'+workspace,chatId);}catch{}}
   function controls(){
-    restoreModel();
+    const models=roleModels();
     const latest=chatTurns(jobs,chatId).at(-1),waiting=latest && ['pending','running','failed'].includes(latest.data.status);
     $('chat-text').readOnly=busy||!!pending||readOnly();
     $('chat-text').required=!selectedQuestion?.answer;
-    $('send-chat').disabled=!loaded||!modelsReady||!enabled||busy||(!pending&&(window.LumosModels?.loading||window.LumosModels?.busy||!!window.LumosModels?.error))||readOnly()||(!pending && (waiting||!answerText($('chat-text').value,selectedQuestion)));
+    $('send-chat').disabled=!loaded||!enabled||busy||(!pending&&(!models||models.loading||models.busy||!!models.error))||readOnly()||(!pending && (waiting||!answerText($('chat-text').value,selectedQuestion)));
     $('send-chat').textContent=pending?'重试确认':busy?'发送中…':'发送';
-    $('chat-model').disabled=busy||!!pending||!modelsReady||window.LumosModels?.loading||window.LumosModels?.busy;
     $('role-heading').textContent=agentNames[agentRole]||'历史对话';
     $('role-description').textContent=typeof roleSpaces!=='undefined'?roleSpaces[agentRole]?.purpose||'混合历史保留原样':'';
     $('conversation-scope').textContent=window.LumosUnified?(readOnly()?'只读历史':''):'资料范围：'+(workspace==='lumos'?'Lumos 仓库维护':'灵光')+(readOnly()?' · 只读历史':'');
@@ -138,12 +139,12 @@ if(typeof document!=='undefined'){
     $('choose-subjects').hidden=!['lumos','aipm'].includes(agentRole);
     const resource=$('role-resource');resource.hidden=['lumos','aipm'].includes(agentRole);resource.textContent=agentRole==='librarian'?'查找资料':'运行问题';resource.href=(agentRole==='librarian'?'/knowledge?role=librarian':'/agents?role=maintainer')+'&workspace='+workspace;
     $('episode-reference').textContent=episodeRef?'正在接续：'+(jobs.find(n=>n.id===episodeRef)?.data.title||currentSession()?.data.title||'这次运行情况'):'';
-    $('chat-workspace').disabled=busy;$('new-chat').disabled=busy;$('choose-subjects').disabled=busy||!!pending;
+    $('chat-workspace').disabled=busy||deleteBusy||batchBusy;$('new-chat').disabled=busy||deleteBusy||batchBusy;$('choose-subjects').disabled=busy||!!pending;
     const question=$('selected-question');question.replaceChildren();
     if(selectedQuestion){const copy=el('div',undefined,'selected-question-copy');copy.append(el('p','正在回答：'+selectedQuestion.text));if(selectedQuestion.answer)copy.append(el('p','已选：'+selectedQuestion.answer,'chosen-answer'));question.append(copy);const clear=el('button','取消选择');clear.type='button';clear.disabled=busy||!!pending;clear.onclick=()=>{selectedQuestion=null;changedSelection();};question.append(clear);}
     const picked=$('selected-tasks');picked.replaceChildren();
     for(const t of selected){const b=el('button',t.title+' ×','selected-task');b.type='button';b.disabled=busy||!!pending;b.setAttribute('aria-label','移除讨论对象：'+t.title);b.onclick=()=>chooseTask({id:t.id});picked.append(b);}
-    $('chat-status').textContent=error||window.LumosModels?.error||(readOnly()?'此对话保留只读。可查看原文，点击新对话继续。':'')||(pending?'上次发送结果未确认，重试会核对同一条消息，不会重复创建。':!loaded?'正在读取对话…':!enabled?'此空间尚未启用自主整理。':['offline','waiting','stopped'].includes(executor)?'后台处理暂停或未运行；消息可保存，恢复后接续。':waiting?latest.data.status==='failed'?'本轮失败，原话已保留。请在消息下方重试。':'消息已保存，可离开页面；答复完成后会保留在此处。':'');
+    $('chat-status').textContent=error||models?.error||(readOnly()?'此对话保留只读。可查看原文，点击新对话继续。':'')||(pending?'上次发送结果未确认，重试会核对同一条消息，不会重复创建。':!loaded?'正在读取对话…':!models||models.loading?'正在读取角色模型设置…':models.busy?'正在保存角色模型设置…':!enabled?'此空间尚未启用自主整理。':['offline','waiting','stopped'].includes(executor)?'后台处理暂停或未运行；消息可保存，恢复后接续。':waiting?latest.data.status==='failed'?'本轮失败，原话已保留。请在消息下方重试。':'消息已保存，可离开页面；答复完成后会保留在此处。':'');
   }
   function render(){
     const deleted=new Set(sessions.filter(n=>n.data.deleted).map(n=>n.data.chat_id));
@@ -155,13 +156,19 @@ if(typeof document!=='undefined'){
       try{const d=JSON.parse(localStorage.getItem(key));if(d?.text||d?.pending)groups.set(id,{data:{chat_id:id,title:'未发送草稿',agent_role:d.agentRole||'lumos',status:'draft'}});}catch{}}
     const query=$('chat-search').value.trim().toLocaleLowerCase();
     const entries=[...groups].filter(([id,n])=>((n.data.agent_role||'lumos')===agentRole||n.data.agent_role==='legacy')&&conversationLabel(n.data.title,n.data.created_at).toLocaleLowerCase().includes(query));
-    const nextListSignature=JSON.stringify(entries)+chatId+busy+deleteBusy+query;
+    visibleChats=entries.map(([,n])=>n);
+    for(const id of selectedChats)if(!entries.some(([key])=>key===id))selectedChats.delete(id);
+    $('chat-selection-count').textContent='已选 '+selectedChats.size+' 项';
+    for(const id of ['select-chats','read-selected-chats','delete-selected-chats'])$(id).disabled=busy||deleteBusy||batchBusy||(id!=='select-chats'&&!selectedChats.size);
+    const nextListSignature=JSON.stringify(entries)+chatId+busy+deleteBusy+batchBusy+query+JSON.stringify([...selectedChats]);
     if(nextListSignature!==listSignature){
       const list=$('chat-list');list.replaceChildren();
       for(const [id,first] of entries){const row=el('div',undefined,'chat-list-row'),unread=first.data.notices?.some(n=>n.active&&!n.seen_at);const label=conversationLabel(first.data.title,first.data.created_at),b=el('button',undefined,'chat-link');b.title=label;b.append(el('span',label,'chat-link-title'));b.setAttribute('aria-current',String(id===chatId));b.disabled=busy||deleteBusy;b.dataset.unread=String(!!unread);
         const latest=chatTurns(jobs,id).at(-1);const status=first.data.status==='legacy'?'混合角色历史 · 只读':first.data.status==='closed'?'已结束':latest?.data.status==='pending'?'等待处理':latest?.data.status==='running'?'正在处理':latest?.data.status==='failed'?'待重试':unread?'● 未读消息':first.data.status==='draft'?'未发送草稿':'';if(status)b.append(el('small',status));
-        b.onclick=()=>selectChat(id);row.append(b);
-        const remove=el('button','删除','chat-delete');remove.type='button';remove.setAttribute('aria-label','删除对话：'+label);remove.disabled=busy||deleteBusy||['pending','running'].includes(latest?.data.status);remove.title=remove.disabled?'等待本轮处理完成':'删除对话';remove.onclick=()=>{deleteTarget=first;deleteRequest=null;$('delete-chat-name').textContent=label;$('delete-chat-error').textContent='';$('delete-conversation').showModal();};row.append(remove);list.append(row);}
+        const check=el('input',undefined,'chat-select');check.type='checkbox';check.checked=selectedChats.has(id);check.disabled=busy||deleteBusy||batchBusy;check.setAttribute('aria-label','选择对话：'+label);check.onchange=()=>{if(check.checked)selectedChats.add(id);else selectedChats.delete(id);render();};row.append(check);
+        b.onclick=()=>selectChat(id);b.disabled ||= batchBusy;row.append(b);
+        const reply=el('button','回复','chat-reply');reply.type='button';reply.setAttribute('aria-label','回复：'+label);reply.disabled=busy||deleteBusy||batchBusy;reply.onclick=async()=>{await selectChat(id);window.dispatchEvent(new Event('lumos-chat-reply'));};row.append(reply);
+        const remove=el('button','删除','chat-delete');remove.type='button';remove.setAttribute('aria-label','删除对话：'+label);remove.disabled=busy||deleteBusy||batchBusy||['pending','running'].includes(latest?.data.status);remove.title=remove.disabled?'等待本轮处理完成':'删除对话';remove.onclick=()=>confirmDelete([first]);row.append(remove);list.append(row);}
       if(!entries.length)list.append(el('p',query?'没有找到匹配的对话。':'还没有对话。点击新建对话即可开始。','muted'));
       listSignature=nextListSignature;
     }
@@ -307,39 +314,63 @@ if(typeof document!=='undefined'){
   }
   try{saveDraft();address();}catch{error='浏览器无法保留草稿，请勿关闭页面。';}
   $('chat-search').oninput=()=>render();
+  $('select-chats').onclick=()=>{if(visibleChats.every(n=>selectedChats.has(n.data.chat_id)))selectedChats.clear();else for(const n of visibleChats)selectedChats.add(n.data.chat_id);render();};
+  function confirmDelete(targets){
+    deleteTargets=[...targets];deleteRequests=new Map();deleteStarted=false;
+    $('delete-chat-name').textContent=targets.map(n=>conversationLabel(n.data.title,n.data.created_at)).join('\n');
+    $('delete-chat-heading').textContent=targets.length===1?'删除这段对话？':'删除所选 '+targets.length+' 段对话？';
+    $('delete-chat-error').textContent='';$('delete-conversation').showModal();
+  }
+  $('delete-selected-chats').onclick=()=>confirmDelete(visibleChats.filter(n=>selectedChats.has(n.data.chat_id)));
+  $('read-selected-chats').onclick=async()=>{
+    if(batchBusy||deleteBusy||busy)return;batchBusy=true;render();let count=0;
+    const targets=visibleChats.filter(n=>selectedChats.has(n.data.chat_id));
+    try{for(const n of targets){const ids=(n.data.notices||[]).filter(i=>!i.seen_at).map(i=>i.id);
+      for(let offset=0;offset<ids.length;offset+=200){const r=await fetch('/api/conversation-read',{method:'POST',headers:{'Content-Type':'application/json','X-Lumos-Token':token},body:JSON.stringify({chat_id:n.data.chat_id,workspace,ids:ids.slice(offset,offset+200)})});if(!r.ok){const d=await r.json();throw new Error(d.error||'标记已读失败');}}
+      count++;selectedChats.delete(n.data.chat_id);
+    }$('chat-bulk-status').textContent='已标记 '+count+' 段对话为已读。';
+    }catch(e){$('chat-bulk-status').textContent='已处理 '+count+' 段，其余保留选中：'+e.message;}
+    finally{batchBusy=false;await refresh();window.parent.postMessage({lumosChat:'read'},window.location.origin);}
+  };
   $('cancel-chat-delete').onclick=()=>{if(!deleteBusy)$('delete-conversation').close();};
   $('delete-conversation').addEventListener('cancel',event=>{if(deleteBusy)event.preventDefault();});
   dismissOnBackdrop($('delete-conversation'));
   function deleteControls(){ $('confirm-chat-delete').disabled=deleteBusy;$('cancel-chat-delete').disabled=deleteBusy;$('undo-chat-delete').disabled=deleteBusy; }
   $('confirm-chat-delete').onclick=async()=>{
-    if(deleteBusy||!deleteTarget)return;deleteBusy=true;deleteControls();
-    const target=deleteTarget,id=target.data.chat_id,key=`lumos.chat.${workspace}.${id}`;
+    if(deleteBusy||!deleteTargets.length)return;deleteBusy=true;deleteControls();render();
     try{
+      for(const target of [...deleteTargets]){const id=target.data.chat_id,key=`lumos.chat.${workspace}.${id}`;
+      if(['pending','running'].includes(chatTurns(jobs,id).at(-1)?.data.status))throw new Error('「'+target.data.title+'」仍在处理，请稍后再删除。');
       if(id===chatId)saveDraft();
       const draft=localStorage.getItem(key),meta=sessions.find(n=>n.data.chat_id===id);
       if(meta){
-        deleteRequest ||= {request_id:uuid(),chat_id:id,agent_role:meta.data.agent_role,workspace,expected_revision:meta.data.revision,operation:'delete',confirmed:true};
-        await postSession(deleteRequest);
+        if(!deleteRequests.has(id))deleteRequests.set(id,{request_id:uuid(),chat_id:id,agent_role:meta.data.agent_role,workspace,expected_revision:meta.data.revision,operation:'delete',confirmed:true});
+        await postSession(deleteRequests.get(id));
       }
-      if(meta){try{localStorage.removeItem(key);}catch{}}else localStorage.removeItem(key);undoDelete={id,draft,role:target.data.agent_role||agentRole,persisted:!!meta,workspace};
-      $('delete-conversation').close();$('chat-delete-result').hidden=false;$('chat-delete-result-text').textContent='对话已删除';$('undo-chat-delete').hidden=false;
-      if(id===chatId)await selectChat(uuid(),workspace,false);else await refresh();
+      if(meta){try{localStorage.removeItem(key);}catch{}}else localStorage.removeItem(key);if(!deleteStarted){undoDelete=[];deleteStarted=true;}undoDelete.push({id,draft,role:target.data.agent_role||agentRole,persisted:!!meta,workspace});
+      selectedChats.delete(id);deleteTargets=deleteTargets.filter(n=>n.data.chat_id!==id);
+      $('chat-delete-result').hidden=false;$('chat-delete-result-text').textContent=undoDelete.length===1?'对话已删除':'已删除 '+undoDelete.length+' 段对话';$('undo-chat-delete').hidden=false;
+      if(id===chatId)await selectChat(uuid(),workspace,false);
+      }
+      $('delete-conversation').close();await refresh();
       window.parent.postMessage({lumosChat:'read'},window.location.origin);
-    }catch(e){$('delete-chat-error').textContent=e.message;if(e.status>=400&&e.status<500)deleteRequest=null;await refresh();}
+    }catch(e){$('delete-chat-error').textContent=(deleteStarted?'已删除 '+undoDelete.length+' 段；其余尚未确认，可重试核对。':'')+e.message;if(e.status>=400&&e.status<500)deleteRequests.clear();await refresh();}
     finally{deleteBusy=false;deleteControls();render();}
   };
   $('undo-chat-delete').onclick=async()=>{
-    if(deleteBusy||!undoDelete)return;deleteBusy=true;deleteControls();
-    const undo=undoDelete;
+    if(deleteBusy||!undoDelete.length)return;deleteBusy=true;deleteControls();const first=undoDelete[0];
     try{
+      for(const undo of [...undoDelete]){
       if(undo.persisted){await refresh();const meta=sessions.find(n=>n.data.chat_id===undo.id);if(meta?.data.deleted)await postSession({request_id:uuid(),chat_id:undo.id,agent_role:undo.role,workspace:undo.workspace,expected_revision:meta.data.revision,operation:'restore'});}
       if(undo.draft!==null)localStorage.setItem(`lumos.chat.${undo.workspace}.${undo.id}`,undo.draft);
-      undoDelete=null;$('chat-delete-result-text').textContent='对话已恢复';$('undo-chat-delete').hidden=true;await selectChat(undo.id,undo.workspace);
+      undoDelete=undoDelete.filter(n=>n!==undo);
+      }
+      $('chat-delete-result-text').textContent='对话已恢复';$('undo-chat-delete').hidden=true;await selectChat(first.id,first.workspace);
       window.parent.postMessage({lumosChat:'read'},window.location.origin);
     }catch(e){$('chat-delete-result-text').textContent='恢复失败：'+e.message+'，可重试。';}
     finally{deleteBusy=false;deleteControls();render();}
   };
-  $('new-chat').onclick=async()=>{if(busy||sessionBusy)return;await selectChat(uuid());$('chat-text').focus();};
+  $('new-chat').onclick=async()=>{if(busy||sessionBusy||deleteBusy||batchBusy)return;await selectChat(uuid());$('chat-text').focus();};
   async function postSession(request){const r=await fetch('/api/conversations',{method:'POST',headers:{'Content-Type':'application/json','X-Lumos-Token':token},body:JSON.stringify(request)}),data=await r.json();if(!r.ok){const error=new Error(data.error||'保存失败');error.status=r.status;throw error;}return data.conversation;}
   $('session-title').oninput=()=>{metadataDirty=true;try{saveDraft();}catch{$('session-status').textContent='名称暂时无法保存在浏览器中。';}};
   async function saveMeta(){if(sessionBusy)return;sessionBusy=true;const old=currentSession();
@@ -349,33 +380,17 @@ if(typeof document!=='undefined'){
   $('rename-form').onsubmit=e=>{e.preventDefault();return saveMeta();};
   $('chat-text').oninput=()=>{error='';try{saveDraft();}catch{error='浏览器无法保留草稿，请勿关闭页面。';}controls();};
   $('chat-text').onkeydown=e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'&&!e.isComposing){e.preventDefault();$('chat-form').requestSubmit();}};
-  $('chat-form').onsubmit=e=>{e.preventDefault();if($('send-chat').disabled)return;const text=answerText($('chat-text').value,selectedQuestion);send(pending||{request_id:uuid(),workspace,chat_id:chatId,chat_parent:chatTurns(jobs,chatId).at(-1)?.id||'',model:$('chat-model').value,agent_role:agentRole,...(episodeRef?{episode_ref:episodeRef}:{}),text,title:text.slice(0,60),related_ids:[...new Set([...selected.map(t=>t.id),...(selectedQuestion?.related_ids||[])])],...(selectedQuestion?{question_key:selectedQuestion.key,question_keys:selectedQuestion.question_keys||[selectedQuestion.key],question_text:selectedQuestion.question_keys?.length>1?selectedQuestion.title+' · 合并跟进':selectedQuestion.text}:{})});};
+  $('chat-form').onsubmit=e=>{e.preventDefault();controls();if($('send-chat').disabled)return;const text=answerText($('chat-text').value,selectedQuestion);send(pending||{request_id:uuid(),workspace,chat_id:chatId,chat_parent:chatTurns(jobs,chatId).at(-1)?.id||'',model:roleModels().get(agentRole),agent_role:agentRole,...(episodeRef?{episode_ref:episodeRef}:{}),text,title:text.slice(0,60),related_ids:[...new Set([...selected.map(t=>t.id),...(selectedQuestion?.related_ids||[])])],...(selectedQuestion?{question_key:selectedQuestion.key,question_keys:selectedQuestion.question_keys||[selectedQuestion.key],question_text:selectedQuestion.question_keys?.length>1?selectedQuestion.title+' · 合并跟进':selectedQuestion.text}:{})});};
   function setExpanded(value){expanded=value;$('conversation').setAttribute('data-writing',value?'expanded':'normal');$('expand-writing').setAttribute('aria-expanded',String(value));$('expand-writing').textContent=value?'收起书写':'展开书写';}
   $('choose-subjects').onclick=()=>{$('subject-search').value='';$('subject-type').value='all';renderPicker();$('subject-picker').showModal();$('subject-search').focus();loadTasks();};
   $('subject-search').oninput=renderPicker;$('subject-type').onchange=renderPicker;
   $('close-subject-picker').onclick=()=>$('subject-picker').close();$('subject-picker').onclose=()=>{$('chat-text').focus();};
   dismissOnBackdrop($('subject-picker'));
   $('expand-writing').onclick=()=>{setExpanded(!expanded);$('chat-text').focus();};
-  const modelKey=()=> 'lumos.chat.model.'+agentRole;
-  function restoreModel(){
-    if(!modelsReady)return;
-    const signature=JSON.stringify([agentRole,pending?.model]);
-    if(modelSignature===signature)return;
-    let selected='';
-    try{selected=localStorage.getItem(modelKey());if(selected===null){selected=localStorage.getItem('lumos.chat.model')||'';localStorage.setItem(modelKey(),selected);}}catch{selected='';}
-    selected=pending?.model??window.LumosModels?.get(agentRole)??selected;
-    const options=[{id:'',name:'默认模型'},...availableModels];
-    if(selected&&!options.some(m=>m.id===selected))options.push({id:selected,name:selected+'（未在当前列表中）'});
-    $('chat-model').replaceChildren();
-    for(const m of options){const o=el('option',m.name);o.value=m.id;$('chat-model').append(o);}
-    $('chat-model').value=selected;modelSignature=signature;
-  }
-  $('chat-model').onchange=async()=>{error='';try{if(window.LumosModels?.save)await window.LumosModels.save(agentRole,$('chat-model').value);else{localStorage.setItem(modelKey(),$('chat-model').value);window.dispatchEvent(new CustomEvent('lumos-model'));}}catch(e){error=e.message||'模型选择未保存，请重试。';}finally{modelSignature='';controls();}};
-  const syncModel=()=>{modelSignature='';controls();};
-  window.addEventListener('storage',syncModel);window.addEventListener('lumos-model',syncModel);
-  async function models(){try{const r=await fetch('/api/codex-models'),data=await r.json();if(!r.ok)throw new Error();availableModels=data.models;if(!data.models.length)$('model-help').textContent='暂未读取到本机模型列表；保留已选模型，实际可用性以调用结果为准。';}catch{$('model-help').textContent='模型列表读取失败；保留已选模型，实际可用性以调用结果为准。';}finally{modelsReady=true;controls();}}
+  window.addEventListener('storage',controls);modelHost.addEventListener('lumos-model',controls);
+  if(modelHost!==window)window.addEventListener('pagehide',()=>modelHost.removeEventListener('lumos-model',controls),{once:true});
   $('chat-title').onclick=()=>{$('session-status').textContent='';$('conversation-management').showModal();$('session-title').focus();};
   $('close-management').onclick=()=>$('conversation-management').close();
   dismissOnBackdrop($('conversation-management'));
-  models();loadTasks();refresh();
+  loadTasks();refresh();
 }

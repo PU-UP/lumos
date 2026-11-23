@@ -81,14 +81,14 @@ test('responsive clamps never overwrite the preferred desktop width and canceled
   assert.equal(p.body.classes.has('chat-resizing'),false);assert.equal(dockPage(p.storage).body.attrs['--workspace-chat-width'],'685px');
 });
 
-function sidebarPage(storage=new Map(),width=1000,role='lumos'){
+function sidebarPage(storage=new Map(),width=1000,role='lumos',padding=0){
   const nodes=new Map(),events={},messages=[];
-  const get=id=>{if(!nodes.has(id))nodes.set(id,{hidden:false,attrs:{},events:{},classList:{toggle(){}},setAttribute(k,v){this.attrs[k]=v;},addEventListener(k,fn){this.events[k]=fn;},focus(){},contains(){return false;}});return nodes.get(id);};
+  const get=id=>{if(!nodes.has(id))nodes.set(id,{hidden:false,attrs:{},events:{},classList:{toggle(){},add(){},remove(){}},style:{setProperty(k,v){get(id).attrs[k]=v;}},getBoundingClientRect(){return {width:window.innerWidth};},setPointerCapture(i){this.pointer=i;},hasPointerCapture(i){return this.pointer===i;},releasePointerCapture(){this.pointer=null;},setAttribute(k,v){this.attrs[k]=v;},addEventListener(k,fn){this.events[k]=fn;},focus(){},contains(){return false;}});return nodes.get(id);};
   const document={getElementById:get,querySelector:s=>s==='.chat-layout'?get('layout'):null,addEventListener:(k,fn)=>events[k]=fn};
-  const window={innerWidth:width,addEventListener:(k,fn)=>events[k]=fn,dispatchEvent(){}};
+  const window={innerWidth:width,getComputedStyle:()=>({paddingLeft:String(padding),paddingRight:String(padding)}),addEventListener:(k,fn)=>events[k]=fn,dispatchEvent(){}};
   const world={document,window,location:new URL('http://localhost/chat?embedded=1&role='+role),URL,Event,roleSpaces,pageRole:()=>role,parent:{postMessage:m=>messages.push(m)},localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)}};
   require('node:vm').runInNewContext(require('node:fs').readFileSync('web/workspace.js','utf8'),world);
-  return {get,storage,messages,toggle:()=>get('switch-chat').onclick(),select:()=>get('chat-history').events.click({target:{closest:()=>true}}),resize(w){window.innerWidth=w;events.resize();},escape(){events.keydown({key:'Escape',preventDefault(){}});}};
+  return {get,storage,messages,toggle:()=>get('switch-chat').onclick(),select:()=>get('chat-history').events.click({target:{closest:()=>true}}),resize(w){window.innerWidth=w;events.resize();},escape(){events.keydown({key:'Escape',preventDefault(){}});},key(key){get('chat-history-resize').onkeydown({key,preventDefault(){}});}};
 }
 
 test('sidebar stays beside selected chats on desktop and remembers expansion per role',()=>{
@@ -106,3 +106,18 @@ test('narrow sidebar hides messages from interaction and closes after choosing a
   p.select();assert.equal(p.get('chat-history').hidden,true);assert.equal(p.get('conversation').inert,false);
   p.toggle();p.resize(1000);assert.equal(p.get('conversation').inert,false);assert.equal(p.get('chat-history-backdrop').hidden,true);
 });
+test('sidebar drag persists width, snaps closed or full, and returns to the same conversation',()=>{
+  const p=sidebarPage();p.toggle();const h=p.get('chat-history-resize');
+  const drag=(start,end)=>{h.onpointerdown({button:0,pointerId:1,clientX:start,preventDefault(){}});h.onpointermove({pointerId:1,clientX:end});h.onpointerup();};
+  drag(280,440);assert.equal(p.get('layout').attrs['--chat-history-width'],'440px');
+  assert.equal(sidebarPage(p.storage).get('layout').attrs['--chat-history-width'],'440px');
+  drag(440,990);assert.equal(p.get('conversation').hidden,true);assert.equal(p.get('conversation').inert,true);assert.equal(p.get('return-chat').hidden,false);
+  const restored=sidebarPage(p.storage);assert.equal(restored.get('conversation').hidden,true);restored.get('return-chat').onclick();assert.equal(restored.get('conversation').hidden,false);assert.equal(restored.get('layout').attrs['--chat-history-width'],'440px');
+  restored.key('Home');assert.equal(restored.get('chat-history').hidden,true);restored.toggle();restored.key('End');assert.equal(restored.get('conversation').hidden,true);
+  restored.resize(500);assert.equal(restored.get('layout').attrs['--chat-history-width'],'500px');restored.select();assert.equal(restored.get('conversation').hidden,false);assert.equal(restored.get('chat-history').hidden,true);
+  p.key('Home');assert.equal(sidebarPage(p.storage).get('chat-history').hidden,true);
+});
+
+test('sidebar snap uses content width without page gutters',()=>{const p=sidebarPage(new Map(),1000,'lumos',50);p.toggle();const h=p.get('chat-history-resize');h.onpointerdown({button:0,pointerId:1,clientX:330,preventDefault(){}});h.onpointermove({pointerId:1,clientX:930});h.onpointerup();assert.equal(p.get('conversation').hidden,true);assert.equal(h.attrs['aria-valuemax'],'900');});
+
+test('arrow keys can leave fullscreen and reach it from the split limit',()=>{const p=sidebarPage();p.toggle();p.key('End');p.key('ArrowLeft');assert.equal(p.get('conversation').hidden,false);for(let i=0;i<30;i++)p.key('ArrowRight');assert.equal(p.get('conversation').hidden,true);});

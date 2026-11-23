@@ -3,27 +3,45 @@
 function trustedChatMessage(event,frame,origin){return event.origin===origin&&event.source===frame.contentWindow&&['saved','close','read'].includes(event.data?.lumosChat);}
 function chatDockWidth(preferred,viewport){return viewport<=800?viewport:Math.max(360,Math.min(preferred,viewport-480));}
 function chatDockPreference(raw){try{const value=JSON.parse(raw);return {width:Number.isFinite(value?.width)&&value.width>=360?value.width:480,open:value?.open===true};}catch{return {width:480,open:false};}}
-if(typeof module!=='undefined')module.exports={trustedChatMessage,chatDockWidth,chatDockPreference};
+function chatSidebarSize(width,available){return width<=64?{mode:'closed',width:0}:width>=available-48?{mode:'full',width:available}:{mode:'split',width:Math.min(Math.max(200,width),Math.max(200,available-360))};}
+if(typeof module!=='undefined')module.exports={trustedChatMessage,chatDockWidth,chatDockPreference,chatSidebarSize};
 if(typeof document!=='undefined'){
   const url=new URL(location.href),role=pageRole(url),info=roleSpaces[role];
   const el=(tag,text)=>{const n=document.createElement(tag);if(text)n.textContent=text;return n;};
   if(url.pathname==='/chat'){
     const aside=document.getElementById('chat-history'),toggle=document.getElementById('switch-chat'),layout=document.querySelector('.chat-layout'),conversation=document.getElementById('conversation'),backdrop=document.getElementById('chat-history-backdrop');
     const preferenceKey='lumos.chat.sidebar.v1.'+role+'.'+(url.searchParams.get('workspace')||'lingguang');
-    let expanded=false;
+    let expanded=false,mode='split',width=280,drag=null;
     try{expanded=localStorage.getItem(preferenceKey)==='true';}catch{}
+    const sizeKey=preferenceKey+'.size';
+    try{const saved=JSON.parse(localStorage.getItem(sizeKey));if(Number.isFinite(saved?.width)&&saved.width>=200)width=saved.width;if(saved?.mode==='full')mode='full';}catch{}
+    const handle=document.getElementById('chat-history-resize'),back=document.getElementById('return-chat');
+    const available=()=>{const css=window.getComputedStyle(layout);return layout.getBoundingClientRect().width-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight);};
+    const remember=()=>{try{localStorage.setItem(preferenceKey,String(expanded));localStorage.setItem(sizeKey,JSON.stringify({width,mode}));}catch{}};
     const narrow=()=>window.innerWidth<700;
     function renderHistory(){
       aside.hidden=!expanded;layout.classList.toggle('history-open',expanded);toggle.setAttribute('aria-expanded',String(expanded));
+      layout.classList.toggle('history-full',expanded&&mode==='full');back.hidden=!expanded||mode!=='full';
+      const actual=mode==='full'?available():Math.min(width,Math.max(200,available()-360));
+      layout.style.setProperty('--chat-history-width',actual+'px');handle.hidden=!expanded;
+      handle.setAttribute('aria-valuemin','0');handle.setAttribute('aria-valuemax',String(available()));handle.setAttribute('aria-valuenow',String(expanded?actual:0));
       document.getElementById('history-toggle-label').textContent=expanded?'收起列表':'展开列表';
       toggle.setAttribute('aria-label',expanded?'收起对话列表':'展开对话列表');
-      backdrop.hidden=!(expanded&&narrow());conversation.inert=expanded&&narrow();
+      backdrop.hidden=!(expanded&&narrow()&&mode!=='full');conversation.hidden=expanded&&mode==='full';conversation.inert=expanded&&(narrow()||mode==='full');
       window.dispatchEvent(new Event('lumos-chat-visibility'));
     }
-    function setHistory(value,focus=false){expanded=value;renderHistory();try{localStorage.setItem(preferenceKey,String(expanded));}catch{}if(focus)toggle.focus();}
+    function setHistory(value,focus=false){expanded=value;renderHistory();remember();if(focus)toggle.focus();}
+    function returnChat(){mode='split';setHistory(!narrow());document.getElementById('chat-text').focus();}
+    back.onclick=returnChat;window.addEventListener('lumos-chat-reply',returnChat);
+    const size=value=>{const next=chatSidebarSize(value,available());expanded=next.mode!=='closed';if(expanded)mode=next.mode;if(next.mode==='split')width=next.width;renderHistory();};
+    handle.onpointerdown=e=>{if(e.button!==0)return;e.preventDefault();handle.focus();drag={id:e.pointerId,x:e.clientX,width:mode==='full'?available():Math.min(width,Math.max(200,available()-360))};handle.setPointerCapture(e.pointerId);layout.classList.add('history-resizing');};
+    handle.onpointermove=e=>{if(drag&&e.pointerId===drag.id)size(drag.width+e.clientX-drag.x);};
+    const end=()=>{if(!drag)return;const id=drag.id;drag=null;layout.classList.remove('history-resizing');if(handle.hasPointerCapture(id))handle.releasePointerCapture(id);remember();};
+    handle.onpointerup=handle.onpointercancel=handle.onlostpointercapture=end;
+    handle.onkeydown=e=>{const current=Math.min(width,Math.max(200,available()-360)),next={ArrowLeft:mode==='full'?current:current-24,ArrowRight:current>=available()-360?available():current+24,Home:0,End:available()}[e.key];if(next===undefined)return;e.preventDefault();size(next);remember();if(!expanded)toggle.focus();};
     toggle.onclick=()=>setHistory(!expanded);backdrop.onclick=()=>setHistory(false,true);
-    aside.addEventListener('click',event=>{if(narrow()&&event.target.closest('.chat-link, #new-chat'))setHistory(false);});
-    window.addEventListener('resize',()=>{renderHistory();if(expanded&&narrow()&&conversation.contains(document.activeElement))toggle.focus();});
+    aside.addEventListener('click',event=>{if(event.target.closest('.chat-link, #new-chat')&&(narrow()||mode==='full'))returnChat();});
+    window.addEventListener('resize',()=>{end();renderHistory();if(expanded&&narrow()&&conversation.contains(document.activeElement))toggle.focus();});
     document.addEventListener('keydown',event=>{if(event.key!=='Escape'||document.querySelector('dialog[open]'))return;if(expanded){event.preventDefault();setHistory(false,true);}else if(url.searchParams.get('embedded')==='1')parent.postMessage({lumosChat:'close'},location.origin);});
     if(url.searchParams.get('embedded')==='1')document.addEventListener('click',event=>{const a=event.target.closest('a');if(a&&new URL(a.href).pathname!=='/chat')a.target='_top';});
     renderHistory();

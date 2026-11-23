@@ -33,26 +33,25 @@ test('choice-only answers can send, free input cancels the choice and resolved q
 });
 test('model preference persists per agent across new conversations, reload and explicit default',async()=>{
   const storage=new Map([['lumos.chat.model','test-model']]);
-  const p=await page(storage,'http://127.0.0.1/chat?role=aipm');assert.equal(p.get('chat-model').value,'test-model');
-  p.get('chat-model').value='';p.get('chat-model').onchange();
-  await p.get('new-chat').onclick();assert.equal(p.get('chat-model').value,'');
-  const atlas=await page(storage,'http://127.0.0.1/chat?role=librarian');assert.equal(atlas.get('chat-model').value,'test-model');
-  const again=await page(storage,p.world.window.location.href);assert.equal(again.get('chat-model').value,'');
-  again.get('chat-model').value='test-model';again.get('chat-model').onchange();
+  const p=await page(storage,'http://127.0.0.1/chat?role=aipm');
+  storage.set('lumos.chat.model.aipm','');p.events['lumos-model']();
+  await p.get('new-chat').onclick();p.edit('新话题');await p.submit();assert.equal(p.posts.at(-1).model,'');
+  const atlas=await page(storage,'http://127.0.0.1/chat?role=librarian');atlas.edit('查资料');await atlas.submit();assert.equal(atlas.posts.at(-1).model,'test-model');
+  const again=await page(storage,'http://127.0.0.1/chat?role=aipm');again.edit('继续');await again.submit();assert.equal(again.posts.at(-1).model,'');
+  storage.set('lumos.chat.model.aipm','test-model');
   const another=await page(storage,'http://127.0.0.1/chat?role=aipm&id='+'c'.repeat(32));another.edit('继续');await another.submit();assert.equal(another.posts[0].model,'test-model');
 });
 test('server-bound role selects its own model and missing models never silently fall back',async()=>{
   const storage=new Map([['lumos.chat.model.aipm','test-model'],['lumos.chat.model.librarian','previous-model']]);
   const id='a'.repeat(32),job={id:'old',data:{chat_id:id,agent_role:'librarian',workspace:'lingguang',title:'资料',text:'原话',created_at:'2026-11-20T00:00:00Z',status:'done'}};
-  const p=await page(storage,'http://127.0.0.1/chat?role=aipm&id='+id,[job]);assert.equal(p.get('chat-model').value,'previous-model');
-  assert.ok(p.get('chat-model').children.some(n=>n.textContent==='previous-model（未在当前列表中）'));
+  const p=await page(storage,'http://127.0.0.1/chat?role=aipm&id='+id,[job]);
   p.edit('继续');await p.submit();assert.equal(p.posts[0].model,'previous-model');
 });
 test('uncertain request retries keep the original model without replacing the agent preference',async()=>{
   const id='a'.repeat(32),pending={request_id:'request-one',chat_id:id,agent_role:'aipm',workspace:'lingguang',model:'original-model',text:'原消息'};
   const storage=new Map([['lumos.chat.model.aipm','test-model'],['lumos.chat.lingguang.'+id,JSON.stringify({pending,text:'原消息',agentRole:'aipm'})]]);
-  const p=await page(storage,'http://127.0.0.1/chat?role=aipm&id='+id);assert.equal(p.get('chat-model').value,'original-model');assert.equal(p.get('chat-model').disabled,true);
-  await p.submit();assert.deepEqual(p.posts[0],pending);assert.equal(storage.get('lumos.chat.model.aipm'),'test-model');assert.equal(p.get('chat-model').value,'test-model');
+  const p=await page(storage,'http://127.0.0.1/chat?role=aipm&id='+id);
+  await p.submit();assert.deepEqual(p.posts[0],pending);assert.equal(storage.get('lumos.chat.model.aipm'),'test-model');
 });
 test('role conversation actions fit the responsibility and starters never send or replace a draft',async()=>{
   for(const [role,resource] of [['librarian','查找资料'],['maintainer','运行问题']]){
@@ -124,7 +123,9 @@ async function page(storage=new Map(),href='http://127.0.0.1/chat?id='+'a'.repea
   const world={noticeText:require('../web/attention.js').noticeText,document:{getElementById:get,createElement:()=>new Element(),visibilityState:'visible',addEventListener(name,fn){events[name]=fn;}},window:{location:{href,origin:new URL(href).origin},parent:{postMessage(message){notifications.push(message);}},addEventListener(name,fn){events[name]=fn;},dispatchEvent(){}},history:{replaceState(a,b,u){world.window.location.href=String(u);}},URL,crypto,CustomEvent:class{constructor(name,options){this.detail=options?.detail;}},
     localStorage:{get length(){return storage.size;},key:i=>[...storage.keys()][i],getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},setTimeout:(fn,ms)=>{if(ms===1200)readTimer=fn;else poll=fn;return 1;},clearTimeout(){},
     fetch:async(url,opts)=>{if(!opts)return response(url==='/api/codex-models'?{models:[{id:'test-model',name:'Test model'}]}:url==='/api/tasks'?board:listing);const req=JSON.parse(opts.body);posts.push(req);if(url==='/api/conversation-read'){const conversation=listing.conversations.find(n=>n.data.chat_id===req.chat_id);conversation.data.notices.forEach(n=>{if(req.ids.includes(n.id))n.seen_at='seen';});return response({conversation});}if(url==='/api/conversations'&&req.operation){const conversation=listing.conversations.find(n=>n.data.chat_id===req.chat_id);conversation.data.deleted=req.operation==='delete';conversation.data.revision++;return response({conversation});}if(url==='/api/conversations'){const conversation={id:'chat-'+req.chat_id,kind:'conversation',data:{...req,revision:(req.expected_revision||0)+1,status:req.status||'active'}};listing.conversations=[conversation,...listing.conversations.filter(n=>n.id!==conversation.id)];return response({conversation});}const intake={id:'intake-'+req.request_id,data:{...req,status:'pending',revision:1,created_at:'2026-11-17T00:00:00Z'}};listing.intakes.unshift(intake);return response({intake});}};
+  world.window.LumosModels={get:role=>require('../web/role-models.js').selectedRoleModel(role,world.localStorage),receipt:require('../web/role-models.js').receiptModel,loading:false,busy:false,error:''};
   Object.assign(world,extra);world.Event = Event;
+  if(extra.parentModels)Object.assign(world.window.parent,{LumosModels:extra.parentModels,addEventListener(name,fn){events['parent:'+name]=fn;},removeEventListener(name){delete events['parent:'+name];}});
   vm.createContext(world);vm.runInContext(fs.readFileSync('web/dialog.js','utf8'),world);vm.runInContext(fs.readFileSync('web/work-model.js','utf8'),world);vm.runInContext(fs.readFileSync('web/role-chat.js','utf8'),world);await tick();
   const edit=text=>{get('chat-text').value=text;get('chat-text').oninput();};
   const submit=async()=>{get('chat-form').onsubmit({preventDefault(){}});await tick();};
@@ -134,7 +135,7 @@ async function page(storage=new Map(),href='http://127.0.0.1/chat?id='+'a'.repea
 test('open conversations receive model choices from the role work page without losing drafts',async()=>{
   const p=await page();p.edit('尚未发送的草稿');
   p.storage.set('lumos.chat.model.lumos','test-model');p.events.storage();
-  assert.equal(p.get('chat-model').value,'test-model');assert.equal(p.get('chat-text').value,'尚未发送的草稿');
+  assert.equal(p.get('chat-text').value,'尚未发送的草稿');
   await p.submit();assert.equal(p.posts.at(-1).model,'test-model');
 });
 
@@ -142,11 +143,21 @@ test('chat uses saved server models and displays background pauses without losin
   const p=await page();p.edit('保留未发送的正文');let selected='server-model';
   p.world.window.LumosModels={get:()=>selected,receipt:()=>selected,error:'',loading:false,busy:false,
     save:async(role,value)=>{assert.equal(role,'lumos');selected=value;}};
-  p.events['lumos-model']();assert.equal(p.get('chat-model').value,'server-model');
-  p.get('chat-model').value='changed';await p.get('chat-model').onchange();
-  assert.equal(p.get('chat-model').value,'changed');
+  p.events['lumos-model']();
+  selected='changed';p.events['lumos-model']();
   for(const state of ['waiting','stopped']){p.listing.executor=state;await p.poll();assert.match(p.get('chat-status').textContent,/后台处理暂停或未运行/);}
   assert.equal(p.get('chat-text').value,'保留未发送的正文');await p.submit();assert.equal(p.posts[0].model,'changed');
+});
+test('embedded chat uses the page role model and blocks sending while that setting is unsettled',async()=>{
+  let selected='page-model';const models={get:role=>role==='aipm'?selected:'other-role',loading:false,busy:false,error:''};
+  const p=await page(new Map(),'http://127.0.0.1/chat?role=aipm&embedded=1',[],{},{parentModels:models});
+  p.edit('保留草稿');models.busy=true;
+  await p.submit();assert.equal(p.posts.length,0);assert.match(p.get('chat-status').textContent,/正在保存角色模型/);
+  models.busy=false;models.error='设置保存失败';p.events['parent:lumos-model']();await p.submit();assert.equal(p.posts.length,0);
+  models.error='';selected='new-page-model';p.events['parent:lumos-model']();assert.equal(p.get('chat-text').value,'保留草稿');
+  await p.submit();assert.equal(p.posts.at(-1).model,'new-page-model');assert.equal(p.posts.at(-1).agent_role,'aipm');
+  p.events.pagehide();assert.equal(p.events['parent:lumos-model'],undefined);
+  const html=fs.readFileSync('web/role-chat.html','utf8');assert.ok(!html.includes('id="chat-model"'));assert.ok(!html.includes('id="model-help"'));
 });
 
 test('unified workspace hides obsolete scope labels without changing drafts',async()=>{
@@ -230,4 +241,29 @@ test('sidebar search keeps the active draft and deleted chats stay out of the me
   p.get('chat-search').value='no match';p.get('chat-search').oninput();assert.equal(descendants(p.get('chat-list')).some(n=>n.textContent==='没有找到匹配的对话。'),true);assert.equal(p.get('chat-text').value,'别丢掉草稿');
   p.get('chat-search').value='2026-11-22';p.get('chat-search').oninput();assert.equal(descendants(p.get('chat-list')).find(n=>n.className==='chat-link').dataset.unread,'true');
   const {attentionThreads}=require('../web/attention.js');assert.equal(attentionThreads([{...chat,data:{...chat.data,deleted:true}}]).length,0);
+});
+
+const managedChat=(id,title,role='lumos',notices=[])=>({id:'chat-'+id,kind:'conversation',data:{chat_id:id,title,agent_role:role,workspace:'lingguang',status:'active',revision:1,created_at:'2026-11-23T01:00:00Z',notices}});
+test('batch read covers only selected role conversations, chunks receipts, and never submits a reply',async()=>{
+  const p=await page(),a='a'.repeat(32),b='b'.repeat(32),o='c'.repeat(32);
+  p.listing.conversations=[managedChat(a,'甲','lumos',Array.from({length:201},(_,i)=>({id:String(i),kind:'reply',active:true,seen_at:''}))),managedChat(b,'乙','lumos',[{id:'b',kind:'reply',active:true,seen_at:''}]),managedChat(o,'其他角色','maintainer',[{id:'o',kind:'reply',active:true,seen_at:''}])];
+  await p.poll();p.get('select-chats').onclick();assert.equal(p.get('chat-selection-count').textContent,'已选 2 项');
+  await p.get('read-selected-chats').onclick();assert.deepEqual(p.posts.map(r=>[r.chat_id,r.ids.length]),[[a,200],[a,1],[b,1]]);
+  assert.equal(p.listing.conversations[2].data.notices[0].seen_at,'');assert.equal(p.listing.intakes.length,0);assert.equal(p.get('chat-selection-count').textContent,'已选 0 项');
+});
+test('batch deletion confirms exact titles, retries only unfinished items, and undo restores every draft',async()=>{
+  const p=await page(),a='a'.repeat(32),b='b'.repeat(32),c='c'.repeat(32);
+  p.listing.conversations=[managedChat(a,'甲'),managedChat(b,'乙'),managedChat(c,'丙')];await p.poll();p.edit('甲的草稿');p.storage.set('lumos.chat.lingguang.'+b,JSON.stringify({text:'乙的草稿'}));
+  p.get('select-chats').onclick();p.get('delete-selected-chats').onclick();assert.equal(p.posts.length,0);assert.match(p.get('delete-chat-name').textContent,/甲[\s\S]*乙[\s\S]*丙/);
+  const normal=p.world.fetch,attempts=[];let fail=true;
+  p.world.fetch=async(url,opts)=>{if(opts&&url==='/api/conversations'){const r=JSON.parse(opts.body);if(r.operation==='delete'){attempts.push(r);if(r.chat_id===b&&fail)return response({error:'连接中断'},503);}}return normal(url,opts);};
+  await p.get('confirm-chat-delete').onclick();assert.equal(p.listing.conversations.find(n=>n.data.chat_id===a).data.deleted,true);assert.match(p.get('delete-chat-error').textContent,/已删除 1 段/);
+  fail=false;await p.get('confirm-chat-delete').onclick();assert.equal(attempts.filter(r=>r.chat_id===a).length,1);const second=attempts.filter(r=>r.chat_id===b);assert.equal(second[0].request_id,second[1].request_id);
+  assert.ok(p.listing.conversations.every(n=>n.data.deleted));await p.get('undo-chat-delete').onclick();assert.ok(p.listing.conversations.every(n=>!n.data.deleted));
+  assert.equal(p.get('chat-text').value,'甲的草稿');assert.equal(JSON.parse(p.storage.get('lumos.chat.lingguang.'+b)).text,'乙的草稿');
+});
+test('batch deletion refuses running conversations and list reply opens without sending',async()=>{
+  const p=await page(),a='a'.repeat(32),b='b'.repeat(32);p.listing.conversations=[managedChat(a,'甲'),managedChat(b,'乙')];p.listing.intakes=[{id:'running',data:{chat_id:a,agent_role:'lumos',status:'running',created_at:'2026-11-23'}}];await p.poll();
+  p.get('select-chats').onclick();p.get('delete-selected-chats').onclick();await p.get('confirm-chat-delete').onclick();assert.equal(p.posts.length,0);assert.match(p.get('delete-chat-error').textContent,/仍在处理/);
+  await descendants(p.get('chat-list')).find(n=>n['aria-label']==='回复：2026-11-23 | 乙').onclick();assert.ok(p.world.window.location.href.includes(b));assert.equal(p.posts.length,0);
 });
