@@ -148,8 +148,8 @@ if(typeof document!=='undefined'){
     $('chat-status').textContent=error||models?.error||(readOnly()?'此对话保留只读。可查看原文，点击新对话继续。':'')||(pending?'上次发送结果未确认，重试会核对同一条消息，不会重复创建。':!loaded?'正在读取对话…':!models||models.loading?'正在读取角色模型设置…':models.busy?'正在保存角色模型设置…':!enabled?'此空间尚未启用自主整理。':['offline','waiting','stopped'].includes(executor)?'后台处理暂停或未运行；消息可保存，恢复后接续。':waiting?latest.data.status==='failed'?'本轮失败，原话已保留。请在消息下方重试。':'消息已保存，可离开页面；答复完成后会保留在此处。':'');
   }
   function render(){
-    const deleted=new Set(sessions.filter(n=>n.data.deleted).map(n=>n.data.chat_id));
-    const groups=new Map(sessions.filter(n=>!n.data.deleted).map(n=>[n.data.chat_id,n]));
+    const deleted=new Set(sessions.filter(n=>n.data.deleted||n.data.merged_into).map(n=>n.data.chat_id));
+    const groups=new Map(sessions.filter(n=>!deleted.has(n.data.chat_id)).map(n=>[n.data.chat_id,n]));
     for(const n of jobs)if(!deleted.has(n.data.chat_id) && n.data.chat_id && !n.data.chat_parent && !groups.has(n.data.chat_id))groups.set(n.data.chat_id,n);
     // Retain browser-only drafts from before the upgrade and new unsent conversations.
     for(let i=0;i<localStorage.length;i++){const key=localStorage.key(i),prefix='lumos.chat.'+workspace+'.';if(!key?.startsWith(prefix))continue;
@@ -291,6 +291,11 @@ if(typeof document!=='undefined'){
       const finished=data.intakes.some(n=>n.data.chat_id===chatId && ['done','needs_review'].includes(n.data.status) && jobs.find(j=>j.id===n.id)?.data.status!==n.data.status);
       const notifyParent=finished&&jobs.length>0;
       sessions=data.conversations||[];
+      if(currentSession()?.data.merged_into){
+        // Keep an old-link draft in place; never submit it automatically or overwrite the target draft.
+        const target=currentSession().data.merged_into;saveDraft();chatId=target;pending=null;metadataRequest=null;metadataDirty=false;signature='';address();
+        if(!$('chat-text').value)restoreDraft();
+      }
       if(currentSession()?.data.deleted){chatId=uuid();pending=null;metadataRequest=null;metadataDirty=false;signature='';restoreDraft();address();}
       const bound=currentSession()?.data.agent_role||data.intakes.find(n=>n.data.chat_id===chatId)?.data.agent_role;
       if(bound&&bound!=='legacy'){agentRole=bound;requestedRole=bound;address();window.dispatchEvent(new CustomEvent('lumos-role',{detail:agentRole}));}

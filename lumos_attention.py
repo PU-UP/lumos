@@ -57,6 +57,15 @@ def conversation_topic(nodes, refs):
     return next(iter(refs)) if len(refs) == 1 else ''
 
 
+def notice_topic(nodes, scope, item):
+    refs = item['related_ids']
+    if item['kind'] == 'ops':
+        # Group incidents by the exact reviewed work, never by generic error text.
+        source = nodes.get(item['source_id'], {}).get('data', {})
+        refs = source.get('related_ids', [])
+    return conversation_topic(scope, refs)
+
+
 def attention_events(nodes, workspace, numbers, today):
     from lumos_intake import scoped_nodes
     from lumos_followup import followup_questions
@@ -151,15 +160,17 @@ def synchronize_attention(store):
             active = {item['id'] for _, _, item in events}
             chats = {i: copy.deepcopy(n) for i, n in nodes.items() if n['kind'] == 'conversation' and n['data']['workspace'] == workspace}
             for chat in chats.values():
+                if chat['data'].get('merged_into'):
+                    continue  # Preserve the original reminder archive exactly.
                 for item in chat['data'].get('notices', []):
                     if item['kind'] != 'reply':
                         item['active'] = item['id'] in active
             for role, title, item in events:
-                existing = next((n for n in chats.values() if any(x['id'] == item['id'] for x in n['data'].get('notices', []))), None)
+                existing = next((n for n in chats.values() if not n['data'].get('merged_into') and any(x['id'] == item['id'] for x in n['data'].get('notices', []))), None)
                 if existing:
                     continue
                 source_chat = nodes[item['source_id']]['data'].get('chat_id')
-                topic = conversation_topic(scope, item['related_ids'])
+                topic = notice_topic(nodes, scope, item)
                 candidates = [n for n in chats.values() if n['data']['agent_role'] == role and n['data']['status'] == 'active' and not n['data'].get('deleted')
                               and (any(x['key'] == item['key'] for x in n['data'].get('notices', [])) or
                                    (n['data']['chat_id'] == source_chat and not topic) or
@@ -198,6 +209,7 @@ def read_attention(store, request):
             nodes = store.nodes(db)
         old = nodes.get('chat-'+chat_id)
         require(old and old['kind'] == 'conversation' and old['data']['workspace'] == request.get('workspace'), 'Conversation not in workspace')
+        require(not old['data'].get('merged_into'), '此对话已合并，请刷新后阅读主话题')
         require(set(ids) <= {i['id'] for i in old['data'].get('notices', [])}, 'Unknown message')
         node = copy.deepcopy(old)
         for item in node['data'].get('notices', []):

@@ -1,5 +1,6 @@
 """Persistent role conversations; messages and business records remain in their existing stores."""
 import json
+import copy
 import re
 import uuid
 
@@ -67,6 +68,11 @@ def validate_conversation(node, old, nodes):
     require(type(d.get('deleted', False)) is bool, 'Invalid conversation deletion state')
     require(type(d.get('awaiting_reply', False)) is bool, 'Invalid awaiting reply state')
     require(not d.get('topic_id') or nodes.get(d['topic_id'], {}).get('kind') in {'action', 'mainline'}, 'Invalid conversation topic')
+    if d.get('merged_into'):
+        target = nodes.get('chat-'+d['merged_into'], {})
+        require(target.get('kind') == 'conversation' and target['id'] != node['id']
+                and not target['data'].get('merged_into') and d['status'] == 'closed'
+                and all(target['data'][k] == d[k] for k in ('workspace', 'agent_role')), 'Invalid merged conversation')
     require((d['agent_role'] == 'legacy') == (d['status'] == 'legacy'), 'Mixed history must remain read-only')
     for key, limit in [('title', 300), ('memo', 10000)]:
         require(isinstance(d.get(key), str) and len(d[key]) <= limit, 'Invalid conversation '+key)
@@ -117,7 +123,7 @@ def list_conversations(store, workspace='lingguang'):
 
 def save_conversation(store, request):
     require(isinstance(request, dict) and set(request) <= {'request_id', 'chat_id', 'agent_role', 'workspace',
-        'title', 'memo', 'source_ids', 'status', 'expected_revision', 'source', 'operation', 'confirmed'}, 'Invalid conversation request')
+        'title', 'memo', 'source_ids', 'status', 'expected_revision', 'source', 'operation', 'confirmed', 'merge_from', 'reason'}, 'Invalid conversation request')
     key = request.get('request_id', '')
     require(isinstance(key, str) and re.fullmatch('[a-f0-9]{32}', key), 'Invalid request ID')
     chat_id = request.get('chat_id', '')
@@ -135,6 +141,10 @@ def save_conversation(store, request):
         old = nodes.get('chat-'+chat_id)
         require(not old or old['kind'] == 'conversation', 'Conversation ID conflicts with an existing record')
         require(request.get('expected_revision', 0) == (old['data']['revision'] if old else 0), '对话信息已变化，请刷新后重试')
+        require(not old or not old['data'].get('merged_into'), '此对话已合并，请刷新后在主话题中继续')
+        if request.get('operation') == 'merge':
+            return merge_notice_conversations(store, nodes, old, request, reason)
+        require('merge_from' not in request and 'reason' not in request, '合并字段仅用于合并操作')
         if 'operation' in request:
             require(set(request) <= {'request_id', 'chat_id', 'agent_role', 'workspace', 'expected_revision', 'source', 'operation', 'confirmed'}, '删除或恢复不能同时修改对话内容')
             require(request['operation'] in {'delete', 'restore'}, 'Invalid conversation operation')
@@ -171,6 +181,62 @@ def save_conversation(store, request):
             require(ref and space == node['data']['workspace'], '备忘来源不属于当前资料范围')
         commit_tasks(store, nodes, {'reason': reason, 'updates': [node]}, node['id'])
         return {'conversation': node, 'replayed': False}
+
+
+def merge_notice_conversations(store, nodes, target, request, reason):
+    """Consolidate old reminder threads without rewriting any user-message chain."""
+    require(set(request) <= {'request_id', 'chat_id', 'agent_role', 'workspace', 'expected_revision',
+                            'source', 'operation', 'merge_from', 'reason', 'title'}, 'Invalid merge fields')
+    require(target and target['data']['status'] == 'active' and not target['data'].get('deleted'), '主话题不可用')
+    require(all(target['data'][k] == request.get(k) for k in ('workspace', 'agent_role')), '合并范围不符')
+    require(isinstance(request.get('reason'), str) and request['reason'].strip(), '合并须说明核对依据')
+    sources = request.get('merge_from')
+    require(isinstance(sources, dict) and 0 < len(sources) <= 50 and target['data']['chat_id'] not in sources, 'Invalid merge sources')
+    chats = [target]
+    for ident, revision in sources.items():
+        old = nodes.get('chat-'+ident) if isinstance(ident, str) else None
+        require(old and old['kind'] == 'conversation' and old['data']['revision'] == revision, '待合并对话已变化，请重新核对')
+        d = old['data']
+        require(d['status'] == 'active' and not d.get('deleted') and not d.get('merged_into')
+                and all(d[k] == target['data'][k] for k in ('workspace', 'agent_role')), '不能跨角色或资料范围合并')
+        # These historical reminder threads contain notices only. Keep real discussions separate.
+        require(not any(n['kind'] == 'intake' and n['data'].get('chat_id') == ident for n in nodes.values()),
+                '含实际交流的旧对话须单独核对，本入口仅合并提醒话题')
+        require(not any(n['kind'] == 'conversation' and n['data'].get('merged_into') == ident for n in nodes.values()), '不能再次合并已有主话题')
+        chats.append(old)
+    require(not any(n['kind'] == 'intake' and n['data'].get('chat_id') == target['data']['chat_id']
+                    and n['data']['status'] in {'pending', 'running', 'failed'} for n in nodes.values()), '主话题仍在处理或等待重试')
+    node = copy.deepcopy(target); d = node['data']; refs = list(dict.fromkeys(i for c in chats for i in c['data']['source_ids']))
+    require(len(refs) <= 20, '合并后的关联过多，请按主题拆分')
+    d['source_ids'] = refs
+    notices = {n['id']: n for n in d.get('notices', [])}
+    for c in chats[1:]:
+        for item in c['data'].get('notices', []):
+            if item['id'] in notices:
+                require({k:v for k,v in item.items() if k not in {'active','seen_at'}} ==
+                        {k:v for k,v in notices[item['id']].items() if k not in {'active','seen_at'}}, '消息来源冲突')
+                notices[item['id']]['seen_at'] = notices[item['id']]['seen_at'] or item['seen_at']
+                notices[item['id']]['active'] |= item['active']
+            else:
+                notices[item['id']] = copy.deepcopy(item)
+    d['notices'] = sorted(notices.values(), key=lambda n:(n['at'], n['id']))
+    d['awaiting_reply'] = any(c['data'].get('awaiting_reply') for c in chats)
+    if d['awaiting_reply'] or any(n['active'] and n['kind'] in {'question','followup'} for n in d['notices']):
+        d['topic_state'] = 'waiting'
+    if 'title' in request:
+        d['title'] = request['title']; d['title_mode'] = 'manual'
+    from lumos_attention import conversation_topic, notice_topic
+    from lumos_intake import scoped_nodes
+    scope = scoped_nodes(nodes, d['workspace'])
+    topics = {notice_topic(nodes, scope, item) for item in d['notices']}
+    d['topic_id'] = d.get('topic_id') or conversation_topic(scope, refs) or (next(iter(topics)) if len(topics) == 1 else '')
+    d['revision'] += 1; d['updated_at'] = now()
+    updates = [node]
+    for c in chats[1:]:
+        updates.append({**c, 'data': {**c['data'], 'merged_into': d['chat_id'], 'merge_reason': request['reason'],
+                        'status': 'closed', 'revision': c['data']['revision']+1, 'updated_at': now()}})
+    commit_tasks(store, nodes, {'reason': reason, 'updates': updates}, node['id'])
+    return {'conversation': node, 'replayed': False}
 
 
 def upgrade_conversations(store, quiet=False):

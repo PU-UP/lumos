@@ -288,3 +288,12 @@ test('list state follows background processing even when conversation metadata s
   p.listing.intakes[0].data.status='failed';await p.poll();
   assert.ok(descendants(p.get('chat-list')).some(n=>n.textContent==='需要重试'));
 });
+
+test('merged old links open the main topic, preserve a draft and hide the old list entry',async()=>{
+  const p=await page(),a='a'.repeat(32),b='b'.repeat(32),old=managedChat(a,'旧提醒'),main=managedChat(b,'主话题');
+  p.listing.conversations=[old,main];await p.poll();p.edit('未发送的原草稿');
+  old.data.merged_into=b;old.data.status='closed';await p.poll();
+  assert.ok(p.world.window.location.href.includes(b));assert.equal(p.get('chat-text').value,'未发送的原草稿');
+  assert.equal(descendants(p.get('chat-list')).some(n=>n.textContent==='2026-11-23 | 旧提醒'),false);
+  assert.equal(p.posts.length,0);
+});

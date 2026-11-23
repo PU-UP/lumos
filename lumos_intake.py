@@ -167,6 +167,7 @@ def save_intake(store, request):
                 conversation = nodes.get('chat-'+request['chat_id'])
                 if conversation:
                     meta = conversation['data']
+                    require(not meta.get('merged_into'), '此对话已合并，请刷新后在主话题中继续')
                     require(not meta.get('deleted'), '此对话已删除，请先恢复或新建对话')
                     require(meta['status'] == 'active', '此对话已结束或为混合历史，请新建对话')
                     require(meta['workspace'] == request.get('workspace', 'lingguang'), '对话不属于当前空间')
@@ -401,7 +402,7 @@ def intake_context(store, ident):
                     for n in nodes.values() if n['kind'] == 'conversation' and n['id'] != conversation['id']
                     and n['data']['workspace'] == job['data']['workspace']
                     and n['data']['agent_role'] == role_for(job['data'])
-                    and n['data']['status'] == 'active' and not n['data'].get('deleted')]
+                    and n['data']['status'] == 'active' and not n['data'].get('deleted') and not n['data'].get('merged_into')]
                 bound = set(conversation['data']['source_ids'])
                 own_turns = {t['id'] for t in nodes.values() if t['kind'] == 'intake'
                              and t['data'].get('chat_id') == job['data']['chat_id']}

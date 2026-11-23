@@ -29,7 +29,7 @@ function conversationState(data,latest){
   return {key:'ongoing',label:data.topic_state==='waiting'?'等待后续':'进行中'};
 }
 function attentionThreads(conversations,role){
-  return conversations.filter(n=>(!role||n.data.agent_role===role)&&!n.data.deleted&&n.data.notices?.length).map(n=>({
+  return conversations.filter(n=>(!role||n.data.agent_role===role)&&!n.data.deleted&&!n.data.merged_into&&n.data.notices?.length).map(n=>({
     id:n.data.chat_id,role:n.data.agent_role,title:n.data.title,workspace:n.data.workspace,
     state:conversationState(n.data),unread:n.data.notices.filter(i=>i.active&&!i.seen_at).length,
     latest:n.data.notices.filter(i=>i.active).at(-1)||n.data.notices.at(-1)

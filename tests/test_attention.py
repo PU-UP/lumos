@@ -258,3 +258,64 @@ class AttentionTest(BaseStoreCase):
         self.assertEqual(self.chats()[0]['data']['topic_state'], 'settled')
         synchronize_attention(self.store)
         self.assertFalse(any(n['active'] for n in self.chats()[0]['data']['notices'] if n['kind'] == 'question'))
+
+    def test_merge_reminders_preserves_sources_questions_read_states_and_future_route(self):
+        from lumos_attention import notice
+        from lumos_tasks import commit_tasks
+        self.seed_topic()
+        question = self.job('aipm'); question['plan']['questions'] = ['同步结果？']
+        from lumos_worker import collaborate
+        from lumos_agents import prepare_execution
+        context = intake_context(self.store, question['id']); plan = question['plan']
+        question['plan'] = collaborate(self.store, context['intake'], context, lambda *args: copy.deepcopy(plan))
+        prepare_execution(self.store, question['id'], question['claim'], question['plan']); apply_intake(self.store, question)
+        synchronize_attention(self.store)
+        target = next(c for c in self.chats() if c['data']['agent_role'] == 'lumos')
+        source = save_conversation(self.store, {'request_id': uuid.uuid4().hex, 'chat_id': uuid.uuid4().hex,
+            'workspace': 'lingguang', 'agent_role': 'lumos', 'title': '旧标定提醒', 'source_ids': ['calibration']})['conversation']
+        source['data']['notices'] = [notice('old-followup', 'followup', '旧问题原文', 'calibration', ['calibration'])]
+        source['data']['notices'][0]['seen_at'] = '2026-11-20T00:00:00Z'; source['data']['revision'] += 1
+        with self.store.db() as db: nodes = self.store.nodes(db)
+        commit_tasks(self.store, nodes, {'reason': 'isolated old reminder', 'updates': [source]}, source['id'])
+        with self.store.db() as db: before = self.store.nodes(db)
+        request = {'request_id': uuid.uuid4().hex, 'operation': 'merge', 'chat_id': target['data']['chat_id'],
+            'agent_role': 'lumos', 'workspace': 'lingguang', 'expected_revision': target['data']['revision'],
+            'merge_from': {source['data']['chat_id']: source['data']['revision']}, 'reason': '同一模拟主线', 'title': '模拟主线'}
+        merged = save_conversation(self.store, request)['conversation']
+        self.assertTrue(save_conversation(self.store, request)['replayed'])
+        with self.store.db() as db: after = self.store.nodes(db)
+        self.assertEqual(after[source['id']]['data']['notices'], before[source['id']]['data']['notices'])
+        for ident, node in before.items():
+            if node['kind'] != 'conversation': self.assertEqual(after[ident], node)
+        self.assertTrue(all(item in merged['data']['notices'] for c in [target, source] for item in c['data']['notices']))
+        self.assertEqual(after[source['id']]['data']['merged_into'], target['data']['chat_id'])
+        self.assertEqual(merged['data']['topic_id'], 'topic-line')
+        with self.assertRaises(lumos.Error):
+            save_intake(self.store, {'request_id': uuid.uuid4().hex, 'chat_id': source['data']['chat_id'], 'text': '旧入口', 'source': self.source})
+        save_task(self.store, {'request_id': uuid.uuid4().hex, 'expected_seq': self.store.status()['seq'],
+            'id': 'calibration', 'changes': {'follow_up': '2026-11-23'}, 'source': self.source})
+        with patch('lumos_intake.today', return_value='2026-11-23'):
+            synchronize_attention(self.store); seq = self.store.status()['seq']; synchronize_attention(self.store)
+        self.assertEqual(self.store.status()['seq'], seq)
+        live = [c for c in self.chats() if c['data']['agent_role'] == 'lumos' and not c['data'].get('merged_into')]
+        self.assertEqual(len(live), 1)
+        self.assertTrue(any(n['kind'] == 'followup' and n['active'] for n in live[0]['data']['notices']))
+        self.assertEqual(self.store.verify()['integrity'], 'ok')
+
+    def test_merge_rejects_stale_cross_role_and_actual_message_history_without_partial_write(self):
+        target = self.job(); apply_intake(self.store, target)
+        source = self.job(); apply_intake(self.store, source)
+        chats = self.chats(); a, b = chats
+        request = {'request_id': uuid.uuid4().hex, 'operation': 'merge', 'chat_id': a['data']['chat_id'],
+            'agent_role': 'lumos', 'workspace': 'lingguang', 'expected_revision': a['data']['revision'],
+            'merge_from': {b['data']['chat_id']: b['data']['revision']}, 'reason': '核对'}
+        seq = self.store.status()['seq']
+        for override in ({}, {'expected_revision': 0}, {'agent_role': 'maintainer'}):
+            with self.assertRaises(lumos.Error): save_conversation(self.store, {**request, **override})
+            self.assertEqual(self.store.status()['seq'], seq)
+
+    def test_ops_routing_uses_exact_incident_work_not_shared_error_wording(self):
+        from lumos_attention import notice_topic, notice
+        nodes = {'line': {'kind': 'mainline', 'data': {}}, 'incident': {'kind': 'intake', 'data': {'related_ids': ['line']}}}
+        self.assertEqual(notice_topic(nodes, nodes, notice('ops:x', 'ops', '相同报错', 'incident', [])), 'line')
+        self.assertEqual(notice_topic(nodes, nodes, notice('ops:y', 'ops', '相同报错', 'other', [])), '')
