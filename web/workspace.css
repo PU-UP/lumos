@@ -166,7 +166,7 @@
 /* Keep unread distinct from the teal selection state, with text as well as color. */
 .simple-workspace #chat-history .chat-list-row{display:flex;align-items:center;min-width:0;gap:2px}
 .simple-workspace #chat-history .chat-link{flex:1;min-width:0}
-.simple-workspace #chat-history .chat-link[data-unread=true] small,.attention-thread.is-unread .attention-meta{color:#a34b00;font-weight:700}
+.simple-workspace #chat-history .chat-link .state-unread,.attention-thread.is-unread .attention-meta{color:#a34b00;font-weight:700}
 .attention-bubble.has-unread{color:#8b3e00;border-color:#bd6b19;background:#fff4df}
 .chat-delete{flex:none;background:transparent;border:0;color:var(--muted);font-size:12px;padding:8px 6px;min-height:40px}
 .chat-delete:hover,.chat-delete:focus-visible{color:#a62e28;background:#fff0ed}
@@ -207,3 +207,4 @@
 .chat-state.state-failed{background:#fbe7e4;color:#9b3327}
 .simple-workspace #chat-history .chat-link .chat-state{display:table;margin-top:5px;font-size:12px}
 .notice-actions .quick-reply{background:var(--soft);color:var(--accent)}
+#find-unread{margin-top:8px;color:#8a4200;background:#fff0ce;border-color:#d8b570}

@@ -16,17 +16,17 @@ function noticeText(item){
     .replaceAll('运行情况已更新：该次处理已成功接续；不代表底层故障已永久修复。','这次中断的整理已接续成功，你无需为此重新提交内容。\n这表示本次工作已恢复，不代表同类故障已永久排除。');
 }
 function conversationState(data,latest){
-  if(latest && ['pending','running'].includes(latest.status))return {key:'processing',label:'处理中'};
+  if(latest?.status==='pending')return {key:'processing',label:'排队等待'};
+  if(latest?.status==='running')return {key:'processing',label:'正在整理'};
   if(latest?.status==='failed')return {key:'failed',label:'需要重试'};
   const active=(data.notices||[]).filter(n=>n.active);
   const unread=active.some(n=>!n.seen_at);
   const asks=active.some(n=>['question','followup'].includes(n.kind))||data.awaiting_reply===true;
-  if(unread)return {key:'unread',label:asks?'未读 · 待回复':'未读'};
-  if(asks)return {key:'awaiting',label:'已读待回'};
+  if(asks)return {key:'awaiting',label:unread?'待你答复':'已读待回'};
   if(data.topic_state==='settled')return {key:'settled',label:'本轮已收尾'};
   if(data.status==='closed')return {key:'settled',label:'已结束'};
   if(data.status==='legacy')return {key:'history',label:'历史 · 只读'};
-  return {key:'ongoing',label:data.topic_state==='waiting'?'等待后续':'进行中'};
+  return {key:'ongoing',label:data.topic_state==='waiting'?'等待后续':'可继续聊'};
 }
 function attentionThreads(conversations,role){
   return conversations.filter(n=>(!role||n.data.agent_role===role)&&!n.data.deleted&&!n.data.merged_into&&n.data.notices?.length).map(n=>({

@@ -319,3 +319,12 @@ class AttentionTest(BaseStoreCase):
         nodes = {'line': {'kind': 'mainline', 'data': {}}, 'incident': {'kind': 'intake', 'data': {'related_ids': ['line']}}}
         self.assertEqual(notice_topic(nodes, nodes, notice('ops:x', 'ops', '相同报错', 'incident', [])), 'line')
         self.assertEqual(notice_topic(nodes, nodes, notice('ops:y', 'ops', '相同报错', 'other', [])), '')
+
+    def test_lumos_owned_work_does_not_ask_user_for_generic_progress(self):
+        from lumos_attention import attention_events
+        save_task(self.store, {'request_id': uuid.uuid4().hex, 'expected_seq': self.store.status()['seq'],
+            'id': 'talk', 'changes': {'owner': 'Lumos', 'follow_up': '2026-11-23'}, 'source': self.source})
+        with self.store.db() as db: nodes = self.store.nodes(db)
+        self.assertFalse(any(item['kind']=='followup' for _,_,item in attention_events(nodes,'lingguang',{},'2026-11-23')))
+        request=self.job();request['plan']['questions']=['请确定独立备份位置'];apply_intake(self.store,request)
+        self.assertTrue(self.chats()[0]['data']['awaiting_reply'])

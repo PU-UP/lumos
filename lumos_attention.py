@@ -95,7 +95,7 @@ def attention_events(nodes, workspace, numbers, today):
     groups = {}
     for ident, n in scope.items():
         d = n['data']
-        if n['kind'] != 'action' or d['status'] in {'done', 'cancelled'} or ident in questioned or not d.get('follow_up') or d['follow_up'] > today:
+        if n['kind'] != 'action' or d['status'] in {'done', 'cancelled'} or d.get('owner') == 'Lumos' or ident in questioned or not d.get('follow_up') or d['follow_up'] > today:
             continue
         topic = conversation_topic(scope, [ident]) or ident
         groups.setdefault(topic, []).append(n)

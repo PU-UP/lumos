@@ -51,7 +51,7 @@ function managementModel(state, workspace) {
   });
   questions.sort((a,b)=>Number(b.tasks.some(t=>t.data.follow_up && t.data.follow_up<=state.today))-Number(a.tasks.some(t=>t.data.follow_up && t.data.follow_up<=state.today)));
   for(const issue of issues) {
-    const uncovered=issue.tasks.filter(t=>!questions.some(q=>q.tasks.some(other=>other.id===t.id)));
+    const uncovered=issue.tasks.filter(t=>t.data.owner!=='Lumos'&&!questions.some(q=>q.tasks.some(other=>other.id===t.id)));
     if(!uncovered.length)continue;
     const names=issue.line ? issue.line.data.title : issue.tasks.map(t=>t.data.text).join('、');
     const revision=[state.today,issue.line?.data.review_on,...issue.tasks.map(t=>t.data.follow_up)].filter(Boolean).sort().at(-1)||'';

@@ -6,6 +6,7 @@ class Element{
   constructor(){this.value='';this.children=[];this.scrollHeight=500;this.scrollTop=400;this.clientHeight=100;this.events={};this.dataset={};}
   addEventListener(name,fn){this.events[name]=fn;}
   querySelectorAll(){return descendants(this).filter(n=>n.dataset.noticeId);}
+  scrollIntoView(){this.scrolled=true;}
   showModal(){this.open=true;}close(){this.open=false;this.onclose?.();}
   append(...v){this.children.push(...v);}replaceChildren(...v){this.children=v;}setAttribute(k,v){this[k]=v;}focus(){}
 }
@@ -284,7 +285,7 @@ test('typing directly into a single proactive question retains its business link
 test('list state follows background processing even when conversation metadata stays unchanged',async()=>{
   const p=await page(),id='a'.repeat(32);p.listing.conversations=[managedChat(id,'联调')];await p.poll();
   p.listing.intakes=[{id:'job',data:{chat_id:id,agent_role:'lumos',status:'running',created_at:'2026-11-23'}}];await p.poll();
-  assert.ok(descendants(p.get('chat-list')).some(n=>n.textContent==='处理中'));
+  assert.ok(descendants(p.get('chat-list')).some(n=>n.textContent==='正在整理'));
   p.listing.intakes[0].data.status='failed';await p.poll();
   assert.ok(descendants(p.get('chat-list')).some(n=>n.textContent==='需要重试'));
 });
@@ -296,4 +297,28 @@ test('merged old links open the main topic, preserve a draft and hide the old li
   assert.ok(p.world.window.location.href.includes(b));assert.equal(p.get('chat-text').value,'未发送的原草稿');
   assert.equal(descendants(p.get('chat-list')).some(n=>n.textContent==='2026-11-23 | 旧提醒'),false);
   assert.equal(p.posts.length,0);
+});
+
+test('queued or running work keeps a separate unread badge and can locate the older unread message',async()=>{
+  const p=await page(),id='a'.repeat(32),item={id:'older',key:'q',kind:'question',active:true,seen_at:'',text:'较早的问题',related_ids:[],at:'2026-11-20'};
+  p.listing.conversations=[managedChat(id,'联调','lumos',[item])];
+  p.listing.intakes=[{id:'job',data:{chat_id:id,agent_role:'lumos',status:'pending',created_at:'2026-11-23',text:'正在排队的原话'}}];
+  await p.poll();let rows=descendants(p.get('chat-list'));
+  assert.ok(rows.some(n=>n.textContent==='排队等待'));assert.ok(rows.some(n=>n.textContent==='1 条未读'));
+  assert.equal(p.get('find-unread').hidden,false);p.get('find-unread').onclick();
+  assert.ok(descendants(p.get('messages')).find(n=>n.dataset.noticeId==='older').scrolled);
+  assert.equal(p.posts.length,0);assert.equal(item.seen_at,'');
+  p.listing.intakes[0].data.status='running';await p.poll();rows=descendants(p.get('chat-list'));
+  assert.ok(rows.some(n=>n.textContent==='正在整理'));assert.ok(rows.some(n=>n.textContent==='1 条未读'));
+});
+
+test('reading one notice does not jump through subsequent unread notices or lose the reading position',async()=>{
+  const p=await page(),id='a'.repeat(32);
+  const notices=['first','second'].map((id,index)=>({id,key:id,kind:'question',active:true,seen_at:'',text:id,related_ids:[],at:'2026-11-2'+index}));
+  p.listing.conversations=[managedChat(id,'联调','lumos',notices)];await p.poll();
+  assert.ok(descendants(p.get('messages')).find(n=>n.dataset.noticeId==='first').scrolled);
+  p.get('messages').scrollTop=50;notices[0].seen_at='read';await p.poll();
+  assert.equal(p.get('messages').scrollTop,50);
+  assert.ok(!descendants(p.get('messages')).find(n=>n.dataset.noticeId==='second').scrolled);
+  p.get('find-unread').onclick();assert.ok(descendants(p.get('messages')).find(n=>n.dataset.noticeId==='second').scrolled);
 });

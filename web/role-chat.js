@@ -71,7 +71,7 @@ if(typeof document!=='undefined'){
   let agentRole=requestedRole,episodeRef='';
   const modelHost=url.searchParams.get('embedded')==='1'&&window.parent?.LumosModels?window.parent:window;
   const roleModels=()=>modelHost.LumosModels;
-  let readObserver,readTimer,reading=false;
+  let readObserver,readTimer,reading=false,positionedChat='';
   let deleteTargets=[],deleteRequests=new Map(),deleteStarted=false,deleteBusy=false,undoDelete=[],batchBusy=false;
   const selectedChats=new Set();let visibleChats=[];
   const visibleNotices=new Set();
@@ -125,6 +125,8 @@ if(typeof document!=='undefined'){
   function controls(){
     const models=roleModels();
     const state=conversationState(currentSession()?.data||{},chatTurns(jobs,chatId).at(-1)?.data);$('conversation-state').textContent=currentSession()?state.label:'';$('conversation-state').className='chat-state state-'+state.key;
+    const unread=(currentSession()?.data.notices||[]).filter(n=>n.active&&!n.seen_at).length;
+    $('find-unread').hidden=!unread;$('find-unread').textContent='查看未读 · '+unread;
     const latest=chatTurns(jobs,chatId).at(-1),waiting=latest && ['pending','running','failed'].includes(latest.data.status);
     $('chat-text').readOnly=busy||!!pending||readOnly();
     $('chat-text').required=!selectedQuestion?.answer;
@@ -166,6 +168,7 @@ if(typeof document!=='undefined'){
       const list=$('chat-list');list.replaceChildren();
       for(const [id,first] of entries){const row=el('div',undefined,'chat-list-row'),unread=first.data.notices?.some(n=>n.active&&!n.seen_at);const label=conversationLabel(first.data.title,first.data.created_at),b=el('button',undefined,'chat-link');b.title=label;b.append(el('span',label,'chat-link-title'));b.setAttribute('aria-current',String(id===chatId));b.disabled=busy||deleteBusy;b.dataset.unread=String(!!unread);
         const latest=chatTurns(jobs,id).at(-1);const state=conversationState(first.data,latest?.data);b.append(el('small',first.data.status==='draft'?'未发送草稿':state.label,'chat-state state-'+state.key));
+        if(unread)b.append(el('small',first.data.notices.filter(n=>n.active&&!n.seen_at).length+' 条未读','chat-state state-unread'));
         const check=el('input',undefined,'chat-select');check.type='checkbox';check.checked=selectedChats.has(id);check.disabled=busy||deleteBusy||batchBusy;check.setAttribute('aria-label','选择对话：'+label);check.onchange=()=>{if(check.checked)selectedChats.add(id);else selectedChats.delete(id);render();};row.append(check);
         b.onclick=()=>selectChat(id);b.disabled ||= batchBusy;row.append(b);
         const reply=el('button','回复','chat-reply');reply.type='button';reply.setAttribute('aria-label','回复：'+label);reply.disabled=busy||deleteBusy||batchBusy;reply.onclick=async()=>{await selectChat(id);window.dispatchEvent(new Event('lumos-chat-reply'));};row.append(reply);
@@ -182,7 +185,7 @@ if(typeof document!=='undefined'){
     const notices=meta?.data.notices||[];
     const nextSignature=JSON.stringify([turns,notices])+(turns.length?'':JSON.stringify(jobs.map(n=>[n.id,n.data.revision]))+loaded);
     if(nextSignature!==signature){
-      const host=$('messages'),bottom=host.scrollHeight-host.scrollTop-host.clientHeight<90;
+      const host=$('messages'),scroll=host.scrollTop,bottom=host.scrollHeight-scroll-host.clientHeight<90;
       host.replaceChildren();
       if(!turns.length&&!notices.length)suggestions(host);
       const timeline=[...turns.map(job=>({at:job.data.created_at,job})),...notices.filter(n=>n.kind!=='reply'&&!(n.kind==='followup'&&notices.some(other=>other!==n&&other.kind==='followup'&&other.key===n.key&&other.at>n.at))).map(item=>({at:item.at,item}))].sort((a,b)=>a.at.localeCompare(b.at));
@@ -236,13 +239,25 @@ if(typeof document!=='undefined'){
         const delivery=notices.find(n=>n.kind==='reply'&&n.source_id===job.id);if(delivery){receipt.dataset.noticeId=delivery.id;receipt.append(el('span',delivery.seen_at?'已读':'● 未读',delivery.seen_at?'muted':'unread-label'));}
         if(receipt.children.length)answer.append(receipt);turn.append(answer);host.append(turn);
       }
-      if((turns.length||notices.length) && (bottom||!signature))host.scrollTop=host.scrollHeight;
+      if(turns.length||notices.length){
+        if(positionedChat!==chatId){if(!focusUnread(false))host.scrollTop=host.scrollHeight;positionedChat=chatId;}
+        else host.scrollTop=bottom?host.scrollHeight:scroll;
+      }
       if(!turns.length&&!notices.length)host.scrollTop=0;
       signature=nextSignature;
       observeReadReceipts();
     }
     controls();
   }
+  function focusUnread(focus=true){
+    const unread=new Set((currentSession()?.data.notices||[]).filter(n=>n.active&&!n.seen_at).map(n=>n.id));
+    const target=[...$('messages').querySelectorAll('[data-notice-id]')].find(n=>unread.has(n.dataset.noticeId));
+    if(!target)return false;
+    target.scrollIntoView({block:'center'});
+    if(focus){target.setAttribute('tabindex','-1');target.focus({preventScroll:true});}
+    return true;
+  }
+  $('find-unread').onclick=()=>focusUnread();
   function renderNotice(host,item){
     const card=el('article',undefined,'proactive-message');
     const head=el('div',undefined,'notice-heading');head.append(el('strong',agentNames[agentRole]),el('span',!item.active?'历史消息':item.seen_at?'已读':'● 未读',!item.active||item.seen_at?'muted':'unread-label'));
@@ -306,7 +321,7 @@ if(typeof document!=='undefined'){
   async function selectChat(id,newWorkspace=workspace,keepDraft=true){
     if(busy)return;
     try{if(keepDraft)saveDraft();}catch(e){error='草稿无法保存在此浏览器，请先复制正文。';controls();return;}
-    workspace=newWorkspace;chatId=id;generation++;clearTimeout(timer);signature='';metaSignature='';metadataDirty=false;error='';restoreDraft();address();
+    workspace=newWorkspace;chatId=id;generation++;clearTimeout(timer);signature='';positionedChat='';metaSignature='';metadataDirty=false;error='';restoreDraft();address();
     $('chat-workspace').value=workspace;loaded=false;jobs=[];sessions=[];render();loadTasks();await refresh();$('chat-text').focus();
   }
   async function send(request){

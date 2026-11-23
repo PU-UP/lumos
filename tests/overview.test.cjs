@@ -31,6 +31,14 @@ const task=(id,changes={})=>({id,short_id:'T-'+id,data:{context:'work',text:id,s
 const line=(id,tasks,milestones=tasks)=>({id,data:{context:'work',title:id,task_ids:tasks,milestone_ids:milestones}});
 const state=(tasks,lines)=>({today:'2026-11-14',contexts:[{id:'work',data:{workspace:'lingguang'}},{id:'maintenance',data:{workspace:'lumos'}}],tasks,mainlines:lines});
 
+test('Lumos owned work stays visible without asking the user for generic progress',()=>{
+  const t=task('own',{owner:'Lumos',follow_up:'2026-11-14'}),s=state([t],[]);
+  assert.equal(managementModel(s,'lingguang').questions.length,0);
+  assert.equal(managementModel(s,'lingguang').independent.length,1);
+  s.open_questions=[{workspace:'lingguang',intake_id:'ask',index:0,question:'需要确定备份落点',related_ids:['own']}];
+  assert.equal(managementModel(s,'lingguang').questions.length,1);
+});
+
 test('mainlines sort by priority then existing order without changing input or task priority',()=>{
   const lines=['unset','P2','P1-later','P0','P1-first'].map(id=>line(id,['a']));
   for(const l of lines)if(l.id!=='unset')l.data.priority=l.id.slice(0,2);

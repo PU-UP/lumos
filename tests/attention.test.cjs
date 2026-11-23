@@ -67,7 +67,7 @@ test('Ops message preview uses the same readable text as the chat',async()=>{
 test('read unanswered, processing, retry and settled states remain distinct',()=>{
   const {conversationState}=require('../web/attention.js');
   const data={topic_state:'settled',notices:[{active:true,kind:'followup',seen_at:''}]};
-  assert.equal(conversationState(data).key,'unread');data.notices[0].seen_at='read';assert.equal(conversationState(data).key,'awaiting');
+  assert.equal(conversationState(data).label,'待你答复');data.notices[0].seen_at='read';assert.equal(conversationState(data).key,'awaiting');
   assert.equal(conversationState(data,{status:'running'}).key,'processing');assert.equal(conversationState(data,{status:'failed'}).key,'failed');
   data.notices[0].active=false;assert.equal(conversationState(data).key,'settled');data.awaiting_reply=true;assert.equal(conversationState(data).key,'awaiting');
 });
@@ -75,4 +75,11 @@ test('read unanswered, processing, retry and settled states remain distinct',()=
 test('merged reminder archives do not double-count unread messages',()=>{
   const original=chat('lumos','old',[notice('n')],{merged_into:'main'}),main=chat('lumos','main',[notice('n')]);
   assert.deepEqual(attentionThreads([original,main],'lumos').map(n=>[n.id,n.unread]),[['main',1]]);
+});
+
+test('conversation labels distinguish queued work, running work and an idle open topic',()=>{
+  const {conversationState}=require('../web/attention.js');
+  assert.equal(conversationState({},{status:'pending'}).label,'排队等待');
+  assert.equal(conversationState({},{status:'running'}).label,'正在整理');
+  assert.equal(conversationState({topic_state:'ongoing'},{status:'done'}).label,'可继续聊');
 });
