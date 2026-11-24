@@ -26,3 +26,4 @@ manual_edits记录王牧楠手动改过的字段、原值及时间，seen_at为�
 summary说明检查了多少任务、完成哪些内部安排、仍有哪些主线问题等待王牧楠回答。更新时间和逐字段已读标记由服务端保存，不自行写这些字段。
 
 action更新也使用changes对象，未修改字段填null；不要把task_reviews或task_review放入changes。全量复核的task_reviews只位于返回顶层。
+2026-11-24 职责分流：全量复核范围为统一工作区内由 Lumos 统筹的项目任务。确切归属 lumos-maintenance 的系统维护任务由 Ops 接续，不纳入本轮 records/逐项复核，不新增对应催问；统一工作区不代表合并角色职责。独立备份等维护任务、原待答问题和历史保留在 Ops，不因退出项目复核而完成或取消。

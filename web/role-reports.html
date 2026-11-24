@@ -5,6 +5,7 @@
 <main class="reports-page"><div class="reports-heading"><div><h1 id="reports-title">处理记录</h1><p id="reports-description"></p></div><div class="reports-actions"><button id="refresh-reports">刷新</button><button id="inspect" hidden>检查一次</button></div></div>
 <label>资料范围<select id="workspace"><option value="lingguang">灵光</option><option value="lumos">Lumos 仓库维护</option></select></label>
 <p id="inspection-status" role="status" hidden></p>
+<section id="maintenance-panel" aria-labelledby="maintenance-title" hidden><h2 id="maintenance-title">维护事项</h2><div id="maintenance-items"></div></section>
 <div class="reports-toolbar"><div role="group" aria-label="显示范围"><button id="current-reports" aria-pressed="true">处理记录</button><button id="report-history" aria-pressed="false">处理历史</button></div><p id="report-count" role="status"></p></div>
 <p id="reports-error" role="alert"></p><div id="report-list" aria-live="polite"></div><button id="more-reports" hidden>显示更多</button></main>
 <dialog id="diagnosis-dialog" aria-labelledby="diagnosis-title"><div class="dialog-heading"><h2 id="diagnosis-title">诊断与建议</h2><button id="close-diagnosis" type="button">关闭</button></div><p id="diagnosis-body"></p></dialog>

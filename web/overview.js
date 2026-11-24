@@ -9,6 +9,9 @@ function briefItems(model,inbox,history=[...(inbox.latest?.values()||[])]){
   for(const q of questions)if(!seen.has(q.key)){items.push({id:q.key,title:q.title===q.text?'需要你确认':q.title,tasks:[],questions:[q]});seen.add(q.key);}
   for(const item of items)item.receipts=[];
   for(const job of new Map(history.map(j=>[j.id,j])).values()){
+    const exact=[...(job.data.related_ids||[]),...(job.data.destinations||[]),...(job.targets||[]).map(n=>n.id)].filter(id=>model.excludedIds?.includes(id)||model.tasks?.some(t=>t.id===id));
+    if(exact.length && exact.every(id=>model.excludedIds?.includes(id)))continue;
+    if(!exact.length&&model.excludedQuestionKeys?.includes(job.data.question_key))continue;
     const targets=(job.targets||[]).filter(t=>['action','mainline'].includes(t.kind)),refs=[...targets.map(t=>t.id),...(job.data.destinations||[])],keys=[job.data.question_key,...(job.data.question_keys||[])];
     const match=ids=>items.find(i=>ids.includes(i.id))||items.find(i=>i.tasks.some(t=>ids.includes(t.id)));
     let item=match(job.data.related_ids||[])||items.find(i=>i.questions.some(q=>keys.includes(q.key)))||match(refs);

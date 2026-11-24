@@ -15,10 +15,11 @@ function taskQuestionTiming(task,today){
   if(d.status==='blocked')return {needed:true,reason:'事项受阻，尚未安排跟进'};
   return {needed:false,reason:due?'阶段节点 '+due:'尚未安排提问时间，由Lumos接续'};
 }
-function managementModel(state, workspace) {
+function managementModel(state, workspace, role='lumos') {
   const spaceOf = context => state.contexts.find(c => c.id === context)?.data.workspace || (context === 'lumos-maintenance' ? 'lumos' : 'lingguang');
-  const tasks = state.tasks.filter(t => spaceOf(t.data.context) === workspace);
-  const lines = (state.mainlines || []).filter(l => spaceOf(l.data.context) === workspace && l.data.status !== 'archived');
+  const belongs=n=>(n.work_role||(n.data.context==='lumos-maintenance'?'maintainer':'lumos'))===role;
+  const tasks = state.tasks.filter(t => spaceOf(t.data.context) === workspace && belongs(t));
+  const lines = (state.mainlines || []).filter(l => spaceOf(l.data.context) === workspace && l.data.status !== 'archived' && belongs(l));
   const assigned = new Set(lines.flatMap(l => l.data.task_ids || []));
   const entries = lines.sort(mainlineSort).map(line => ({line, tasks: tasks.filter(t => (line.data.task_ids || []).includes(t.id))}));
   const independent = tasks.filter(t => !assigned.has(t.id));
@@ -39,7 +40,7 @@ function managementModel(state, workspace) {
       reason:task.data.status === 'blocked' ? '独立事项受阻' : '独立事项需核对', date:deliveryDate(task) || '9999'});
   }
   issues.sort((a,b) => a.severity-b.severity || a.date.localeCompare(b.date) || a.title.localeCompare(b.title));
-  const questions=(state.open_questions || []).filter(q=>q.workspace===workspace).map(q=>{
+  const questions=(state.open_questions || []).filter(q=>q.workspace===workspace && (q.work_role||'lumos')===role).map(q=>{
     const mentioned=tasks.filter(t=>t.short_id && (q.question.match(/T-\d+/g)||[]).includes(t.short_id));
     const reviewed=tasks.filter(t=>t.management_question && t.management_question.intake_id===q.intake_id && t.management_question?.index===q.index);
     const refs=q.task_ids ? [...q.task_ids,...(q.related_ids||[]).filter(id=>lines.some(l=>l.id===id))] : [...new Set(mentioned.length ? mentioned.map(t=>t.id) : [...reviewed.map(t=>t.id),...(q.related_ids||[])])];
@@ -76,7 +77,7 @@ function managementModel(state, workspace) {
   const milestones=[...new Map(entries.flatMap(e=>milestoneTasks(e)).map(t=>[t.id,t])).values()].sort(deliverySort);
   const horizon=new Date(state.today+'T00:00:00Z');horizon.setUTCDate(horizon.getUTCDate()+14);
   const upcoming=milestones.filter(t=>targetDate(t)>=state.today && targetDate(t)<=horizon.toISOString().slice(0,10));
-  return {entries, independent, issues, tasks, questions, milestones, upcoming};
+  return {entries, independent, issues, tasks, questions, milestones, upcoming,excludedIds:state.tasks.filter(t=>!belongs(t)).map(t=>t.id),excludedQuestionKeys:(state.open_questions||[]).filter(q=>(q.work_role||'lumos')!==role).map(q=>`question:${q.intake_id}:${q.index}`)};
 }
 function milestoneTasks(entry) {
   return entry.tasks.filter(t => isOpenTask(t) && (entry.line.data.milestone_ids || []).includes(t.id)).sort(deliverySort);

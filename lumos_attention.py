@@ -3,7 +3,7 @@ import copy
 import re
 
 from lumos import digest, now, process_lock, require
-from lumos_tasks import commit_tasks, task_numbers
+from lumos_tasks import commit_tasks, task_numbers, work_role
 
 
 def notice(key, kind, text, source_id, related_ids, **extra):
@@ -59,7 +59,7 @@ def conversation_topic(nodes, refs):
 
 def notice_topic(nodes, scope, item):
     refs = item['related_ids']
-    if item['kind'] == 'ops':
+    if item['kind'] == 'ops' and not item['key'].startswith('maintenance:'):
         # Group incidents by the exact reviewed work, never by generic error text.
         source = nodes.get(item['source_id'], {}).get('data', {})
         refs = source.get('related_ids', [])
@@ -83,6 +83,12 @@ def attention_events(nodes, workspace, numbers, today):
         if key in pending_keys or q.get('follow_up_on', '') > today:
             continue
         source = nodes[q['intake_id']]['data']
+        if q['work_role'] == 'maintainer':
+            live = [i for i in q['task_ids'] if scope[i]['data']['status'] not in {'done', 'cancelled'}]
+            if live:
+                title = '、'.join(scope[i]['data']['text'] for i in live)
+                events.append(('maintainer', title, notice('maintenance:'+key+':'+q.get('follow_up_on', ''), 'ops', q['question'], q['intake_id'], live)))
+            continue
         # Ops talks directly to the owner; business specialists report through Lumos.
         if source.get('agent_role') == 'maintainer':
             continue
@@ -114,7 +120,10 @@ def attention_events(nodes, workspace, numbers, today):
             names = '、'.join(n['data']['text'] for n in part)
             text = '到了跟进时间。'+names+' 有什么新进展或阻碍？只需概括有变化的部分；暂无变化也可以直接告诉我。'
             refs = list(dict.fromkeys([topic, *[n['id'] for n in part]]))
-            events.append(('lumos', title, notice(key, 'followup', text, topic, refs, followup_keys=keys)))
+            if all(work_role(n) == 'maintainer' for n in part):
+                events.append(('maintainer', title, notice('maintenance:'+key, 'ops', text, topic, refs)))
+            else:
+                events.append(('lumos', title, notice(key, 'followup', text, topic, refs, followup_keys=keys)))
     for issue in issue_groups(nodes, workspace):
         key = 'ops:'+issue['key']
         if issue['status'] in {'recovered', 'rechecked'}:

@@ -22,6 +22,18 @@ if(typeof document!=='undefined'){
   const link=(label,path,params)=>{const a=el('a',label,'report-link'),u=new URL(path,location.href);u.searchParams.set('workspace',$('workspace').value);for(const [k,v] of Object.entries(params))u.searchParams.set(k,v);a.href=u.pathname+u.search;return a;};
   function render(){
     if(!data)return;
+    const maintenance=data.maintenance||{tasks:[],questions:[]},maintenanceHost=$('maintenance-items');maintenanceHost.replaceChildren();
+    $('maintenance-panel').hidden=role!=='maintainer'||history||!maintenance.tasks.length;
+    if(role==='maintainer'&&!history)for(const task of maintenance.tasks){
+      const card=el('article',undefined,'report-card'),head=el('div',undefined,'report-card-heading');
+      head.append(el('h3',task.data.text),el('span',({todo:'待处理',doing:'进行中',blocked:'受阻'})[task.data.status]||task.data.status,'report-state'));card.append(head);
+      card.append(el('p',[task.short_id,task.data.owner?'执行人：'+task.data.owner:''].filter(Boolean).join(' · '),'report-meta'));
+      const questions=maintenance.questions.filter(q=>q.task_ids.includes(task.id));
+      for(const q of questions)card.append(el('p',q.question,'maintenance-question'));
+      if(!questions.length)card.append(el('p',task.data.progress||task.data.next_step||task.data.condition,'report-summary'));
+      card.append(link('与 Ops 讨论','/chat',{role:'maintainer',...(task.chat_id?{id:task.chat_id}:{maintenance:task.id})}));
+      maintenanceHost.append(card);
+    }
     let items=reportItems(data,role,history);
     const focus=url.searchParams.get('episode');if(focus)items=items.filter(n=>(n.episode_id||n.id)===focus||n.episode_ids?.includes(focus));
     if(role==='maintainer'&&!history&&!focus)items=items.filter(n=>!['recovered','rechecked'].includes(n.status));

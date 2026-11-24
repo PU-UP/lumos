@@ -31,6 +31,19 @@ const task=(id,changes={})=>({id,short_id:'T-'+id,data:{context:'work',text:id,s
 const line=(id,tasks,milestones=tasks)=>({id,data:{context:'work',title:id,task_ids:tasks,milestone_ids:milestones}});
 const state=(tasks,lines)=>({today:'2026-11-14',contexts:[{id:'work',data:{workspace:'lingguang'}},{id:'maintenance',data:{workspace:'lumos'}}],tasks,mainlines:lines});
 
+test('unified work keeps maintenance tasks, questions and receipts out of Lumos focus',()=>{
+  const {questionInbox,briefItems}=require('../web/overview.js');
+  const s=state([task('backup',{context:'lumos-maintenance'}),task('project',{owner:'Ops',text:'Ops backup project'})],[]);
+  s.contexts.push({id:'lumos-maintenance',data:{workspace:'lingguang'}});
+  s.open_questions=[{workspace:'lingguang',work_role:'maintainer',intake_id:'old',index:0,task_ids:['backup'],related_ids:[],question:'备份放哪里？'}];
+  const m=managementModel(s,'lingguang'),ops=managementModel(s,'lingguang','maintainer');
+  assert.deepEqual(m.tasks.map(t=>t.id),['project']);assert.equal(m.questions.length,0);
+  assert.deepEqual(ops.tasks.map(t=>t.id),['backup']);assert.equal(ops.questions.length,1);
+  const jobs=[{id:'answer',data:{workspace:'lingguang',question_key:'question:old:0',related_ids:['backup'],status:'done',created_at:'2026-11-14'}}];
+  assert.ok(!briefItems(m,questionInbox(m.questions,jobs,'lingguang'),jobs).some(i=>i.id==='answer'||i.id==='backup'));
+  assert.equal(s.tasks[0].data.status,'doing');
+});
+
 test('Lumos owned work stays visible without asking the user for generic progress',()=>{
   const t=task('own',{owner:'Lumos',follow_up:'2026-11-14'}),s=state([t],[]);
   assert.equal(managementModel(s,'lingguang').questions.length,0);

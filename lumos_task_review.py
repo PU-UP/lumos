@@ -1,6 +1,6 @@
 """Task stewardship: exact review coverage, manual edits and unresolved questions."""
 from lumos import now, require
-from lumos_tasks import FIELDS, current_due
+from lumos_tasks import FIELDS, current_due, work_role
 
 MANUAL_FIELDS = FIELDS - {'owner_basis', 'owner_reason', 'review_basis', 'review_reason', 'planning_reason'}
 
@@ -46,7 +46,7 @@ def task_issues(data, today):
 def complete_task_review(nodes, updates, job, reviews, questions, open_questions, today):
     from lumos_intake import scoped_nodes
     scope = {i: n for i, n in scoped_nodes(nodes, job['data']['workspace']).items()
-             if n['kind'] == 'action' and n['data']['status'] not in {'done', 'cancelled'}}
+             if n['kind'] == 'action' and n['data']['status'] not in {'done', 'cancelled'} and work_role(n) == 'lumos'}
     require(isinstance(reviews, list) and len(reviews) == len(scope), '全量复核必须逐项覆盖全部当前任务')
     changed = {n['id']: n for n in updates}
     available = {f"question:{q['intake_id']}:{q['index']}": {'intake_id': q['intake_id'], 'index': q['index']}

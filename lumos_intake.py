@@ -373,6 +373,9 @@ def intake_context(store, ident):
                    if n['kind'] not in {'evidence', 'decision'} or n['id'] in evidence or n['id'] == POLICY]
         if ops:
             visible = []
+        elif job['data'].get('task_review'):
+            from lumos_tasks import work_role
+            visible = [n for n in visible if n['kind'] not in {'action', 'mainline'} or work_role(n) == 'lumos']
         for record in visible:
             if record['kind'] == 'document' and record['data']['path'].endswith('.md'):
                 content = safe_path(store.root, record['data']['version']).read_bytes()
@@ -381,12 +384,17 @@ def intake_context(store, ident):
         from lumos_followup import followup_questions
         result = {'intake': job, 'text': text, 'today': today(), 'basis': context_basis(nodes, job['data']['workspace']),
                   'records': visible, 'open_questions': [] if ops else followup_questions(nodes, job['data']['workspace'], numbers)}
+        if job['data'].get('task_review'):
+            result['open_questions'] = [q for q in result['open_questions'] if q['work_role'] == 'lumos']
         from lumos_agents import ROLES, role_for, diagnostics, role_reports
         result['agent'] = {'role': role_for(job['data']), **ROLES[role_for(job['data'])]}
         from lumos_ops import inspection_findings
         result['diagnostics'] = inspection_findings(store, nodes, job['data']['workspace']) if ops else diagnostics(nodes, job['data']['workspace'])
         result['lumos_reports'] = role_reports(nodes, job['data']['workspace'], 'lumos')[:30]
         result['ops_reports'] = role_reports(nodes, job['data']['workspace'], 'maintainer')[:30]
+        if ops:
+            from lumos_ops import maintenance_work
+            result['maintenance'] = maintenance_work(nodes, job['data']['workspace'], numbers)
         if job['data'].get('episode_ref'):
             ref = nodes[job['data']['episode_ref']]
             result['episode'] = {'id': ref['id'], **{k: ref['data'][k] for k in
@@ -580,6 +588,10 @@ def apply_intake(store, request):
         require('task_reviews' not in plan or full_review, '只有全量复核才能提交逐任务回执')
         if full_review:
             require(management and not resolutions, '全量复核需要统筹授权，不能代替王牧楠回答旧问题')
+            from lumos_tasks import work_role
+            require(all(work_role(scoped.get(u['id'], {'data': {}})) == 'lumos'
+                        and u.get('changes', {}).get('context') != 'lumos-maintenance' for u in plan['updates']),
+                    '系统维护事项由 Ops 接续，不属于 Lumos 项目复核范围')
         review = job.get('review')
         if review:
             require(review_matches(nodes, review), '复核安排已变化，请重新整理')

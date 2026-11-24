@@ -61,9 +61,10 @@ if(typeof document!=='undefined'){
   const $=id=>document.getElementById(id),el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
   const uuid=()=>crypto.randomUUID().replaceAll('-','');
   const url=new URL(window.location.href);
+  let maintenanceTarget=url.searchParams.get('maintenance');
   let requestedRole=agentNames[url.searchParams.get('role')||url.searchParams.get('agent')]?url.searchParams.get('role')||url.searchParams.get('agent'):'lumos';
   let workspace=url.searchParams.get('workspace')==='lumos'?'lumos':'lingguang',chatId=url.searchParams.get('id');
-  if(!chatId && (url.searchParams.has('agent')||url.searchParams.has('episode')))chatId=uuid();
+  if(!chatId && (url.searchParams.has('agent')||url.searchParams.has('episode')||maintenanceTarget))chatId=uuid();
   try{chatId ||= localStorage.getItem('lumos.chat.active.'+requestedRole+'.'+workspace)||(requestedRole==='lumos'?localStorage.getItem('lumos.chat.active.'+workspace):'');}catch{}chatId ||= uuid();
   let sessions=[],metaSignature='',metadataDirty=false,sessionBusy=false,metadataRequest=null,legacyMetadata=null;
   let jobs=[],token='',enabled=false,executor='',loaded=false,busy=false,pending=null,timer,generation=0,signature='',listSignature='',error='';
@@ -120,8 +121,10 @@ if(typeof document!=='undefined'){
     }
     host.append(welcome);
   }
-  async function loadTasks(){const current=++taskRead;try{const r=await fetch('/api/tasks'),data=await r.json();if(current!==taskRead)return;if(!r.ok)throw new Error();taskState=data;taskError='';}catch{if(current!==taskRead)return;taskState=null;taskError='任务与主线暂时读取失败，可直接写下名称和进展。';}signature='';render();if($('subject-picker').open)renderPicker();}
-  function address(){const u=new URL(window.location.href);u.searchParams.set('workspace',workspace);u.searchParams.set('id',chatId);u.searchParams.set('role',agentRole);u.searchParams.delete('agent');u.searchParams.delete('episode');u.searchParams.delete('material');history.replaceState(null,'',u);try{localStorage.setItem('lumos.chat.active.'+agentRole+'.'+workspace,chatId);}catch{}}
+  async function loadTasks(){const current=++taskRead;try{const r=await fetch('/api/tasks'),data=await r.json();if(current!==taskRead)return;if(!r.ok)throw new Error();taskState=data;taskError='';
+    if(maintenanceTarget&&agentRole==='maintainer'){const task=data.tasks.find(n=>n.id===maintenanceTarget&&n.work_role==='maintainer');if(task&&!selected.some(n=>n.id===task.id))selected.push({id:task.id,title:subjectTitle(task)});maintenanceTarget=null;saveDraft();}
+  }catch{if(current!==taskRead)return;taskState=null;taskError='任务与主线暂时读取失败，可直接写下名称和进展。';}signature='';render();if($('subject-picker').open)renderPicker();}
+  function address(){const u=new URL(window.location.href);u.searchParams.set('workspace',workspace);u.searchParams.set('id',chatId);u.searchParams.set('role',agentRole);u.searchParams.delete('agent');u.searchParams.delete('episode');u.searchParams.delete('material');u.searchParams.delete('maintenance');history.replaceState(null,'',u);try{localStorage.setItem('lumos.chat.active.'+agentRole+'.'+workspace,chatId);}catch{}}
   function controls(){
     const models=roleModels();
     const state=conversationState(currentSession()?.data||{},chatTurns(jobs,chatId).at(-1)?.data);$('conversation-state').textContent=currentSession()?state.label:'';$('conversation-state').className='chat-state state-'+state.key;
@@ -265,7 +268,7 @@ if(typeof document!=='undefined'){
     const actions=el('div',undefined,'notice-actions');actions.dataset.noticeId=item.id;
     if(item.active){
       const prepare=text=>{
-        if(item.kind==='ops')episodeRef=item.source_id;
+        if(item.kind==='ops'&&!item.key?.startsWith('maintenance:'))episodeRef=item.source_id;
         if(['question','followup'].includes(item.kind))selectedQuestion={key:item.question_key||item.key,question_keys:[item.question_key||item.key,...(item.followup_keys||[])],title:'接续问题',text:item.text,related_ids:item.related_ids};
         else selected=item.related_ids.map(id=>({id,title:taskState?.tasks?.find(n=>n.id===id)?.data.text||'相关事项'}));
         if(text)$('chat-text').value+=($('chat-text').value?'\n\n':'')+text;

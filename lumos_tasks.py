@@ -96,6 +96,11 @@ def task_numbers(db):
     return {ident: f"T-{i:03d}" for i, (ident,) in enumerate(rows, 1)}
 
 
+def work_role(node):
+    # Registered maintenance context, not an owner/title keyword or workspace.
+    return 'maintainer' if node['data'].get('context') == 'lumos-maintenance' else 'lumos'
+
+
 def list_tasks(store, today=None):
     today = date.fromisoformat(today) if today else datetime.now(timezone(timedelta(hours=8))).date()
     with process_lock(store.root):
@@ -110,7 +115,7 @@ def list_tasks(store, today=None):
         tasks = []
         for node in nodes.values():
             if node["kind"] == "action" and node["data"]["context"] in ids:
-                tasks.append({**node, "short_id": numbers[node["id"]], "data": task_defaults(node["data"]),
+                tasks.append({**node, "work_role": work_role(node), "short_id": numbers[node["id"]], "data": task_defaults(node["data"]),
                               "attention": attention(node["data"], today)})
         tasks.sort(key=lambda n: (not bool(n["attention"]),
                                  "已逾期" not in n["attention"],

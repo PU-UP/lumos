@@ -322,3 +322,16 @@ test('reading one notice does not jump through subsequent unread notices or lose
   assert.ok(!descendants(p.get('messages')).find(n=>n.dataset.noticeId==='second').scrolled);
   p.get('find-unread').onclick();assert.ok(descendants(p.get('messages')).find(n=>n.dataset.noticeId==='second').scrolled);
 });
+
+test('maintenance link binds once and does not leak to a new conversation',async()=>{
+  const p=await page(new Map(),'http://127.0.0.1/chat?role=maintainer&maintenance=backup',[],{tasks:[{id:'backup',work_role:'maintainer',data:{text:'独立备份'}}]});
+  assert.equal(new URL(p.world.window.location.href).searchParams.has('maintenance'),false);
+  p.edit('讨论备份');await p.submit();assert.deepEqual(p.posts.at(-1).related_ids,['backup']);
+  await p.get('new-chat').onclick();p.edit('另一件事');await p.submit();assert.deepEqual(p.posts.at(-1).related_ids,[]);
+});
+test('maintenance discussion keeps its task reference without treating a task as a failed execution',async()=>{
+  const id='a'.repeat(32),p=await page(new Map(),'http://127.0.0.1/chat?role=maintainer&id='+id);
+  p.listing.conversations=[managedChat(id,'独立备份','maintainer',[{id:'notice',key:'maintenance:followup:backup',kind:'ops',active:true,seen_at:'',text:'确认备份位置',source_id:'backup',related_ids:['backup'],at:'2026-11-24'}])];
+  await p.poll();descendants(p.get('messages')).find(n=>n.textContent==='继续聊').onclick();
+  p.edit('先讨论备份位置');await p.submit();assert.deepEqual(p.posts.at(-1).related_ids,['backup']);assert.equal(p.posts.at(-1).episode_ref,undefined);assert.equal(p.posts.at(-1).agent_role,'maintainer');
+});

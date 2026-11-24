@@ -27,3 +27,15 @@ test('report page safely links exact original conversation and ignores a stale w
   const target=new URL(links[0].href,location);assert.equal(target.searchParams.get('workspace'),'lumos');assert.equal(target.searchParams.get('id'),'chat-one');assert.equal(target.searchParams.get('role'),'aipm');
   requests[0].reject(new Error('old failure'));await new Promise(r=>setImmediate(r));assert.equal(get('reports-error').textContent,'');
 });
+
+test('Ops shows the original maintenance question and reuses its own exact conversation',async()=>{
+  class Element{constructor(){this.children=[];this.value='';}append(...v){this.children.push(...v);}replaceChildren(...v){this.children=v;}setAttribute(k,v){this[k]=v;}addEventListener(){}}
+  const elements=new Map(),get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  const value={token:'ok',issues:[],maintenance:{tasks:[{id:'backup',short_id:'T-001',chat_id:'ops-backup',data:{text:'独立备份',status:'todo',owner:'王牧楠'}}],questions:[{task_ids:['backup'],question:'原问题：备份放在哪里？'}]}};
+  const location=new URL('http://127.0.0.1/agents?role=maintainer'),world={URL,location,window:{history:{replaceState(){}}},document:{getElementById:get,createElement:()=>new Element()},fetch:async()=>({ok:true,json:async()=>value})};
+  vm.runInNewContext(fs.readFileSync('web/dialog.js','utf8'),world);vm.runInNewContext(fs.readFileSync('web/role-reports.js','utf8'),world);await new Promise(r=>setImmediate(r));
+  assert.equal(get('maintenance-panel').hidden,false);const card=get('maintenance-items').children[0];
+  assert.ok(card.children.some(n=>n.textContent==='原问题：备份放在哪里？'));
+  const target=new URL(card.children.at(-1).href,location);assert.equal(target.searchParams.get('id'),'ops-backup');assert.equal(target.searchParams.get('role'),'maintainer');
+  get('report-history').onclick();assert.equal(get('maintenance-panel').hidden,true);
+});

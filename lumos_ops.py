@@ -120,3 +120,21 @@ def inspect_due(store):
             continue
         return inspect_once(store, request)
     return None
+
+def maintenance_work(nodes, workspace, numbers):
+    """Read-only maintenance queue in the unified workspace; never a second task store."""
+    from lumos_intake import scoped_nodes
+    from lumos_tasks import work_role
+    from lumos_followup import followup_questions
+    tasks = [{**n, 'short_id': numbers.get(i, ''), 'work_role': 'maintainer'} for i, n in scoped_nodes(nodes, workspace).items()
+             if n['kind'] == 'action' and work_role(n) == 'maintainer' and n['data']['status'] not in {'done', 'cancelled'}]
+    ids = {n['id'] for n in tasks}
+    questions = [q for q in followup_questions(nodes, workspace, numbers)
+                 if q['work_role'] == 'maintainer' and ids.intersection(q['task_ids'])]
+    for task in tasks:
+        chat = next((n for n in nodes.values() if n['kind'] == 'conversation' and n['data']['workspace'] == workspace
+                     and n['data']['agent_role'] == 'maintainer' and n['data']['status'] == 'active'
+                     and not n['data'].get('deleted') and not n['data'].get('merged_into')
+                     and task['id'] in n['data'].get('source_ids', [])), None)
+        if chat: task['chat_id'] = chat['data']['chat_id']
+    return {'tasks': tasks, 'questions': questions}

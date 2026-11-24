@@ -243,7 +243,7 @@ def diagnostics(nodes, workspace, include_history=False):
 
 
 def episodes(store, workspace='lingguang'):
-    from lumos_ops import issue_groups, inspection_schedule
+    from lumos_ops import issue_groups, inspection_schedule, maintenance_work
     require(workspace in {'lingguang', 'lumos'}, 'Invalid workspace')
     with process_lock(store.root), store.db() as db:
         nodes = store.nodes(db)
@@ -254,7 +254,8 @@ def episodes(store, workspace='lingguang'):
                 if n['kind'] == 'intake' and n['data']['workspace'] == workspace]
         findings = diagnostics(nodes, workspace)
         active = [n for n in nodes.values() if n['kind'] == 'intake' and n['data']['workspace'] == workspace and current_input(n, nodes)]
-        return {'roles': ROLES, 'episodes': sorted(rows, key=lambda n: n['created_at'], reverse=True),
+        from lumos_tasks import task_numbers
+        return {'roles': ROLES, 'maintenance': maintenance_work(nodes, workspace, task_numbers(db)), 'episodes': sorted(rows, key=lambda n: n['created_at'], reverse=True),
                 'issues': issue_groups(nodes, workspace), 'inspection': inspection_schedule(nodes, workspace),
                 'lumos_reports': role_reports(nodes, workspace, 'lumos'), 'ops_reports': role_reports(nodes, workspace, 'maintainer'),
                 'findings': findings, 'history_count': len(diagnostics(nodes, workspace, True))-len(findings),

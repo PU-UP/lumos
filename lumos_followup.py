@@ -2,7 +2,7 @@
 import re
 from datetime import datetime, timedelta, timezone
 
-from lumos_tasks import current_due
+from lumos_tasks import current_due, work_role
 from lumos import require
 
 
@@ -67,6 +67,8 @@ def followup_questions(nodes, workspace, numbers):
             i for i, n in tasks.items() if i in q['related_ids'] or
             n['data'].get('task_review', {}).get('question') == {'intake_id': q['intake_id'], 'index': q['index']}]
         q['task_ids'] = refs
+        # Ambiguous or mixed project/maintenance questions stay with the coordinator.
+        q['work_role'] = 'maintainer' if refs and all(work_role(tasks[i]) == 'maintainer' for i in refs) else 'lumos'
         if q['answer_state'] != 'waiting':
             continue
         active = [tasks[i]['data'] for i in refs if tasks[i]['data']['status'] not in {'done', 'cancelled'}]
