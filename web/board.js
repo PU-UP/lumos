@@ -49,7 +49,7 @@ $('review-tasks').onclick=async()=>{
     await window.LumosModels?.ready;
     if(window.LumosModels?.error)throw Error(window.LumosModels.error);
     let request;try{request=JSON.parse(localStorage.getItem(key));}catch{}
-    request ||= job?.data.status==='failed'?{request_id:crypto.randomUUID().replaceAll('-',''),id:job.id,expected_revision:job.data.revision}:{request_id:crypto.randomUUID().replaceAll('-',''),workspace,...(window.LumosModels?{model:window.LumosModels.get('lumos')}:{})};
+    request ||= job?.data.status==='failed'?{request_id:crypto.randomUUID().replaceAll('-',''),id:job.id,expected_revision:job.data.revision}:{request_id:crypto.randomUUID().replaceAll('-',''),workspace,...(window.LumosModels?{model:window.LumosModels.get('lumos'),reasoning_effort:window.LumosModels.effort?.('lumos')}:{})};
     try{localStorage.setItem(key,JSON.stringify(request));}catch{}
     await api(request.id?'/api/intakes':'/api/task-review',{method:'POST',headers:{'Content-Type':'application/json','X-Lumos-Token':state.token},body:JSON.stringify(request)});
     try{localStorage.setItem(key,'null');}catch{}

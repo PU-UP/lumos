@@ -52,7 +52,7 @@
 
 先status、context work-current、tasks恢复实际背景。进展输入写incoming请求：request_id为UUID hex、workspace、title、text、source、execution="conversation"。运行intake-save，再intake-claim返回ID（后台执行器不会抢占conversation输入），intake-context读取固定原文、当前records、basis、claim。
 
-intake-apply请求：id、claim、basis、plan。plan包含summary、questions、updates、resolutions（旧请求省略等同空数组）；每个update为id、kind、changes（变化字段对象）、reason、excerpt（原文连续摘录）、mode（reported/planned）。支持action、已有mainline、已有person的assessment、新evidence；遵循docs/agent-planner.md。模型执行器用changes_json字符串承载对象，读入后转换为同一changes格式。
+intake-apply请求：id、claim、basis、plan。plan包含summary、questions、updates、resolutions（旧请求省略等同空数组）；每个update为id、kind、changes（变化字段对象）、reason、excerpt（原文连续摘录）、mode（reported/planned）。支持 action、已有 mainline、已有 person 的职责判断或有王牧楠原话的名册纠错，以及新 evidence。字段及引用规则见 docs/agent-planner.md。模型执行器用changes_json字符串承载对象，读入后转换为同一changes格式。
 
 用户来源及Agent推断分开。单条任务混合事实与安排时，owner_basis/review_basis可明确agent；planned_due始终为内部安排。所有更新先共同验证，任务生命周期复用prepare_task，不单独重写数据库。失败不得把任务写了一半或提前归档笔记。对话输入本轮已处理就不要另交后台重复处理。
 

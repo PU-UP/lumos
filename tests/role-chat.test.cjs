@@ -335,3 +335,18 @@ test('maintenance discussion keeps its task reference without treating a task as
   await p.poll();descendants(p.get('messages')).find(n=>n.textContent==='继续聊').onclick();
   p.edit('先讨论备份位置');await p.submit();assert.deepEqual(p.posts.at(-1).related_ids,['backup']);assert.equal(p.posts.at(-1).episode_ref,undefined);assert.equal(p.posts.at(-1).agent_role,'maintainer');
 });
+
+test('live status separates elapsed time, current claim and connection from final reply',()=>{
+  const {liveProgress}=require('../web/role-chat.js');
+  const data={created_at:'2026-11-24T02:00:00Z',status:'running',claim:'new',agent_steps:[
+    {claim:'old',role:'lumos',status:'running'},
+    {claim:'new',role:'aipm',status:'running',phase:'work',started_at:'2026-11-24T02:01:00Z',model:'gpt-6.2-sol',reasoning_effort:'medium'}]};
+  const now=Date.parse('2026-11-24T02:01:32Z');
+  const message=liveProgress(data,'状态同步失败',now,{started_at:'2026-11-24T02:01:20Z'});
+  for(const term of ['AIPM','0分12秒','状态同步失败','medium'])assert.ok(message.includes(term));
+  assert.doesNotMatch(message,/自提交|1分32秒|0分32秒/);
+  assert.match(liveProgress(data,'',now,{started_at:'2026-11-24T02:01:20Z',finished_at:'2026-11-24T02:01:29Z'}),/0分09秒/);
+  assert.doesNotMatch(liveProgress(data,'',now),/用时|秒/);
+  assert.doesNotMatch(liveProgress({...data,status:'pending'},'',now),/用时|秒/);
+  assert.equal(liveProgress({...data,status:'done'},'状态同步失败'),'');
+});

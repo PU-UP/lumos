@@ -15,7 +15,7 @@ from lumos_mainlines import mainline_detail, save_review
 from lumos_intake import list_intakes, save_intake
 from lumos_conversations import list_conversations, save_conversation
 from lumos_attention import read_attention
-from lumos_models import role_models, save_role_models
+from lumos_models import preferences, save_role_models
 
 
 class LocalServer(ThreadingHTTPServer):
@@ -121,14 +121,14 @@ def make_server(store, port=8765):
                     data = list_intakes(store, query.get("workspace", ["lingguang"])[0])
                     worker = getattr(self.server, 'worker', None)
                     self.reply(200, {**data, **list_conversations(store, query.get('workspace', ['lingguang'])[0]),
-                        'executor': worker.state if worker else 'offline', 'token': token})
+                        'activity': getattr(worker, 'activity', None), 'executor': worker.state if worker else 'offline', 'token': token})
                 elif path.path == '/api/conversations':
                     self.reply(200, {**list_conversations(store, parse_qs(path.query).get('workspace', ['lingguang'])[0]), 'token': token})
                 elif path.path == "/api/codex-models":
                     from lumos_worker import codex_models
                     self.reply(200, codex_models())
                 elif path.path == '/api/role-models':
-                    self.reply(200, {'models': role_models(store), 'token': token})
+                    self.reply(200, {**preferences(store), 'token': token})
                 elif path.path == "/api/notes":
                     query = parse_qs(path.query)
                     self.reply(200, {**list_notes(store, query.get("workspace", ["lingguang"])[0],

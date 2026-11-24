@@ -9,6 +9,21 @@ from lumos_agents import ROLES
 from lumos_tasks import commit_tasks
 
 
+def prior_chat_turns(nodes, job, ident):
+    """Yield verified parents, newest first, from this conversation only."""
+    visited = {ident}
+    parent = job.get('chat_parent')
+    while parent:
+        require(parent not in visited, 'Invalid chat history cycle')
+        visited.add(parent)
+        turn = nodes.get(parent)
+        require(turn and turn['kind'] == 'intake' and job.get('chat_id')
+                and turn['data'].get('chat_id') == job['chat_id']
+                and turn['data']['workspace'] == job['workspace'], '历史来源须属于同一对话')
+        yield turn
+        parent = turn['data'].get('chat_parent')
+
+
 def conversation_node(chat_id, role, workspace, title, created=None, status='active'):
     return {'id': 'chat-'+chat_id, 'kind': 'conversation', 'data': {
         'chat_id': chat_id, 'agent_role': role, 'workspace': workspace, 'title': title,

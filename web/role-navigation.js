@@ -24,16 +24,31 @@ if(typeof document!=='undefined'){
   const modelChoice=el('label','对话与答复模型'),modelSelect=el('select'),modelMessage=el('span');
   modelChoice.className='role-model-choice';modelSelect.setAttribute('aria-label',info.name+' 当前模型');modelMessage.setAttribute('role','status');modelMessage.className='model-message';
   modelChoice.append(modelSelect);local.prepend(modelChoice);local.append(modelMessage);
+  const effortChoice=el('label','推理强度'),effortSelect=el('select');
+  effortChoice.className='role-model-choice effort-choice';effortChoice.append(effortSelect);modelChoice.after(effortChoice);
   let modelOptions=[];
   const updateModels=()=>{
     modelSelect.disabled=window.LumosModels.loading||window.LumosModels.busy;
     modelMessage.textContent=window.LumosModels.error||(window.LumosModels.busy?'正在保存模型…':'');
-    const selected=window.LumosModels.get(displayedRole||role),options=[{id:'',name:'Codex 默认'},...modelOptions];
+    const selected=window.LumosModels.get(displayedRole||role),options=[...modelOptions];
     if(selected&&!options.some(m=>m.id===selected))options.push({id:selected,name:selected});
     modelSelect.replaceChildren();for(const m of options){const o=el('option',m.name);o.value=m.id;modelSelect.append(o);}modelSelect.value=selected;
-    for(const a of nav.querySelectorAll('a')){const id=new URL(a.href,location.href).searchParams.get('role'),value=window.LumosModels.get(id);let badge=a.querySelector('.role-model-name');if(!badge){badge=el('span');badge.className='role-model-name';a.append(badge);}badge.textContent=modelOptions.find(m=>m.id===value)?.name||value||'Codex 默认';badge.title=value||'使用本机 Codex 默认配置；历史未记录的具体型号不会推测。';}
+    const level=window.LumosModels.effort(displayedRole||role);
+    if(!window.LumosModels.loading&&!level&&!modelMessage.textContent)modelMessage.textContent='后台服务需重启以启用推理强度设置。';
+    const levels=options.find(m=>m.id===selected)?.efforts||[];
+    effortSelect.replaceChildren();
+    for(const value of levels.length?levels:(level?[level]:[])){const o=el('option',value);o.value=value;effortSelect.append(o);}
+    effortSelect.value=level||'';
+    modelSelect.disabled ||= !level||!modelOptions.length;
+    effortSelect.disabled=modelSelect.disabled||!levels.length;
+    for(const a of nav.querySelectorAll('a')){const id=new URL(a.href,location.href).searchParams.get('role'),value=window.LumosModels.get(id);let badge=a.querySelector('.role-model-name');if(!badge){badge=el('span');badge.className='role-model-name';a.append(badge);}badge.textContent=modelOptions.find(m=>m.id===value)?.name||value||'读取中';if(window.LumosModels.effort(id))badge.textContent+=' · '+window.LumosModels.effort(id);}
   };
-  modelSelect.onchange=async()=>{try{await window.LumosModels.save(displayedRole||role,modelSelect.value);}catch{updateModels();}};
+  async function saveChoice(){
+    const levels=modelOptions.find(m=>m.id===modelSelect.value)?.efforts||[];
+    const level=levels.includes(effortSelect.value)?effortSelect.value:levels[0];
+    try{await window.LumosModels.save(displayedRole||role,modelSelect.value,level);}catch{updateModels();}
+  }
+  modelSelect.onchange=effortSelect.onchange=saveChoice;
   window.addEventListener('storage',updateModels);window.addEventListener('lumos-model',updateModels);
   document.body.classList.add('simple-workspace');
   if(url.pathname!==info.home||url.searchParams.has('view')){const back=el('a','返回 '+info.name);back.href=target(info.home,role);local.append(back);}
@@ -68,7 +83,7 @@ if(typeof document!=='undefined'){
     displayedRole=e.detail;displayedSpace=currentSpace;
     for(const a of nav.querySelectorAll('a')){const u=new URL(a.href,location.href);a.setAttribute('aria-current',u.searchParams.get('role')===e.detail?'page':'false');u.searchParams.set('workspace',currentSpace);a.href=u.pathname+u.search;}
     description.textContent=bound.purpose;local.setAttribute('aria-label',bound.name+'工作区');local.replaceChildren();
-    modelSelect.setAttribute('aria-label',bound.name+' 当前模型');local.append(modelChoice,modelMessage);updateModels();
+    modelSelect.setAttribute('aria-label',bound.name+' 当前模型');local.append(modelChoice,effortChoice,modelMessage);updateModels();
     for(const [name,path] of bound.links){const a=el('a',name);const u=new URL(target(path,e.detail),location.href);u.searchParams.set('workspace',new URL(location.href).searchParams.get('workspace')||'lingguang');a.href=u.pathname+u.search;if(u.pathname===url.pathname)a.setAttribute('aria-current','page');local.append(a);}
   });
 }

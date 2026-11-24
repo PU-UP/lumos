@@ -282,6 +282,10 @@ def save_task(store, request):
 
 
 def commit_tasks(store, nodes, batch_request, ident):
+    from lumos_models import freeze_settings
+    for node in batch_request['updates']:
+        if node['kind'] == 'intake' and node['id'] not in nodes:
+            freeze_settings(store, node['data'])
     # Validate before creating a persistent session; invalid UI input must not leave it occupied.
     with store.db() as db:
         links = set(db.execute("SELECT src,dst,relation FROM links"))

@@ -2,6 +2,30 @@
 from lumos import require
 
 
+def correct_roster(previous, changes, source, job, nodes):
+    """Apply reported facts to an existing person and pin the user's words."""
+    require(previous and previous['data'].get('status', 'active') == 'active'
+            and job['workspace'] in previous['data']['workspaces'], '请选择当前工作区的有效名册记录')
+    fields = {k: v for k, v in changes.items() if k != 'fact_ref'}
+    require(fields and fields.keys() <= {'title', 'arrival_note'}
+            and source['mode'] == 'reported' and job['source'].get('type') == 'user'
+            and not job.get('note'), '人员名册仅接受明确报告的姓名和入职备注更正')
+    quotes = [source['quote']]
+    if 'fact_ref' in changes:
+        ref = changes['fact_ref']
+        require(isinstance(ref, dict) and set(ref) == {'id', 'quote'}
+                and all(isinstance(v, str) and v.strip() for v in ref.values()), '缺少人员更正的历史原话')
+        from lumos_conversations import prior_chat_turns
+        turn = next((n['data'] for n in prior_chat_turns(nodes, job, source['intake_id']) if n['id'] == ref['id']), None)
+        require(turn and turn['source'].get('type') == 'user' and ref['quote'] in turn['text']
+                and len(ref['quote']) <= 20000, '找不到同一对话中的人员更正原话')
+        quotes.append(ref['quote'])
+        source = {**source, 'fact_ref': ref}
+    require(all(isinstance(v, str) and v.strip() and any(v in q for q in quotes) for v in fields.values()),
+            '姓名和入职备注须摘自王牧楠报告事实的原话')
+    return {**previous['data'], **fields, 'last_source': source}
+
+
 def validate_person(data):
     if 'assessment' in data:
         assessment = data['assessment']

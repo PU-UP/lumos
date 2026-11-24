@@ -14,6 +14,19 @@ internal static class LumosLauncher
 {
     const string Url = "http://127.0.0.1:8765/";
 
+    static void Log(string message)
+    {
+        try
+        {
+            var directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".local");
+            Directory.CreateDirectory(directory);
+            File.AppendAllText(Path.Combine(directory, "launcher-status.log"),
+                DateTimeOffset.Now.ToString("o") + " " + message + Environment.NewLine, Encoding.UTF8);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
     static Dictionary<string, object> ExpectedRuntime(string root, string python)
     {
         var start = new ProcessStartInfo(python, "-B \"" + Path.Combine(root, "lumos.py") + "\" runtime-info");
@@ -28,24 +41,23 @@ internal static class LumosLauncher
         }
     }
 
-    static bool Ready(string data, Dictionary<string, object> expected)
+    static Dictionary<string, object> Health()
     {
         try
         {
             var request = (HttpWebRequest)WebRequest.Create(Url + "api/health");
             request.Proxy = null;
-            request.Timeout = 800;
-            request.ReadWriteTimeout = 800;
+            request.Timeout = 3000;
+            request.ReadWriteTimeout = 3000;
             using (var response = request.GetResponse())
             using (var reader = new StreamReader(response.GetResponseStream()))
             {
-                var result = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(reader.ReadToEnd());
-                return Matches(result, data, expected);
+                return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(reader.ReadToEnd());
             }
         }
-        catch (WebException) { return false; }
-        catch (ArgumentException) { return false; }
-        catch (InvalidOperationException) { return false; }
+        catch (WebException) { return null; }
+        catch (ArgumentException) { return null; }
+        catch (InvalidOperationException) { return null; }
     }
 
     static bool Matches(Dictionary<string, object> result, string data, Dictionary<string, object> expected)
@@ -63,12 +75,59 @@ internal static class LumosLauncher
             && worker != null && worker.ContainsKey("state") && Object.Equals(worker["state"], "available");
     }
 
+    static bool StopOldService(string root, string python, string data, Dictionary<string, object> expected)
+    {
+        var health = Health();
+        if (health == null) throw new InvalidOperationException("8765 已有监听，但健康检查未返回有效结果。");
+        if (Matches(health, data, expected)) return false;
+        object value;
+        var runtime = health.TryGetValue("runtime", out value) ? value as Dictionary<string, object> : null;
+        if (runtime == null || !runtime.ContainsKey("code"))
+            throw new InvalidOperationException("8765 未返回 Lumos 的运行版本。请检查端口占用。");
+        if (Object.Equals(runtime["code"], expected["code"]))
+        {
+            health.TryGetValue("root", out value);
+            if (!String.Equals(value as string, data, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("8765 服务使用了不同的数据目录：" + value);
+            health.TryGetValue("data_schema", out value);
+            if (!Object.Equals(value, expected["schema"]) || !runtime.ContainsKey("schema") || !Object.Equals(runtime["schema"], value))
+                throw new InvalidOperationException("正式服务的数据结构版本不匹配，当前数据版本：" + value);
+            health.TryGetValue("worker", out value);
+            var worker = value as Dictionary<string, object>;
+            if (worker != null && worker.TryGetValue("state", out value) && !Object.Equals(value, "available"))
+                throw new InvalidOperationException("后台执行器尚未就绪，当前状态：" + value);
+            throw new InvalidOperationException("8765 服务未通过正式工作区身份或启用状态核对。");
+        }
+        var start = new ProcessStartInfo(python, "-B \"" + Path.Combine(root, "tools", "restart_idle_service.py") + "\"");
+        start.UseShellExecute = false;
+        start.CreateNoWindow = true;
+        start.RedirectStandardOutput = true;
+        start.StandardOutputEncoding = Encoding.UTF8;
+        using (var process = Process.Start(start))
+        {
+            string message = process.StandardOutput.ReadToEnd();
+            process.WaitForExit();
+            if (process.ExitCode != 0) throw new InvalidOperationException("旧版服务重启检查未通过。" + message);
+        }
+        return true;
+    }
+
+    static bool Ready(string data, Dictionary<string, object> expected)
+    {
+        var health = Health();
+        return health != null && Matches(health, data, expected);
+    }
+
     static bool PortUsed()
     {
         using (var client = new TcpClient())
         {
             try { client.Connect("127.0.0.1", 8765); return true; }
-            catch (SocketException) { return false; }
+            catch (SocketException error)
+            {
+                if (error.SocketErrorCode == SocketError.ConnectionRefused) return false;
+                throw new InvalidOperationException("无法核对本机 8765 端口：" + error.Message, error);
+            }
         }
     }
 
@@ -119,9 +178,8 @@ internal static class LumosLauncher
                 if (!acquired) return 0;
                 try
                 {
-                    if (!Ready(data, expected))
+                    if (!Ready(data, expected) && (!PortUsed() || StopOldService(root, python, data, expected)))
                     {
-                        if (PortUsed()) throw new InvalidOperationException("当前服务的程序版本、数据版本或后台状态未通过核对。请在项目对话中检查；不会自动升级记录或结束已有服务。");
                         var start = new ProcessStartInfo(python, "-B \"" + Path.Combine(root, "lumos.py") + "\" --data \"" + data + "\" serve --port 8765");
                         start.WorkingDirectory = root;
                         start.UseShellExecute = false;
@@ -137,6 +195,7 @@ internal static class LumosLauncher
                             }
                         }
                     }
+                    Log("8765 正式服务已通过启动核对。");
                     // Test mode checks the real launch/reuse path without opening a browser.
                     if (Array.IndexOf(args, "--check") < 0)
                         Process.Start(new ProcessStartInfo(Url) { UseShellExecute = true });
@@ -147,6 +206,7 @@ internal static class LumosLauncher
         }
         catch (Exception error)
         {
+            Log(error.Message);
             if (Array.IndexOf(args, "--check") < 0)
                 MessageBox.Show(error.Message, "Lumos 启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;

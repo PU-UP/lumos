@@ -19,15 +19,15 @@ class AgentWebTest(BaseStoreCase):
                 self.assertEqual(json.load(response)['worker']['state'], 'stopped')
             with urlopen(base+'/api/role-models') as response:
                 settings = json.load(response)
-            body = json.dumps({'models': {'lumos': 'selected'}, 'expected': {'lumos': None}}).encode()
+            body = json.dumps({'models': {'lumos': 'selected'}, 'expected': {'lumos': settings['models']['lumos']}}).encode()
             headers = {'Content-Type': 'application/json', 'Origin': base}
             with self.assertRaises(HTTPError):
                 urlopen(Request(base+'/api/role-models', data=body, headers=headers))
             headers['X-Lumos-Token'] = settings['token']
             with urlopen(Request(base+'/api/role-models', data=body, headers=headers)) as response:
-                self.assertEqual(json.load(response)['models'], {'lumos': 'selected'})
+                self.assertEqual(json.load(response)['models']['lumos'], 'selected')
             with urlopen(base+'/api/role-models') as response:
-                self.assertEqual(json.load(response)['models'], {'lumos': 'selected'})
+                self.assertEqual(json.load(response)['models']['lumos'], 'selected')
         finally:
             server.shutdown(); server.server_close(); thread.join()
 

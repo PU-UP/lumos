@@ -63,3 +63,18 @@ test('historical execution models are never inferred from the current preference
   assert.equal(receiptModel({agent_steps:[{model:'executor-default'}]}),'默认模型（具体型号未记录）');
   assert.equal(receiptModel({model:'pending-choice'}),'pending-choice');
 });
+
+test('saving an effort uses the reviewed model and effort, and historical labels stay unfilled',async()=>{
+  const settings={models:{lumos:'gpt-6.2-astra',aipm:'gpt-6.2-sol',librarian:'gpt-6.2-sol',maintainer:'gpt-6.2-astra'},efforts:{lumos:'high'}};
+  let body;
+  const fetcher=async(url,options)=>{
+    if(options){body=JSON.parse(options.body);Object.assign(settings.efforts,body.efforts);}
+    return {ok:true,json:async()=>structuredClone(settings)};
+  };
+  const api=modelPreferences(fetcher,{getItem:()=>null,setItem(){}},()=>{});await api.ready;
+  await api.save('lumos','gpt-6.2-astra','medium');
+  assert.deepEqual(body,{models:{lumos:'gpt-6.2-astra'},expected:{lumos:'gpt-6.2-astra'},efforts:{lumos:'medium'},expected_efforts:{lumos:'high'}});
+  assert.equal(api.effort('lumos'),'medium');
+  assert.equal(receiptModel({agent_steps:[{role:'lumos',model:'gpt-6.2-astra',reasoning_effort:'medium'},{role:'librarian',model:'executor-default'}]}),
+    'Lumos gpt-6.2-astra medium / Atlas 默认模型（具体型号未记录）');
+});

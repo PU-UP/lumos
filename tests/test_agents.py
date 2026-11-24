@@ -29,10 +29,14 @@ class AgentsTest(BaseStoreCase):
     def test_handoff_models_are_role_specific_pinned_for_retry_and_recorded(self):
         from lumos_models import save_role_models
         save_role_models(self.store, {'models': {'aipm': 'project-model', 'lumos': 'coordinator-model'},
-                                     'expected': {'aipm': None, 'lumos': None}})
+                                     'expected': {'aipm': 'gpt-6.2-sol', 'lumos': 'gpt-6.2-astra'}})
         job = self.create('aipm'); calls = []
+        self.assertEqual(job['data']['role_efforts']['aipm'], 'medium')
+        save_role_models(self.store, {'models': {'aipm': 'project-model'}, 'expected': {'aipm': 'project-model'},
+                                     'efforts': {'aipm': 'high'}, 'expected_efforts': {'aipm': 'medium'}})
         def planner(context, root):
             role = context['agent']['role']; calls.append((role, context['intake']['data']['model']))
+            self.assertEqual(context['intake']['data']['reasoning_effort'], 'medium' if role == 'aipm' else 'high')
             if role == 'lumos' and len(calls) == 2:
                 raise lumos.Error('isolated first decision failure')
             return self.plan(updates=[self.update()])
@@ -47,6 +51,30 @@ class AgentsTest(BaseStoreCase):
         self.assertEqual(calls, [('aipm', 'project-model'), ('lumos', 'coordinator-model'), ('lumos', 'coordinator-model')])
         self.assertEqual({s['model'] for s in done['agent_steps'] if s['role'] == 'lumos'}, {'coordinator-model'})
         self.assertEqual(done['role_models']['lumos'], 'coordinator-model')
+
+    def test_explicit_retry_uses_reviewed_settings_and_preserves_prior_attempt(self):
+        from lumos_models import preferences, save_role_models
+        job = self.create('lumos')
+        def reject(context, root):
+            raise lumos.Error('unavailable model')
+        self.assertEqual(run_once(self.store, reject)['status'], 'failed')
+        with self.store.db() as db:
+            revision = self.store.nodes(db)[job['id']]['data']['revision']
+        old = preferences(self.store)
+        chosen = save_role_models(self.store, {'models': {'lumos': 'gpt-6-astra'},
+                                  'expected': {'lumos': old['models']['lumos']}})
+        retry = {'id': job['id'], 'expected_revision': revision, 'request_id': uuid.uuid4().hex}
+        with self.assertRaises(lumos.Error):
+            save_intake(self.store, {**retry, 'retry_settings': old})
+        request = {**retry, 'retry_settings': chosen}
+        save_intake(self.store, request)
+        self.assertTrue(save_intake(self.store, request)['replayed'])
+        def finish(context, root):
+            self.assertEqual(context['intake']['data']['model'], 'gpt-6-astra')
+            return self.plan()
+        done = run_once(self.store, finish)['intake']['data']
+        self.assertEqual(done['status'], 'done')
+        self.assertEqual([s['model'] for s in done['agent_steps'][:2]], [old['models']['lumos'], 'gpt-6-astra'])
 
     def test_atlas_references_existing_source_without_business_decision_or_duplicate_record(self):
         job = self.create('lumos')

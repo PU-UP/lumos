@@ -49,12 +49,17 @@ def read_json(path):
 def atomic(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
-    with tmp.open("xb") as stream:
-        stream.write(data)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(tmp, path)
+    tmp = path.with_name(uuid.uuid4().hex + ".tmp")
+    stream = tmp.open("xb")
+    try:
+        with stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def write_json(path, value):

@@ -208,3 +208,5 @@
 .simple-workspace #chat-history .chat-link .chat-state{display:table;margin-top:5px;font-size:12px}
 .notice-actions .quick-reply{background:var(--soft);color:var(--accent)}
 #find-unread{margin-top:8px;color:#8a4200;background:#fff0ce;border-color:#d8b570}
+
+.role-model-choice.effort-choice select{width:8em}

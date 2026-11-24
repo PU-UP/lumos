@@ -418,6 +418,72 @@ class IntakeTest(BaseStoreCase):
         self.assertEqual(list_intakes(self.store)['intakes'][0]['data']['status'], 'running')
         self.assertIsNone(self.store.status()['session'])
 
+    def test_roster_followup_uses_original_user_facts_and_reports_written_person(self):
+        from lumos_worker import run_once
+        chat = uuid.uuid4().hex
+        def send(text, parent=''):
+            return save_intake(self.store, {'request_id': uuid.uuid4().hex, 'chat_id': chat,
+                'chat_parent': parent, 'text': text, 'source': self.source})['intake']['id']
+        facts = '姓名更正为模拟甲，目前确定12/2入职。'
+        first = send(facts)
+        empty = {'reply': '已核对', 'summary': '核对', 'questions': [], 'updates': []}
+        run_once(self.store, lambda *_: empty.copy())
+        directive = '请更正这些信息'
+        second = send(directive, first)
+        changes = {'title': '模拟甲', 'arrival_note': '目前确定12/2入职',
+                   'fact_ref': {'id': first, 'quote': facts}}
+        item = {**self.item('person-test', 'person', changes), 'excerpt': directive}
+        result = run_once(self.store, lambda *_: {**empty, 'updates': [item]})['intake']
+        self.assertEqual(result['id'], second)
+        self.assertEqual(result['data']['destinations'], ['person-test'])
+        self.assertEqual([s['phase'] for s in result['data']['agent_steps']], ['coordinate', 'work', 'decide', 'apply'])
+        person = next(n['data'] for n in list_tasks(self.store)['people'] if n['id'] == 'person-test')
+        self.assertEqual((person['title'], person['arrival_note']), ('模拟甲', '目前确定12/2入职'))
+        self.assertEqual(person['last_source']['fact_ref'], changes['fact_ref'])
+        self.assertEqual(person['last_source']['quote'], directive)
+        self.assertEqual(person['role'], '原正式角色')
+
+        # A separate chat cannot borrow this user's statement from the first one.
+        chat = uuid.uuid4().hex
+        send(directive)
+        failed = run_once(self.store, lambda *_: {**empty, 'updates': [item]})
+        self.assertIn('同一对话', failed['error'])
+
+    def test_direct_roster_correction_preserves_owner_and_replays_once(self):
+        text = '把模拟同事更正为模拟甲，入职日期还没有确定'
+        job = save_intake(self.store, {'request_id': uuid.uuid4().hex, 'text': text, 'source': self.source})['intake']
+        claimed = claim_intake(self.store, job['id'])
+        update = {**self.item('person-test', 'person', {'title': '模拟甲', 'arrival_note': '入职日期还没有确定'}),
+                  'excerpt': text}
+        request = {'id': job['id'], 'claim': claimed['data']['claim'], 'basis': intake_context(self.store, job['id'])['basis'],
+                   'plan': {'summary': '更正名册', 'updates': [update], 'questions': []}}
+        owner = task_detail(self.store, 'talk')['task']['data'].get('owner')
+        self.assertEqual(apply_intake(self.store, request)['intake']['data']['destinations'], ['person-test'])
+        self.assertTrue(apply_intake(self.store, request)['replayed'])
+        self.assertEqual(task_detail(self.store, 'talk')['task']['data'].get('owner'), owner)
+
+    def test_roster_field_cannot_be_invented_inferred_or_silently_dropped(self):
+        from lumos_worker import run_once
+        for mode, name, omit, error in [('planned', '模拟甲', False, '明确报告'),
+                                        ('reported', '模拟乙', False, '原话'),
+                                        ('reported', '模拟甲', True, '尚未写入'),
+                                        ('reported', '模拟甲', 'old-value', '尚未写入')]:
+            with self.subTest(mode=mode, name=name, omit=omit):
+                text = '姓名更正为模拟甲'
+                save_intake(self.store, {'request_id': uuid.uuid4().hex, 'chat_id': uuid.uuid4().hex,
+                            'text': text, 'source': self.source})
+                item = {**self.item('person-test', 'person', {'title': name}, mode), 'excerpt': text}
+                def planner(ctx, root):
+                    updates = [] if omit is True and ctx['agent']['phase'] == 'work' else [item]
+                    if omit == 'old-value' and ctx['agent']['phase'] == 'decide':
+                        updates = [{**item, 'changes': {'title': '模拟同事'}}]
+                    if ctx['agent']['phase'] == 'synthesize':
+                        updates = []
+                    return {'summary': '核对', 'reply': '核对', 'questions': [], 'updates': updates}
+                self.assertIn(error, run_once(self.store, planner)['error'])
+                with self.store.db() as db:
+                    self.assertEqual(self.store.nodes(db)['person-test']['data']['title'], '模拟同事')
+
     def test_current_plan_replaces_old_deadline_without_losing_promise(self):
         from lumos_task_review import task_issues
         self.enable_management()

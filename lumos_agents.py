@@ -87,7 +87,7 @@ def missing_followups(plan, records):
 def execution_hashes():
     return {'rules_hash': digest(b''.join((ENGINE/f).read_bytes() for f in
             ('docs/agent-roles.md', 'docs/agent-planner.md', 'docs/chat-planner.md', 'docs/task-review-planner.md', 'docs/note-format-planner.md'))),
-            'code_hash': digest(b''.join((ENGINE/f).read_bytes() for f in ('lumos_agents.py', 'lumos_worker.py', 'lumos_intake.py', 'lumos_followup.py', 'lumos_knowledge.py', 'lumos_ops.py', 'lumos_conversations.py', 'lumos_attention.py', 'lumos_models.py')))}
+            'code_hash': digest(b''.join((ENGINE/f).read_bytes() for f in ('lumos_agents.py', 'lumos_worker.py', 'lumos_intake.py', 'lumos_people.py', 'lumos_followup.py', 'lumos_knowledge.py', 'lumos_ops.py', 'lumos_conversations.py', 'lumos_attention.py', 'lumos_models.py')))}
 
 
 def record_step(store, ident, claim, role, phase, basis='', *, attempt=None, plan=None, error=None, input_hash='', reused_from=''):
@@ -106,6 +106,7 @@ def record_step(store, ident, claim, role, phase, basis='', *, attempt=None, pla
             steps.append({'id': role+':'+phase, 'attempt_id': attempt, 'claim': claim,
                 'attempt': 1+sum(s['id'] == role+':'+phase for s in steps), 'role': role, 'phase': phase,
                 'status': 'running', 'started_at': now(), 'basis': basis, 'model': 'none' if phase in {'inspect', 'apply'} else execution_model(data, role) or 'executor-default',
+                **({'reasoning_effort': data['role_efforts'][role]} if role in data.get('role_efforts', {}) and phase not in {'inspect', 'apply'} else {}),
                 'input_hash': input_hash, 'reused_from': reused_from, **execution_hashes()})
         else:
             step = next((s for s in steps if s['attempt_id'] == attempt), None)

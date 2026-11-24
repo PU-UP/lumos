@@ -62,6 +62,11 @@ def validate_intake(data, nodes):
     if 'role_models' in data:
         from lumos_models import validate_models
         validate_models(data['role_models'])
+    if 'role_efforts' in data:
+        from lumos_models import LEVELS
+        efforts = data['role_efforts']
+        require(isinstance(efforts, dict) and set(efforts) == set(data.get('role_models', {}))
+                and all(e in LEVELS for e in efforts.values()), 'Invalid role effort snapshot')
     require(isinstance(data.get('questions', []), list) and all(isinstance(q, str) and len(q) <= 2000 for q in data.get('questions', [])), 'Invalid questions')
     from lumos_followup import validate_question_options
     validate_question_options(data.get('question_options', []), data.get('questions', []), pinned=True)
@@ -125,7 +130,7 @@ def list_intakes(store, workspace='lingguang'):
 
 def save_intake(store, request):
     from lumos_agents import ROLES, role_for
-    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'text', 'title', 'source', 'note_id', 'id', 'expected_revision', 'execution', 'related_ids', 'question_key', 'question_keys', 'question_text', 'chat_id', 'chat_parent', 'model', 'task_review', 'agent_role', 'episode_ref'}, 'Invalid intake request')
+    require(isinstance(request, dict) and set(request) <= {'request_id', 'workspace', 'text', 'title', 'source', 'note_id', 'id', 'expected_revision', 'execution', 'related_ids', 'question_key', 'question_keys', 'question_text', 'chat_id', 'chat_parent', 'model', 'reasoning_effort', 'retry_settings', 'task_review', 'agent_role', 'episode_ref'}, 'Invalid intake request')
     require(request.get('agent_role', 'lumos') in ROLES, 'Invalid agent role')
     require(request.get('execution', 'automatic') in {'automatic', 'conversation'}, 'Invalid execution mode')
     require(type(request.get('task_review', False)) is bool, 'Invalid task review flag')
@@ -140,6 +145,8 @@ def save_intake(store, request):
                 require(replay[0] == reason, 'Request ID reused with different content')
                 return {'intake': json.loads(replay[1])['request']['updates'][0], 'replayed': True}
             nodes = store.nodes(db)
+        if 'retry_settings' in request:
+            require(request.get('id'), '新设置只适用于重试')
         if request.get('id'):
             old = nodes.get(request['id'])
             require(old and old['kind'] == 'intake', 'Intake not found')
@@ -148,6 +155,14 @@ def save_intake(store, request):
             require(old['data']['status'] in {'failed', 'pending'}
                     or (old['data']['status'] == 'running' and old['data'].get('lease_until', '') < now()), '当前整理不能重试')
             node = {**old, 'data': {**old['data'], 'status': 'pending', 'error': '', 'revision': old['data']['revision']+1, 'updated_at': now()}}
+            if 'retry_settings' in request:
+                from lumos_models import preferences
+                require(old['data']['status'] == 'failed' and old['data'].get('chat_id'), '只能为失败的对话重新选择配置')
+                settings = preferences(store)
+                require(request['retry_settings'] == settings, '角色设置已经变化，请刷新后重试')
+                role = role_for(old['data'])
+                node['data'].update(model=settings['models'][role], reasoning_effort=settings['efforts'][role],
+                                    role_models=settings['models'], role_efforts=settings['efforts'])
         elif request.get('note_id'):
             note = nodes.get(request['note_id'])
             require(note and note['kind'] == 'note' and note['data'].get('recording', 'finished') == 'finished'
@@ -160,6 +175,9 @@ def save_intake(store, request):
             if node['id'] in nodes:
                 return {'intake': nodes[node['id']], 'replayed': True}
         else:
+            if request.get('model'):
+                from lumos_models import selectable
+                require(selectable(request['model']), '该型号已停用，请选择具体模型后重新提交')
             require(isinstance(request.get('text'), str) and request['text'].strip(), 'Progress text required')
             chat_role = request.get('agent_role', 'lumos')
             if 'chat_id' in request:
@@ -209,7 +227,7 @@ def save_intake(store, request):
                 'summary': '', 'questions': [], 'related_ids': refs, 'execution': request.get('execution', 'automatic')}}
             if 'question_key' in request:
                 node['data']['question_key'] = request['question_key']
-            for field in ('chat_id', 'chat_parent', 'model', 'question_text', 'question_keys', 'task_review', 'agent_role', 'episode_ref'):
+            for field in ('chat_id', 'chat_parent', 'model', 'reasoning_effort', 'question_text', 'question_keys', 'task_review', 'agent_role', 'episode_ref'):
                 if field in request:
                     node['data'][field] = request[field]
             if 'chat_id' in request:
@@ -417,16 +435,12 @@ def intake_context(store, ident):
                 result['conversation_questions'] = [q for q in result['open_questions']
                     if q['intake_id'] in own_turns
                     or bound.intersection([*q['related_ids'], *q['task_ids']])]
-            history, parent = [], job['data'].get('chat_parent')
-            visited = {job['id']}
-            while parent:
-                require(parent not in visited, 'Invalid chat history cycle')
-                visited.add(parent)
-                prior = nodes[parent]
-                history.append({'id': parent, 'text': prior['data']['text'], 'reply': prior['data'].get('reply', ''),
+            from lumos_conversations import prior_chat_turns
+            history = []
+            for prior in prior_chat_turns(nodes, job['data'], job['id']):
+                history.append({'id': prior['id'], 'text': prior['data']['text'], 'reply': prior['data'].get('reply', ''),
                                 'summary': prior['data']['summary'], 'created_at': prior['data']['created_at'],
                                 'agent_role': prior['data'].get('agent_role', 'legacy')})
-                parent = prior['data'].get('chat_parent')
             result['chat_history'] = list(reversed(history))
         return result
 
@@ -455,8 +469,8 @@ def claim_intake(store, ident=None):
                 'revision': old['data']['revision']+1, 'updated_at': now()}}
         node['data']['agent_steps'] = [{**s, 'status': 'interrupted', 'finished_at': now()} if s['status'] == 'running' else s
                                       for s in old['data'].get('agent_steps', [])]
-        from lumos_models import job_models
-        node['data']['role_models'] = job_models(store, node['data'])
+        from lumos_models import freeze_settings
+        freeze_settings(store, node['data'])
         from lumos_agents import role_for
         if role_for(node['data']) == 'maintainer' and node['data'].get('episode_ref'):
             node['data']['episode_claim'] = nodes[node['data']['episode_ref']]['data'].get('claim', '')
@@ -695,8 +709,11 @@ def apply_intake(store, request):
                                'priority_reason': item['reason']}
                 changes = review_changes(previous, changes, 'review_on', item, own_source, management)
                 data = {**previous['data'], **changes, 'source': own_source}
+            elif kind == 'person' and set(changes) != {'assessment'}:
+                from lumos_people import correct_roster
+                data = correct_roster(previous, changes, own_source, job, nodes)
             elif kind == 'person':
-                require(previous and set(changes) == {'assessment'}, 'Only responsibility assessment may be inferred')
+                require(previous, '职责判断须关联已有人员')
                 assessment = changes['assessment']
                 require(isinstance(assessment, dict) and set(assessment) == {'summary', 'responsibilities', 'uncertainties', 'basis_ids'}, 'Invalid assessment')
                 require(isinstance(assessment['summary'], str) and 0 < len(assessment['summary']) <= 2000, 'Assessment summary required')

@@ -184,7 +184,7 @@ if (typeof document !== 'undefined') {
     const target=$('feedback-target').value;
     await window.LumosModels?.ready;
     if(!feedbackSender.pending&&window.LumosModels?.error){feedbackError=window.LumosModels.error;updateAnswerStatus();return;}
-    const request=feedbackSender.pending||{request_id:crypto.randomUUID().replaceAll('-',''),workspace:feedbackWorkspace,...(window.LumosModels?{model:window.LumosModels.get('lumos')}:{}) ,
+    const request=feedbackSender.pending||{request_id:crypto.randomUUID().replaceAll('-',''),workspace:feedbackWorkspace,...(window.LumosModels?{model:window.LumosModels.get('lumos'),reasoning_effort:window.LumosModels.effort?.('lumos')}:{}) ,
       text:activeQuestion?activeQuestion.text+'\n\n王牧楠答复：\n'+text:text,title:activeQuestion?.title.slice(0,300)||'主线页反馈',related_ids:target?[target]:[],...(activeQuestion?{question_key:activeQuestion.key,question_keys:activeQuestion.question_keys||[activeQuestion.key],question_text:activeQuestion.question_keys?.length>1?activeQuestion.title+' · 合并跟进':activeQuestion.text}:{})};
     await sendFeedback(request,request.id?undefined:text);
   };

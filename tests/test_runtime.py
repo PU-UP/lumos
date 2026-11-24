@@ -33,6 +33,33 @@ class RuntimeTest(BaseStoreCase):
         self.assertEqual(json.loads(result.stdout), runtime_info())
         self.assertFalse((self.area/'absent').exists())
 
+    def test_launcher_recovers_only_idle_matching_formal_store_with_stale_code(self):
+        from tools.restart_idle_service import guard
+        health = {'app': 'lumos', 'root': str(self.root), 'mode': 'active', 'preview': False,
+                  'data_schema': lumos.SCHEMA, 'runtime': {'code': 'old', 'schema': lumos.SCHEMA}}
+        expected = {'code': 'new'}
+        guard(self.store, health, expected)
+        for override in ({'app': 'other'}, {'root': str(self.area)}, {'preview': True},
+                         {'mode': 'trial'}, {'data_schema': 1}, {'runtime': {'code': 'new', 'schema': lumos.SCHEMA}}):
+            with self.assertRaises(lumos.Error):
+                guard(self.store, {**health, **override}, expected)
+        for status in ('pending', 'running'):
+            with self.store.db(True) as db:
+                db.execute('insert or replace into nodes values (?,?,?)', ('job', 'intake', json.dumps({'status': status})))
+            with self.assertRaises(lumos.Error):
+                guard(self.store, health, expected)
+
+    def test_launcher_validates_resolved_script_and_real_service_arguments(self):
+        from tools.restart_idle_service import verify_command
+        root = self.area.resolve()
+        data = root / 'lumos-data'
+        verify_command(['python', '-X', 'utf8', '-u', 'lumos.py', '--data', 'lumos-data', 'serve'], root, root, data)
+        verify_command(['python', '-B', str(root / 'lumos.py'), 'serve', '--port=8765'], data, root, data)
+        for args, cwd in [(['lumos.py', 'serve'], data), (['other.py', 'serve'], root),
+                          (['lumos.py', 'serve', '--port', '8775'], root), (['lumos.py', '--data', 'other', 'serve'], root)]:
+            with self.assertRaises(lumos.Error):
+                verify_command(['python', *args], cwd, root, data)
+
     def test_old_schema_cannot_start_background_worker(self):
         with self.store.db(True) as db:
             db.execute('PRAGMA user_version=1')

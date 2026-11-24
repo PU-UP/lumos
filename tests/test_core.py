@@ -54,6 +54,13 @@ class BaseStoreCase(unittest.TestCase):
 
 
 class LocalTest(BaseStoreCase):
+    def test_atomic_replace_supports_long_destination_names(self):
+        size = min(230, 245 - len(str(self.root)))
+        target = self.root / ('a' * size)
+        lumos.atomic(target, b'first')
+        lumos.atomic(target, b'second')
+        self.assertEqual(target.read_bytes(), b'second')
+
     def test_context_and_reported_action_completion(self):
         self.seed()
         action = next(n for n in self.store.context("建图定位")["nodes"] if n["id"] == "talk")

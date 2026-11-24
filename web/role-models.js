@@ -3,24 +3,27 @@
 const roleModelKey=role=>'lumos.chat.model.'+role;
 function selectedRoleModel(role,storage=localStorage){try{return storage.getItem(roleModelKey(role))??storage.getItem('lumos.chat.model')??'';}catch{return '';}}
 function receiptModel(data){
-  const recorded=[...new Set((data.agent_steps||[]).map(s=>s.model).filter(m=>m&&m!=='none'))];
-  if(recorded.length)return recorded.map(m=>m==='executor-default'?'默认模型（具体型号未记录）':m).join(' / ');
+  const names={lumos:'Lumos',aipm:'AIPM',librarian:'Atlas',maintainer:'Ops'};
+  const recorded=(data.agent_steps||[]).filter(s=>s.model&&s.model!=='none').map(s=>
+    [names[s.role],s.model==='executor-default'?'默认模型（具体型号未记录）':s.model,s.reasoning_effort].filter(Boolean).join(' '));
+  if(recorded.length)return [...new Set(recorded)].join(' / ');
   if(data.agent_steps?.length)return '未调用模型';
-  return data.model||'默认模型（具体型号未记录）';
+  return data.role_models?.[data.agent_role]||data.model||'默认模型（具体型号未记录）';
 }
 if(typeof module!=='undefined')module.exports={selectedRoleModel,receiptModel};
 function modelPreferences(fetcher,storage,notify){
-  let selected={},token='',queue=Promise.resolve(),pending=0,refresh=null;
-  const api={get:role=>selected[role]??selectedRoleModel(role,storage),receipt:receiptModel,error:'',loading:true,busy:false};
+  let selected={},efforts={},token='',queue=Promise.resolve(),pending=0,refresh=null;
+  const api={get:role=>selected[role]??selectedRoleModel(role,storage),effort:role=>efforts[role],receipt:receiptModel,error:'',loading:true,busy:false};
   function accept(data){
-    const changed=JSON.stringify(selected)!==JSON.stringify(data.models)||!!api.error;
+    const changed=JSON.stringify(selected)!==JSON.stringify(data.models)||JSON.stringify(efforts)!==JSON.stringify(data.efforts||{})||!!api.error;
+    efforts=data.efforts||{};
     selected=data.models;if(data.token)token=data.token;
     for(const [role,model] of Object.entries(selected))try{storage.setItem(roleModelKey(role),model);}catch{}
     api.error='';if(changed)notify();
   }
   async function read(){const r=await fetcher('/api/role-models'),d=await r.json();if(!r.ok)throw Error(d.error||'模型设置读取失败');accept(d);}
-  async function write(changes,expected=Object.fromEntries(Object.keys(changes).map(r=>[r,selected[r]??null]))){
-    const r=await fetcher('/api/role-models',{method:'POST',keepalive:true,headers:{'Content-Type':'application/json','X-Lumos-Token':token},body:JSON.stringify({models:changes,expected})}),d=await r.json();
+  async function write(changes,expected=Object.fromEntries(Object.keys(changes).map(r=>[r,selected[r]??null])),levels={}){
+    const r=await fetcher('/api/role-models',{method:'POST',keepalive:true,headers:{'Content-Type':'application/json','X-Lumos-Token':token},body:JSON.stringify({models:changes,expected,...levels})}),d=await r.json();
     if(!r.ok)throw Error(d.error||'模型设置保存失败');accept(d);
   }
   api.reload=()=>{
@@ -38,10 +41,11 @@ function modelPreferences(fetcher,storage,notify){
       if(Object.keys(missing).length)try{await write(missing);}catch(e){await read();if(Object.keys(missing).some(r=>!(r in selected)))throw e;}
     }catch(e){api.error=e.message;}finally{api.loading=false;notify();}
   })();
-  api.save=(role,model)=>{
+  api.save=(role,model,effort)=>{
+    const levels=effort?{efforts:{[role]:effort},expected_efforts:{[role]:efforts[role]}}:{};
     const expected=api.loading?undefined:{[role]:selected[role]??null};
     pending++;api.busy=true;notify();
-    const task=queue.then(async()=>{await api.ready;try{await write({[role]:model},expected);}catch(e){try{await read();}catch{}api.error=e.message;throw e;}})
+    const task=queue.then(async()=>{await api.ready;try{await write({[role]:model},expected,levels);}catch(e){try{await read();}catch{}api.error=e.message;throw e;}})
       .finally(()=>{api.busy=--pending>0;notify();});
     queue=task.catch(()=>{});
     return task;
